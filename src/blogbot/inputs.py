@@ -57,7 +57,7 @@ def enqueue_file(settings: Settings, source: Path) -> str:
     if not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", request_id):
         raise ValueError("Request id must be a unique ASCII slug")
     category = raw.get("category")
-    if category == "parenting":
+    if category in {"parenting", "exercise"}:
         question = raw.get("question", "")
         if not isinstance(question, str) or len(question.strip()) < 3:
             raise ValueError("Parenting requires the owner's actual question")
@@ -197,16 +197,22 @@ def collect_requests(settings: Settings) -> tuple[list[ContentRequest], list[dic
                 if not all(request.data.get(k) for k in ("name", "ingredients", "steps")):
                     raise ValueError("Recipe incomplete")
                 verify_photos(request.photos)
-            elif request.category != "parenting" or not request.data.get("question"):
+            elif request.category not in {"parenting", "exercise"} or not request.data.get("question"):
                 raise ValueError("Question missing or unsupported category")
             requests.append(request)
         except (OSError, ValueError, TypeError, KeyError):
             notices.append({"status": "INPUT_REJECTED"})
+    context_path = settings.db_path.parent / "context.json"
+    context = json.loads(context_path.read_text()) if context_path.exists() else {}
     config = settings.config.get("community", {})
     if config.get("enabled", False):
         try:
             records, provenance = fetch_community(config)
             for record in records:
+                if today_kst().isoformat() <= context.get("exclude_investment_topics_until", ""):
+                    source_text = " ".join(str(record.get(k, "")) for k in ["stock_name", "title", "facts"])
+                    if any(topic in source_text for topic in context.get("excluded_investment_topics", [])):
+                        continue
                 try:
                     request = community_request(record, provenance, config)
                     if request:

@@ -1,0 +1,62 @@
+name: Blog API Prepare
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'prepare resumes durable state; bootstrap is initial setup only'
+        type: choice
+        options: [prepare, bootstrap]
+        default: prepare
+  schedule:
+    - cron: '15 19 * * 0-4' # 04:15 Asia/Seoul, Monday-Friday
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: blog-api-prepare
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: >-
+      github.repository == 'jinhoo-choi/naver_blog_agent' &&
+      github.ref == 'refs/heads/main' &&
+      ((github.event_name == 'schedule' && vars.BLOG_API_ENABLED == 'true') ||
+       (github.event_name == 'workflow_dispatch' && github.actor == github.repository_owner))
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-5' }}
+      OPENAI_REVIEW_MODEL: ${{ vars.OPENAI_REVIEW_MODEL || 'gpt-5' }}
+      BLOG_BUNDLE_KEY: ${{ secrets.BLOG_BUNDLE_KEY }}
+      BLOG_SEED_JSON: ${{ secrets.BLOG_SEED_JSON }}
+      GITHUB_TOKEN: ${{ github.token }}
+      BLOG_DATA_DIR: ${{ github.workspace }}/private-state
+      BLOG_ENCRYPTED_OUTPUT: ${{ github.workspace }}/handoff/bundle.enc
+      BLOG_NOTIFY_ENABLED: 'false'
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install API preparer
+        run: python -m pip install -e .
+      - name: Prepare or resume
+        env:
+          PREPARE_MODE: ${{ inputs.mode || 'prepare' }}
+        run: python -m blogbot.cloud "$PREPARE_MODE"
+      - name: Preserve encrypted checkpoints
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: blog-state-${{ github.run_id }}-${{ github.run_attempt }}
+          path: handoff/bundle.enc
+          if-no-files-found: error
+          retention-days: 30

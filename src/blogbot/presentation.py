@@ -64,7 +64,7 @@ def validate_structure(post: PostDraft, required: bool = True) -> None:
     heads = re.findall(r"^## (.+)$", post.body, re.MULTILINE)
     if len(heads) < 4 or not re.search(r"^### .+", post.body, re.MULTILINE):
         raise ValueError("Use at least four major sections and a subsection")
-    if post.category == "parenting" and len(post.body) < 1800:
+    if post.category in {"parenting", "exercise"} and len(post.body) < 1800:
         raise ValueError("Parenting draft is too short; add supported explanation, not filler")
     if re.search(r"<\s*(script|iframe|img)\b|\{\{image:|!\[", post.body, re.IGNORECASE):
         raise ValueError("Images are placed from verified files, not model URLs")
@@ -87,7 +87,7 @@ def render_segments(post: PostDraft) -> list[Segment]:
         for photo in slots.get(i, []):
             result.append(Segment(photo=photo))
             caption = photo.get("caption", "")
-            if photo.get("author"):
+            if photo.get("author") and not photo.get("generated"):
                 caption += f" / {photo['author']} · {photo['license']} (자료사진)"
             if caption:
                 result.append(Segment(html=paragraph(caption, 12)))

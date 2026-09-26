@@ -18,8 +18,8 @@ max_age_days = 7
 naver_category_no = 1
 display_name = "육아"
 subcategories = ["성장·수면", "건강·피부", "육아용품·안전", "육아생활"]
-weight = 4
-max_daily = 2
+weight = 1
+max_daily = 1
 rules = [
   "선우와 관련해 사용자가 실제로 입력한 질문에만 답한다. 자율 주제 선정 금지.",
   "건강·질병·약물 내용은 공공기관·학회·병원 등 신뢰 가능한 출처를 우선한다.",
@@ -33,7 +33,7 @@ rules = [
 naver_category_no = 7
 display_name = "투자"
 subcategories = ["시장·산업", "기업·종목", "투자공부"]
-weight = 3
+weight = 1
 max_daily = 1
 rules = [
   "kis-community-bot의 통과 자료 facts/src/body를 기반으로만 작성한다.",
@@ -44,12 +44,24 @@ rules = [
   "원본이 뒷받침하지 않는 수치·원인·매매 경험을 추가하지 않는다. 부족한 내용은 억지로 늘리지 않는다."
 ]
 
+[categories.exercise]
+naver_category_no = 8
+display_name = "운동"
+subcategories = ["가슴", "등", "하체", "운동기초"]
+weight = 1
+max_daily = 1
+rules = [
+  "공식 운동기관·학회·병원 출처로 운동의 의미·주요 근육·준비·수행 순서·실수·중단 신호를 확인한다.",
+  "운동 경력·중량·효과·부상을 창작하지 않는다. 획일적인 고중량·한계반복을 권하지 않는다.",
+  "보조자와 안전장치, 통증·어지럼 등 중단 신호를 다룬다."
+]
+
 [categories.cooking]
 naver_category_no = 6
 display_name = "요리"
 subcategories = ["집밥", "간단요리", "면·한그릇"]
-weight = 3
-max_daily = 2
+weight = 1
+max_daily = 0
 rules = [
   "사용자가 올린 레시피와 사진이 모두 있을 때만 작성한다. 외부 레시피와 대체 이미지 금지.",
   "재료·양·시간·온도는 제공된 값을 유지하며 빠진 값은 추측하지 않는다.",
@@ -62,14 +74,20 @@ rules = [
 [editorial]
 enabled = true
 require_structure = true
-benchmark_target = 7
+benchmark_target = 5
+benchmark_mode = "api"
 
 [images]
 mode = "generate"
 model = "gpt-image-2.5-flare"
 quality = "low"
-size = "1536x1024"
+size = "1024x1024"
+output_format = "jpeg"
+concurrency = 2
+timeout_seconds = 120
+max_attempts = 2
 parenting_count = 2
+exercise_count = 2
 investment_count = 1
 
 # Verified in the owner editor on 2026-09-26; UI changes stop saving.

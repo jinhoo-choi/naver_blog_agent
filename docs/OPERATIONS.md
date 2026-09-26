@@ -2,13 +2,26 @@
 
 기준: 2026-09-27 KST.
 
-## 현재 활성 운영
+## 준비된 API 분리 운영 (활성화 대기)
 
-ChatGPT Work의 Cloud Browser 경로로 영업일 오전 5시 전후(Asia/Seoul), 육아 1건(1)·운동 1건(8)·투자 1건(7)을 임시저장합니다. 삽화는 2·2·1장, 요리는 별도 요청만 처리하며 사용자가 최종 발행합니다. 첫 정규 예정일은 2026-09-28입니다. 같은 날짜의 저장 완료분은 누적 집계합니다.
+자동 승인 검토가 새 복호화 키와 개인화 입력 큐의 GitHub Secrets 등록을 차단했습니다. 사용자 승인 후 아래 순서로 활성화합니다. 현재 Work 예약은 기존 경로를 유지합니다.
 
-최신 기준은 STATE.md 및 활성 예약 지침을 함께 확인합니다. 삽화의 AI 제작 안내 문구는 본문·캡션에 넣지 않습니다. 발행 후 72시간이 지난 글의 D0~D2 일간 통계를 비공개 기록에 남기며, 근거가 없으면 feedback-v0를 유지합니다.
+1. `Blog API Prepare` (Ubuntu, 04:15 KST): 원고·검수·삽화 API → 암호화 결과물.
+2. 기존 Work 예약 (05시 전후): 당일 결과물 다운로드·복호화·이미지 확인 → 네이버 임시저장 → 재열기 확인.
+3. 오류 시 완성된 결과물을 재사용하며 저장 단계만 이어갑니다. 발행은 사용자가 직접 합니다.
 
-아래 PC/API 실행기는 별도 대안입니다. GitHub 자동 스케줄은 비활성이며 Windows runner는 미등록입니다. 기존 코드·config는 운동 배분을 아직 지원하지 않으므로 문서 갱신만으로 현재 예약과 동일하게 작동한다고 보지 않습니다. 현재 예약과 동시에 활성화하지 않습니다.
+설정: `OPENAI_API_KEY`(기존), `BLOG_BUNDLE_KEY`(새 키), `BLOG_SEED_JSON`(비공개 질문 큐) Secrets.
+`BLOG_API_ENABLED`만 새 API 준비 일정을 제어합니다. 기존 `BLOG_SCHEDULE_ENABLED=false`를 유지합니다.
+최초 `bootstrap`은 모델 접근 확인과 암호화 상태 초기화만 하며 유료 콘텐츠를 생성하지 않습니다.
+이후 `prepare`는 최신 `blog-state-<run id>-<attempt>`를 복원합니다. 상태가 유실되면 새 작업으로 간주해 중복 생성하지 않고 중지합니다.
+
+복호화는 비공개 키를 환경변수로 전달하고 `python -m blogbot.cloud unpack --file bundle.enc --destination <private path>`를 사용합니다.
+`ready.json`의 당일 APPROVED 글만 저장합니다. 파일 내 실제 제목·본문·segments·이미지 체크섬을 확인하고, 저장 결과는 비공개 성과 기록에 남깁니다.
+GitHub 결과물은 암호화된 `bundle.enc` 한 개만 허용합니다. 원문·키·입력 큐를 공개 로그나 Git에 넣지 않습니다.
+상태는 매 실행 이어받으며 API 결과물 보존기간은 30일, 전달할 최근 원고·이미지는 7일입니다. 오래된 투자 글은 자동 저장하지 말고 근거일을 재검토합니다.
+
+이미지 TIMEOUT/UNCERTAIN은 자동 재호출하지 않습니다. 429는 최대1회 재시도합니다. 완료 이미지는 재사용하고, 품질 문제는 Work 최종 확인에서 보류합니다.
+통계는 발행72시간 이후 D0~D2 일간 기준이며, Work에서 최신 피드백을 확인하고 필요한 편집만 적용합니다. 기존 발행 글은 수정하지 않습니다.
 
 ## PC/API 실행기 대안
 
@@ -153,3 +166,14 @@ blogbot resolve --id 12 --outcome discard
 - https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows
 - https://docs.github.com/en/actions/concepts/runners/self-hosted-runners
 
+
+## 전환 체크리스트
+
+1. 사용자 승인 후 BLOG_BUNDLE_KEY·BLOG_SEED_JSON 등록. OPENAI_API_KEY는 기존 Secret 사용, 외부 추출 없음.
+2. 비공개 인계 키를 사용자 파일에 보관하고 정확한 파일 ID를 Work 지침에 연결.
+3. 초기 bootstrap 성공 및 암호화 상태 결과물 다운로드·복호화 가능 여부 확인.
+4. BLOG_API_ENABLED=true 활성화. 기존 BLOG_SCHEDULE_ENABLED=false 유지.
+5. 기존 Work 예약을 생성 전용 도구를 호출하지 않는 저장 전용 지침으로 변경.
+6. Work는 당일 ready.json, 실제 이미지 파일·해시·카테고리1/8/7을 확인하고 임시저장만 수행. 최신 72시간 통계 피드백에 따른 최소 편집은 저장 전에 적용.
+7. 브라우저 장애 시 완성본을 비공개 파일에 보관하고 저장 상태를 불확실로 기록. 목록을 확인한 뒤 저장 단계만 재개.
+8. 첫 정규 실행 결과와 생성/이미지/저장 단계별 실제 소요시간 기록.

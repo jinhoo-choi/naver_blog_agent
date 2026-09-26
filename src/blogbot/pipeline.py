@@ -23,8 +23,8 @@ from .core import (
     today_kst,
     validate_post,
 )
-from .images import generate_images
-from .inputs import collect_requests
+from .images import ImagePending, atomic_json, generate_images
+from .inputs import ContentRequest, collect_requests
 from .llm import BlogLLM
 from .naver import NaverDraftWriter
 from .presentation import validate_structure
@@ -104,6 +104,17 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
     settings.artifact_dir.mkdir(parents=True, exist_ok=True)
     results: list[dict] = list(notices)
     with closing(connect_db(settings.db_path)) as conn:
+        # Resume media only. Never purchase a new writer/reviewer call for approved text.
+        pending = conn.execute("SELECT * FROM posts WHERE status IN "
+                               "('TEXT_APPROVED', 'IMAGES_PENDING') ORDER BY id").fetchall()
+        for row in pending:
+            post = load_post(row)
+            if post.as_of_date != today_kst().isoformat():
+                continue
+            stem = settings.artifact_dir / f"{post.as_of_date}-{row['id']:05d}"
+            payload = json.loads(stem.with_suffix('.json').read_text(encoding='utf-8'))
+            request = ContentRequest(**payload['input'])
+            results.append(complete_media(settings, conn, row['id'], post, request, payload['review']))
         for _ in range(requested):
             reservation = reserve_attempt(conn, settings.config, requested, candidates)
             if reservation is None:
@@ -118,6 +129,9 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                     llm = BlogLLM(settings.openai_api_key, settings.openai_model,
                                   settings.root, settings.review_model)
                 existing = recent_titles(conn)
+                context_path = settings.db_path.parent / 'context.json'
+                if context_path.exists():
+                    existing += json.loads(context_path.read_text()).get('published_titles', [])
                 post = llm.create_draft(request, info, existing)
                 validate_post(post, info)
                 validate_structure(post, settings.config.get("editorial", {}).get("require_structure", True))
@@ -138,19 +152,12 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                     elif decision != "PASS" or score < int(limits["review_pass_score"]):
                         result.update(status="DROP_REVIEW", score=score)
                     else:
-                        post = generate_images(settings, request, post)
-                        post.quality_score, post.status = score, "APPROVED"
+                        post.quality_score, post.status = score, "TEXT_APPROVED"
                         post_id = save_post(conn, post)
-                        result.update(id=post_id, status="APPROVED", score=score)
                         stem = settings.artifact_dir / f"{post.as_of_date}-{post_id:05d}"
-                        stem.with_suffix(".json").write_text(
-                            json.dumps({"post": asdict(post), "review": review,
-                                        "input": asdict(request)},
-                                       ensure_ascii=False, indent=2), encoding="utf-8",
-                        )
-                        stem.with_suffix(".md").write_text(
-                            f"# {post.title}\n\n{render_post_text(post)}\n", encoding="utf-8",
-                        )
+                        atomic_json(stem.with_suffix('.json'),
+                                    {'post': asdict(post), 'review': review, 'input': asdict(request)})
+                        result.update(complete_media(settings, conn, post_id, post, request, review))
             except ResearchRequired:
                 result["status"] = "RESEARCH_REQUIRED"
             except sqlite3.IntegrityError:
@@ -164,3 +171,22 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
     if save_to_naver:
         results.extend(save_pending(settings))
     return results or [{"status": "NO_ELIGIBLE_INPUT_OR_DAILY_LIMIT"}]
+
+
+def complete_media(settings, conn, post_id, post, request, review):
+    stem = settings.artifact_dir / f"{post.as_of_date}-{post_id:05d}"
+    try:
+        post = generate_images(settings, request, post)
+    except ImagePending:
+        set_status(conn, post_id, 'IMAGES_PENDING')
+        return {'id': post_id, 'category': post.category, 'status': 'IMAGES_PENDING'}
+    post.status = 'APPROVED'
+    # Write the durable packet before marking it ready in the database.
+    atomic_json(stem.with_suffix('.json'),
+                {'post': asdict(post), 'review': review, 'input': asdict(request)})
+    stem.with_suffix('.md').write_text(
+        f'# {post.title}\n\n{render_post_text(post)}\n', encoding='utf-8')
+    with conn:
+        conn.execute("UPDATE posts SET photos_json=?, status='APPROVED' WHERE id=?",
+                     (json.dumps(post.photos, ensure_ascii=False), post_id))
+    return {'id': post_id, 'category': post.category, 'status': 'APPROVED', 'score': post.quality_score}

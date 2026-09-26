@@ -57,7 +57,7 @@ class BlogLLM:
     def __init__(self, api_key: str, model: str, root: Path, review_model: str = ""):
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY is required")
-        self.client = OpenAI(api_key=api_key, timeout=180, max_retries=2)
+        self.client = OpenAI(api_key=api_key, timeout=180, max_retries=0)
         self.model = model
         self.review_model = review_model or model
         self.writer_prompt = _load(root / "prompts/writer.md")

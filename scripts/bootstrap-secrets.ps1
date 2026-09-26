@@ -14,9 +14,13 @@ foreach ($name in $names) {
 }
 $variables = @{
   BLOG_DATA_DIR = "C:\blogbot\data"
+  BLOG_INBOX_DIR = "C:\blogbot\data\inbox"
   NAVER_PROFILE_DIR = "C:\blogbot\chrome-profile"
   OPENAI_MODEL = "gpt-5"
   BLOG_DAILY_COUNT = "3"
+  BLOG_MODE = "save"
+  BLOG_SCHEDULE_ENABLED = "false"
+  BLOG_NOTIFY_ENABLED = "false"
 }
 foreach ($name in $variables.Keys) {
   gh variable set $name --body $variables[$name] --repo $Repo

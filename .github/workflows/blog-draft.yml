@@ -45,6 +45,7 @@ jobs:
       NAVER_BLOG_ID: ${{ secrets.NAVER_BLOG_ID }}
       NAVER_PROFILE_DIR: ${{ vars.NAVER_PROFILE_DIR }}
       BLOG_DATA_DIR: ${{ vars.BLOG_DATA_DIR }}
+      BLOG_INBOX_DIR: ${{ vars.BLOG_INBOX_DIR }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       BLOG_NOTIFY_ENABLED: ${{ vars.BLOG_NOTIFY_ENABLED || 'false' }}

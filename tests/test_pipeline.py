@@ -102,6 +102,8 @@ def test_rewrite_duplicate_is_blocked(settings, monkeypatch):
     monkeypatch.setattr("blogbot.pipeline.BlogLLM", FakeLLM)
     candidate = ContentRequest("question-1", "parenting", {"question": "월령별 발달 과정"})
     monkeypatch.setattr("blogbot.pipeline.collect_requests", lambda _: ([candidate], []))
+    monkeypatch.setattr("blogbot.pipeline.prepare_request", lambda settings, request: request)
+    monkeypatch.setattr("blogbot.pipeline.validate_structure", lambda post, required: None)
     assert run_daily(settings, count=1)[0]["status"] == "DROP_DUPLICATE"
 
 

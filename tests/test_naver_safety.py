@@ -12,3 +12,15 @@ def test_no_publish_automation_exists():
     ]
     for pattern in forbidden_call_patterns:
         assert pattern not in source
+
+
+def test_category_routes_are_required():
+    from blogbot.naver import NaverDraftWriter
+
+    writer = NaverDraftWriter("owner", "profile", categories={
+        "parenting": {"naver_category_no": 1},
+        "cooking": {"naver_category_no": 6},
+        "investment": {"naver_category_no": 7},
+    })
+    assert writer.editor_url("parenting").endswith("categoryNo=1")
+    assert writer.editor_url("investment").endswith("categoryNo=7")

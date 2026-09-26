@@ -4,8 +4,14 @@ import pytest
 
 from blogbot.config import load_settings
 from blogbot.core import (
-    PostDraft, connect_db, reserve_attempt, review_result, save_post, today_kst,
+    PostDraft,
+    connect_db,
+    reserve_attempt,
+    review_result,
+    save_post,
+    today_kst,
 )
+from blogbot.inputs import ContentRequest
 from blogbot.llm import _source_urls
 from blogbot.pipeline import run_daily, save_pending
 
@@ -16,7 +22,9 @@ def settings(tmp_path, monkeypatch):
     monkeypatch.setenv("NAVER_PROFILE_DIR", str(tmp_path / "profile"))
     monkeypatch.setenv("NAVER_BLOG_ID", "example")
     monkeypatch.setenv("OPENAI_API_KEY", "unit-test-placeholder")
-    return load_settings()
+    config = load_settings()
+    config.config["community"]["enabled"] = False
+    return config
 
 
 def draft():
@@ -29,11 +37,13 @@ def draft():
 
 
 def test_quota_survives_connection_restart(settings):
+    candidates = [ContentRequest(f"q-{i}", "parenting", {"question": "월령별 발달 과정"})
+                  for i in range(3)]
     for _ in range(2):
         with closing(connect_db(settings.db_path)) as conn:
-            assert reserve_attempt(conn, settings.config, 2)
+            assert reserve_attempt(conn, settings.config, 2, candidates)
     with closing(connect_db(settings.db_path)) as conn:
-        assert reserve_attempt(conn, settings.config, 2) is None
+        assert reserve_attempt(conn, settings.config, 2, candidates) is None
 
 
 def test_review_rejects_inconsistent_or_unsafe_scores():
@@ -53,6 +63,9 @@ def test_unknown_save_is_not_automatically_repeated(settings, monkeypatch):
         save_post(conn, draft())
 
     class FailingWriter:
+        def preflight(self, post):
+            pass
+
         def save(self, post):
             raise RuntimeError("No save confirmation")
 
@@ -70,27 +83,38 @@ def test_rewrite_duplicate_is_blocked(settings, monkeypatch):
         def __init__(self, *args):
             self.reviews = 0
 
-        def create_draft(self, category, info, recent):
+        def create_draft(self, request, info, recent):
             post = draft()
-            post.category, post.subcategory = category, info["subcategories"][0]
+            post.category, post.subcategory = request.category, info["subcategories"][0]
             post.title = "완전히 다른 주제의 작성 후보"
             return post
 
-        def review(self, post, info):
+        def review(self, post, info, request):
             self.reviews += 1
             scores = [4, 3, 3, 3, 3, 4] if self.reviews == 1 else [5] * 6
             return {"scores": scores, "total": sum(scores),
                     "decision": "REWRITE" if self.reviews == 1 else "PASS"}
 
-        def rewrite(self, post, info, review):
+        def rewrite(self, post, info, review, request):
             post.title = first.title
             return post
 
     monkeypatch.setattr("blogbot.pipeline.BlogLLM", FakeLLM)
+    candidate = ContentRequest("question-1", "parenting", {"question": "월령별 발달 과정"})
+    monkeypatch.setattr("blogbot.pipeline.collect_requests", lambda _: ([candidate], []))
     assert run_daily(settings, count=1)[0]["status"] == "DROP_DUPLICATE"
 
 
-def test_three_candidates_cover_all_categories(settings):
+def test_only_supplied_category_is_reserved_once(settings):
+    request = ContentRequest("question-1", "parenting", {"question": "월령별 발달 과정"})
     with closing(connect_db(settings.db_path)) as conn:
-        categories = [reserve_attempt(conn, settings.config, 3)[1] for _ in range(3)]
-    assert set(categories) == {"parenting", "investment", "cooking"}
+        assert reserve_attempt(conn, settings.config, 3, [request])[1].category == "parenting"
+        assert reserve_attempt(conn, settings.config, 3, [request]) is None
+
+
+def test_empty_input_makes_no_paid_calls(settings, monkeypatch):
+    def fail_if_called(*args):
+        pytest.fail("Empty inputs must not call the LLM")
+
+    monkeypatch.setattr("blogbot.pipeline.BlogLLM", fail_if_called)
+    assert run_daily(settings, count=3) == [{"status": "NO_ELIGIBLE_INPUT_OR_DAILY_LIMIT"}]

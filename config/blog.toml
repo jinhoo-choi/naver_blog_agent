@@ -1,6 +1,6 @@
 [blog]
-name = "생활연구소"
-tagline = "육아 · 투자 · 요리를 직접 공부하고 기록합니다."
+name = "써누애비"
+tagline = "선우와 함께 자라는 아빠의 육아·집밥·투자 공부"
 daily_min = 1
 daily_max = 5
 review_pass_score = 24
@@ -15,6 +15,7 @@ min_score = 14
 max_age_days = 7
 
 [categories.parenting]
+naver_category_no = 1
 display_name = "육아"
 subcategories = ["성장·수면", "건강·피부", "육아용품·안전", "육아생활"]
 weight = 4
@@ -29,6 +30,7 @@ rules = [
 ]
 
 [categories.investment]
+naver_category_no = 7
 display_name = "투자"
 subcategories = ["시장·산업", "기업·종목", "투자공부"]
 weight = 3
@@ -43,6 +45,7 @@ rules = [
 ]
 
 [categories.cooking]
+naver_category_no = 6
 display_name = "요리"
 subcategories = ["집밥", "간단요리", "면·한그릇"]
 weight = 3
@@ -56,11 +59,21 @@ rules = [
   "성공 후기나 가족 반응을 창작하지 않는다. 미제공 팁은 추가하지 않는다."
 ]
 
-# Verify against the owner's live editor before scheduled operation.
+[editorial]
+enabled = true
+require_structure = true
+benchmark_target = 7
+
+[images]
+mode = "generate"
+model = "gpt-image-2.5-flare"
+quality = "low"
+size = "1536x1024"
+parenting_count = 2
+investment_count = 1
+
+# Verified in the owner editor on 2026-09-26; UI changes stop saving.
 [naver]
 title_selector = ".se-documentTitle .se-text-paragraph"
 body_selector = ".se-main-container .se-component.se-text .se-text-paragraph"
-save_confirmation_selector = ""
-# Set these only after inspecting the owner's editor; blank keeps cooking drafts local.
-photo_button_selector = ""
-uploaded_image_selector = ""
+uploaded_image_selector = ".se-component.se-image img"

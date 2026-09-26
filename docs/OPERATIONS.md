@@ -1,6 +1,18 @@
 # 운영 가이드
 
-기준: 2026-09-26 KST. 네이버 로그인 세션·원고는 소유자의 Windows PC에 보관합니다.
+기준: 2026-09-27 KST.
+
+## 현재 활성 운영
+
+ChatGPT Work의 Cloud Browser 경로로 영업일 오전 5시 전후(Asia/Seoul), 육아 1건(1)·운동 1건(8)·투자 1건(7)을 임시저장합니다. 삽화는 2·2·1장, 요리는 별도 요청만 처리하며 사용자가 최종 발행합니다. 첫 정규 예정일은 2026-09-28입니다. 같은 날짜의 저장 완료분은 누적 집계합니다.
+
+최신 기준은 STATE.md 및 활성 예약 지침을 함께 확인합니다. 삽화의 AI 제작 안내 문구는 본문·캡션에 넣지 않습니다. 발행 후 72시간이 지난 글의 D0~D2 일간 통계를 비공개 기록에 남기며, 근거가 없으면 feedback-v0를 유지합니다.
+
+아래 PC/API 실행기는 별도 대안입니다. GitHub 자동 스케줄은 비활성이며 Windows runner는 미등록입니다. 기존 코드·config는 운동 배분을 아직 지원하지 않으므로 문서 갱신만으로 현재 예약과 동일하게 작동한다고 보지 않습니다. 현재 예약과 동시에 활성화하지 않습니다.
+
+## PC/API 실행기 대안
+
+아래 절차를 별도 활성화할 때 로그인 세션·원고는 소유자의 Windows PC에 보관합니다.
 
 ## 1. PC 준비
 
@@ -140,3 +152,4 @@ blogbot resolve --id 12 --outcome discard
 - https://developers.openai.com/api/docs/guides/tools-web-search
 - https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows
 - https://docs.github.com/en/actions/concepts/runners/self-hosted-runners
+

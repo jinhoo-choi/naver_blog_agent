@@ -4,10 +4,10 @@ import hashlib
 import json
 import re
 import sqlite3
-from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from collections.abc import Iterable
+from dataclasses import dataclass, field
+from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterable
 from urllib.parse import urlsplit
 
 KST = timezone(timedelta(hours=9))
@@ -29,6 +29,9 @@ class PostDraft:
     as_of_date: str
     quality_score: int = 0
     status: str = "DRAFTED"
+    request_id: str = ""
+    photos: list[dict] = field(default_factory=list)
+    provenance: dict = field(default_factory=dict)
 
     @property
     def fingerprint(self) -> str:
@@ -66,6 +69,19 @@ def connect_db(path: Path) -> sqlite3.Connection:
         "id INTEGER PRIMARY KEY, day TEXT NOT NULL, category TEXT NOT NULL, "
         "status TEXT NOT NULL DEFAULT 'STARTED')"
     )
+    for table, columns in {
+        "posts": {"request_id": "TEXT NOT NULL DEFAULT ''",
+                  "photos_json": "TEXT NOT NULL DEFAULT '[]'",
+                  "provenance_json": "TEXT NOT NULL DEFAULT '{}'"},
+        "attempts": {"request_id": "TEXT"},
+    }.items():
+        present = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for name, definition in columns.items():
+            if name not in present:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_attempt_per_request "
+                 "ON attempts(request_id) WHERE request_id IS NOT NULL")
+    conn.commit()
     return conn
 
 
@@ -94,8 +110,9 @@ def save_post(conn: sqlite3.Connection, post: PostDraft) -> int:
         """
         INSERT INTO posts (
           category, subcategory, topic, title, body, tags_json, sources_json,
-          as_of_date, quality_score, status, fingerprint, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          as_of_date, quality_score, status, fingerprint, created_at,
+          request_id, photos_json, provenance_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             post.category,
@@ -109,7 +126,10 @@ def save_post(conn: sqlite3.Connection, post: PostDraft) -> int:
             post.quality_score,
             post.status,
             post.fingerprint,
-            datetime.now(timezone.utc).isoformat(),
+            datetime.now(UTC).isoformat(),
+            post.request_id,
+            json.dumps(post.photos, ensure_ascii=False),
+            json.dumps(post.provenance, ensure_ascii=False),
         ),
     )
     conn.commit()
@@ -119,7 +139,7 @@ def save_post(conn: sqlite3.Connection, post: PostDraft) -> int:
 def mark_saved(conn: sqlite3.Connection, post_id: int) -> None:
     conn.execute(
         "UPDATE posts SET status='SAVED_NAVER', draft_saved_at=? WHERE id=?",
-        (datetime.now(timezone.utc).isoformat(), post_id),
+        (datetime.now(UTC).isoformat(), post_id),
     )
     conn.commit()
 
@@ -141,8 +161,8 @@ def choose_categories(config: dict, count: int, used: dict | None = None) -> lis
     return result
 
 
-def reserve_attempt(conn: sqlite3.Connection, config: dict, daily_target: int):
-    """Reserve before a paid call; retries and overlapping dispatches share a KST budget."""
+def reserve_attempt(conn: sqlite3.Connection, config: dict, daily_target: int, candidates: list):
+    """Consume a real source once; empty categories never cause invented topics."""
     with conn:
         conn.execute("BEGIN IMMEDIATE")
         rows = conn.execute(
@@ -152,15 +172,22 @@ def reserve_attempt(conn: sqlite3.Connection, config: dict, daily_target: int):
         used = {row[0]: row[1] for row in rows}
         if sum(used.values()) >= daily_target:
             return None
-        choices = choose_categories(config, 1, used)
+        seen = {row[0] for row in conn.execute("SELECT request_id FROM attempts")}
+        available = [r for r in candidates if r.id not in seen]
+        present = {r.category for r in available}
+        limited = {"categories": {k: v for k, v in config["categories"].items() if k in present}}
+        if not limited["categories"]:
+            return None
+        choices = choose_categories(limited, 1, used)
         if not choices:
             return None
         category = choices[0]
+        request = next(r for r in available if r.category == category)
         cur = conn.execute(
-            "INSERT INTO attempts(day, category) VALUES (?, ?)",
-            (today_kst().isoformat(), category),
+            "INSERT INTO attempts(day, category, request_id) VALUES (?, ?, ?)",
+            (today_kst().isoformat(), category, request.id),
         )
-        return int(cur.lastrowid), category
+        return int(cur.lastrowid), request
 
 
 def set_status(conn: sqlite3.Connection, post_id: int, status: str) -> None:
@@ -174,6 +201,8 @@ def load_post(row: sqlite3.Row) -> PostDraft:
         title=row["title"], body=row["body"], tags=json.loads(row["tags_json"]),
         source_urls=json.loads(row["sources_json"]), as_of_date=row["as_of_date"],
         quality_score=row["quality_score"], status=row["status"],
+        request_id=row["request_id"], photos=json.loads(row["photos_json"]),
+        provenance=json.loads(row["provenance_json"]),
     )
 
 
@@ -182,7 +211,9 @@ def validate_post(post: PostDraft, category_info: dict) -> None:
         raise ValueError("Empty draft or invalid subcategory")
     if date.fromisoformat(post.as_of_date) != today_kst():
         raise ValueError("Draft must specify today's KST reference date")
-    if not post.source_urls:
+    if post.category == "cooking" and not post.photos:
+        raise ValueError("Cooking without owner photos cannot be approved")
+    if post.category != "cooking" and not post.source_urls:
         raise ValueError("No search-backed sources; hold draft")
     for url in post.source_urls:
         parsed = urlsplit(url)
@@ -211,9 +242,17 @@ def review_result(review: dict) -> tuple[int, str]:
 
 def render_post_text(post: PostDraft) -> str:
     sources = "\n".join(f"- {u}" for u in post.source_urls[:8])
-    text = f"기준일: {post.as_of_date}\n\n{post.body.rstrip()}"
+    text = f"작성 기준일: {post.as_of_date}"
+    if post.provenance.get("source_date"):
+        text += f"\n원본 자료 기준일: {post.provenance['source_date']}"
+    text += f"\n\n{post.body.rstrip()}"
     if sources:
         text += f"\n\n참고자료\n{sources}"
+    if post.provenance.get("source_url"):
+        text += f"\n\n커뮤니티 봇 원본 자료\n{post.provenance['source_url']}"
+    captions = [f"{i + 1}. {p['caption']}" for i, p in enumerate(post.photos) if p.get("caption")]
+    if captions:
+        text += "\n\n제공 사진 설명\n" + "\n".join(captions)
     if post.tags:
         text += "\n\n" + " ".join(f"#{t}" for t in post.tags)
     return text

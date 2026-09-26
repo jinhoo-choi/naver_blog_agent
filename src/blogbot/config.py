@@ -21,6 +21,7 @@ class Settings:
     headless: bool
     review_model: str
     artifact_dir: Path
+    inbox_dir: Path
 
 
 def load_settings() -> Settings:
@@ -50,4 +51,5 @@ def load_settings() -> Settings:
         headless=os.getenv("NAVER_HEADLESS", "false").lower() == "true",
         review_model=os.getenv("OPENAI_REVIEW_MODEL") or os.getenv("OPENAI_MODEL", "gpt-5"),
         artifact_dir=Path(os.getenv("BLOG_ARTIFACT_DIR") or data_dir / "drafts"),
+        inbox_dir=Path(os.getenv("BLOG_INBOX_DIR") or data_dir / "inbox"),
     )

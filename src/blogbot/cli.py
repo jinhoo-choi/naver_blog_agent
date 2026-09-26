@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 from contextlib import closing
+from pathlib import Path
+
+from openai import OpenAIError
+from playwright.sync_api import Error as PlaywrightError
 
 from .config import load_settings
 from .core import connect_db, mark_saved, set_status
+from .inputs import enqueue_file
 from .notify import telegram
 from .pipeline import make_writer, run_daily, save_pending
 
@@ -19,6 +25,8 @@ def main() -> None:
     sub.add_parser("login", help="로컬 Chrome에서 직접 로그인")
     sub.add_parser("retry", help="APPROVED 글만 네이버 임시저장")
     sub.add_parser("status", help="본문 없이 상태별 건수 확인")
+    enqueue = sub.add_parser("enqueue", help="실제 육아 질문 또는 레시피·사진 입력 등록")
+    enqueue.add_argument("--file", type=Path, required=True)
     doctor = sub.add_parser("doctor", help="비밀값을 출력하지 않고 필수 설정 확인")
     doctor.add_argument("--require-naver", action="store_true")
     resolve = sub.add_parser("resolve", help="네이버 임시저장 목록을 직접 확인한 뒤 상태 확정")
@@ -28,6 +36,10 @@ def main() -> None:
     settings = load_settings()
 
     try:
+        if args.command == "enqueue":
+            enqueue_file(settings, args.file.resolve())
+            print(json.dumps({"status": "INPUT_QUEUED"}))
+            return
         if args.command == "doctor":
             checks = {"OPENAI_API_KEY": bool(settings.openai_api_key)}
             if args.require_naver:
@@ -60,13 +72,15 @@ def main() -> None:
         print(json.dumps(results, ensure_ascii=False, indent=2))
         try:
             telegram(results)
-        except Exception as exc:
+        except (OSError, ValueError, RuntimeError) as exc:
             print(json.dumps({"notification": "FAILED", "error": type(exc).__name__}))
-        errors = {"ERROR", "SAVE_UNCERTAIN", "MANUAL_CHECK_REQUIRED", "STALE_REVIEW_REQUIRED"}
+        errors = {"ERROR", "SAVE_UNCERTAIN", "MANUAL_CHECK_REQUIRED", "STALE_REVIEW_REQUIRED",
+                  "INPUT_REJECTED", "COMMUNITY_SOURCE_UNAVAILABLE", "SETUP_REQUIRED"}
         raise SystemExit(1 if any(r["status"] in errors for r in results) else 0)
     except (KeyboardInterrupt, SystemExit):
         raise
-    except Exception as exc:
+    except (OpenAIError, PlaywrightError, sqlite3.Error, OSError,
+            RuntimeError, ValueError, TypeError, KeyError) as exc:
         print(json.dumps({"status": "ERROR", "error": type(exc).__name__}))
         raise SystemExit(1) from None
 

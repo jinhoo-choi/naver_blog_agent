@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 from playwright.sync_api import Page, expect, sync_playwright
 
 from .core import PostDraft, render_post_text
+from .inputs import verify_photos
 
 
 class NaverDraftWriter:
@@ -90,6 +91,27 @@ class NaverDraftWriter:
             page.wait_for_timeout(500)
         raise RuntimeError("Save unconfirmed: inspect Naver draft list before retrying")
 
+    def _attach_photos(self, page: Page, editor, photos: list[dict]) -> None:
+        if not photos:
+            return
+        # These two controls must be recorded from the owner's live editor.
+        button_selector = self.selectors.get("photo_button_selector", "")
+        image_selector = self.selectors.get("uploaded_image_selector", "")
+        if not button_selector or not image_selector:
+            raise RuntimeError("Configure verified Naver photo controls before cooking saves")
+        verify_photos(photos)
+        button = editor.locator(button_selector)
+        if button.count() != 1 or not button.is_visible():
+            raise RuntimeError("Photo upload control is ambiguous")
+        images = editor.locator(image_selector)
+        before = images.count()
+        with page.expect_file_chooser(timeout=10000) as chooser:
+            button.click()
+        chooser.value.set_files([p["file"] for p in photos])
+        expect(images).to_have_count(before + len(photos), timeout=60000)
+        for i in range(before, before + len(photos)):
+            expect(images.nth(i)).to_be_visible(timeout=10000)
+
     def login(self) -> None:
         self.profile_dir.mkdir(parents=True, exist_ok=True)
         with sync_playwright() as p:
@@ -103,7 +125,16 @@ class NaverDraftWriter:
             finally:
                 context.close()
 
+    def preflight(self, post: PostDraft) -> None:
+        if post.category == "cooking":
+            verify_photos(post.photos)
+            if not all(self.selectors.get(k) for k in (
+                "photo_button_selector", "uploaded_image_selector",
+            )):
+                raise RuntimeError("Photo selectors must be configured before cooking saves")
+
     def save(self, post: PostDraft) -> None:
+        self.preflight(post)
         self.profile_dir.mkdir(parents=True, exist_ok=True)
         with sync_playwright() as p:
             context = p.chromium.launch_persistent_context(
@@ -124,6 +155,7 @@ class NaverDraftWriter:
                 self._fill(editor, self.selectors.get(
                     "body_selector", ".se-main-container .se-component.se-text .se-text-paragraph",
                 ), render_post_text(post))
+                self._attach_photos(page, editor, post.photos)
                 self._save_draft(page, editor)
             finally:
                 context.close()

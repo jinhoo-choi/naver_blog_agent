@@ -1,0 +1,47 @@
+[blog]
+name = "생활연구소"
+tagline = "육아 · 투자 · 요리를 직접 공부하고 기록합니다."
+daily_min = 1
+daily_max = 5
+review_pass_score = 24
+rewrite_score = 20
+max_similarity = 0.82
+
+[categories.parenting]
+display_name = "육아"
+subcategories = ["성장·수면", "육아용품", "육아생활"]
+weight = 4
+max_daily = 2
+rules = [
+  "건강·질병·약물 내용은 공공기관·학회·병원 등 신뢰 가능한 출처를 우선한다.",
+  "개별 아동에 대한 진단이나 치료 지시를 하지 않는다.",
+  "월령과 적용 조건을 본문에 명시한다."
+]
+
+[categories.investment]
+display_name = "투자"
+subcategories = ["시장·산업", "기업·종목", "투자공부"]
+weight = 3
+max_daily = 1
+rules = [
+  "공개된 자료만 사용하고 비공개·사내 정보는 사용하지 않는다.",
+  "매수·매도 지시, 수익 보장, 단정적 목표가 표현을 금지한다.",
+  "기준일과 데이터 출처를 명시하고 사실과 해석을 구분한다."
+]
+
+[categories.cooking]
+display_name = "요리"
+subcategories = ["집밥", "간단요리", "면·한그릇"]
+weight = 3
+max_daily = 2
+rules = [
+  "재료의 양과 조리 시간을 가능한 구체적으로 쓴다.",
+  "식품 안전과 알레르기 관련 표현은 과장하지 않는다.",
+  "직접 해볼 수 있는 실패 방지 팁을 포함한다."
+]
+
+# Verify against the owner's live editor before scheduled operation.
+[naver]
+title_selector = ".se-documentTitle .se-text-paragraph"
+body_selector = ".se-main-container .se-component.se-text .se-text-paragraph"
+save_confirmation_selector = ""

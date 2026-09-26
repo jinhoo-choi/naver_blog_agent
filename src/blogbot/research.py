@@ -1,4 +1,4 @@
-"""Read-only Naver structure benchmark; no competitor prose is retained."""
+"""Read-only Naver structure/style benchmark; no competitor prose is retained."""
 from __future__ import annotations
 
 import re
@@ -64,9 +64,14 @@ def collect_benchmark(query: str, profile_dir: str, target: int = 7) -> dict:
                     editor = page.frame(name="mainFrame") or page
                     article = editor.locator('.se-main-container, #postViewArea').first
                     article.wait_for(timeout=15000)
-                    stats = article.evaluate("""node => {
+                    stats = article.evaluate(r"""node => {
                         const text = node.innerText;
                         const paragraphs = [...node.querySelectorAll('.se-text-paragraph')];
+                        const blocks = paragraphs.map(p => p.innerText.trim()).filter(Boolean);
+                        const bodyBlocks = blocks.length ? blocks : text.split(/\n+/).map(s => s.trim()).filter(Boolean);
+                        const sentences = text.split(/[.!?。\n]+/).map(s => s.trim()).filter(Boolean);
+                        const meanLength = items => items.length ?
+                            Math.round(items.reduce((sum, s) => sum + s.length, 0) / items.length) : 0;
                         return {
                             chars: text.length,
                             images: node.querySelectorAll('.se-component.se-image').length,
@@ -76,7 +81,18 @@ def collect_benchmark(query: str, profile_dir: str, target: int = 7) -> dict:
                                 p.querySelector('b,strong')).length,
                             tables: node.querySelectorAll('table').length,
                             has_faq: /FAQ|자주.*질문|궁금한.*질문/i.test(text),
-                            has_checklist: /체크리스트|체크.*포인트|확인할.*항목/.test(text)
+                            has_checklist: /체크리스트|체크.*포인트|확인할.*항목/.test(text),
+                            style: {
+                                basis: 'heuristic_counts_not_prose',
+                                paragraph_count: bodyBlocks.length,
+                                mean_paragraph_chars: meanLength(bodyBlocks),
+                                mean_sentence_chars: meanLength(sentences),
+                                yo_ending_count: sentences.filter(s => /요$/.test(s)).length,
+                                formal_ending_count: sentences.filter(s => /(?:습니다|입니다|합니다)$/.test(s)).length,
+                                first_person_mentions: (text.match(/(?:^|\s)(?:저는|제가|저희는|저희가|나는|내가|우리는|우리가)(?=\s|[,.!?])/g) || []).length,
+                                question_mark_count: (text.match(/\?/g) || []).length,
+                                opening_has_question: /\?/.test(bodyBlocks.slice(0, 2).join(' ').slice(0, 250))
+                            }
                         };
                     }""")
                     if stats["chars"] >= 300:
@@ -92,7 +108,7 @@ def collect_benchmark(query: str, profile_dir: str, target: int = 7) -> dict:
     if len(records) < 5:
         raise ResearchRequired("Fewer than five readable results; benchmark manually before retry")
     return {"query": query, "date": today_kst().isoformat(), "basis": "search_exposure_not_views",
-            "records": records, "rule": "Structure only; verify claims with primary sources"}
+            "records": records, "rule": "Structure and aggregate style traits only; no copied prose or experiences; verify claims with primary sources"}
 
 
 def prepare_request(settings, request):

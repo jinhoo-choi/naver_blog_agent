@@ -6,16 +6,18 @@ from urllib.parse import urlencode
 
 from playwright.sync_api import Page, expect, sync_playwright
 
-from .core import PostDraft, render_post_text
+from .core import PostDraft
 from .inputs import verify_photos
+from .presentation import render_segments
 
 
 class NaverDraftWriter:
-    """Only a temporary-save button is actionable; publish controls are never used."""
+    """Category-routed SmartEditor writer; publish controls are never used."""
 
     def __init__(
         self, blog_id: str, profile_dir: str, naver_id: str = "",
         naver_password: str = "", headless: bool = False, selectors: dict | None = None,
+        categories: dict | None = None,
     ):
         if not re.fullmatch(r"[A-Za-z0-9_.-]+", blog_id):
             raise RuntimeError("Set NAVER_BLOG_ID to the blog ID, not a URL")
@@ -26,10 +28,19 @@ class NaverDraftWriter:
         self.naver_id, self.naver_password = naver_id, naver_password
         self.headless = headless
         self.selectors = selectors or {}
+        self.categories = categories or {}
 
-    @property
-    def editor_url(self) -> str:
-        return "https://blog.naver.com/PostWriteForm.naver?" + urlencode({"blogId": self.blog_id})
+    def editor_url(self, category: str | None = None) -> str:
+        if category:
+            number = self.categories.get(category, {}).get("naver_category_no")
+            if type(number) is not int or number < 1:
+                raise RuntimeError(f"No verified Naver category number for {category}")
+            return f"https://blog.naver.com/{self.blog_id}/postwrite?" + urlencode(
+                {"categoryNo": number}
+            )
+        return "https://blog.naver.com/PostWriteForm.naver?" + urlencode(
+            {"blogId": self.blog_id}
+        )
 
     @staticmethod
     def _has_security_challenge(page: Page) -> bool:
@@ -37,8 +48,9 @@ class NaverDraftWriter:
         markers = ("자동입력 방지", "보안 확인", "보안문자", "CAPTCHA", "캡챠")
         return any(m.lower() in text.lower() for m in markers)
 
-    def _ensure_login(self, page: Page) -> None:
-        page.goto(self.editor_url, wait_until="domcontentloaded")
+    def _ensure_login(self, page: Page, category: str) -> None:
+        url = self.editor_url(category)
+        page.goto(url, wait_until="domcontentloaded")
         if "nid.naver.com" not in page.url:
             return
         if self._has_security_challenge(page):
@@ -51,66 +63,56 @@ class NaverDraftWriter:
         page.wait_for_timeout(2000)
         if self._has_security_challenge(page) or "nid.naver.com" in page.url:
             raise RuntimeError("Login incomplete: complete security checks manually")
-        page.goto(self.editor_url, wait_until="domcontentloaded")
+        page.goto(url, wait_until="domcontentloaded")
 
     @staticmethod
     def _editor_frame(page: Page):
-        frame = page.frame(name="mainFrame")
-        return frame or page
+        return page.frame(name="mainFrame") or page
 
     @staticmethod
-    def _fill(editor, selector: str, text: str) -> None:
-        target = editor.locator(selector).first
-        target.wait_for(state="visible", timeout=15000)
-        target.fill(text)
-        expect(target).to_have_text(text, timeout=5000)
+    def _write_clipboard(editor, html_text: str) -> None:
+        editor.evaluate(
+            """async value => navigator.clipboard.write([new ClipboardItem({
+              'text/html': new Blob([value], {type: 'text/html'}),
+              'text/plain': new Blob([value.replace(/<[^>]+>/g, ' ')], {type: 'text/plain'})
+            })])""", html_text,
+        )
 
-    def _save_draft(self, page: Page, editor) -> None:
-        locations = [page] if editor is page else [page, editor]
-        choices = []
-        for location in locations:
-            buttons = location.get_by_role("button", name=re.compile(r"^임시저장(?:\s*\d+)?$"))
-            choices.extend(buttons.nth(i) for i in range(buttons.count())
-                           if buttons.nth(i).is_visible())
-        if len(choices) != 1:
-            raise RuntimeError("Exactly one visible temporary-save button is required")
-        confirmation = self.selectors.get("save_confirmation_selector", "")
-        saved = re.compile(r"임시\s*저장(?:이)?\s*(?:완료|되었습니다|하였습니다)")
-        # An old success toast must disappear before this save attempt.
-        for location in locations:
-            before = location.locator(confirmation) if confirmation else location.get_by_text(saved)
-            for i in range(before.count()):
-                expect(before.nth(i)).not_to_be_visible(timeout=10000)
-        choices[0].click()
-        # A click is not evidence of persistence. Require a new explicit success message.
-        for _ in range(20):
-            for location in locations:
-                signal = location.locator(confirmation) if confirmation else location.get_by_text(saved)
-                if any(signal.nth(i).is_visible() for i in range(signal.count())):
-                    return
-            page.wait_for_timeout(500)
-        raise RuntimeError("Save unconfirmed: inspect Naver draft list before retrying")
+    def _paste_html(self, page: Page, editor, html_text: str, selector: str = "") -> None:
+        if selector:
+            target = editor.locator(selector).first
+            target.wait_for(state="visible", timeout=20000)
+            target.click()
+        self._write_clipboard(editor, html_text)
+        page.keyboard.press("Control+V")
 
-    def _attach_photos(self, page: Page, editor, photos: list[dict]) -> None:
-        if not photos:
-            return
-        # These two controls must be recorded from the owner's live editor.
-        button_selector = self.selectors.get("photo_button_selector", "")
-        image_selector = self.selectors.get("uploaded_image_selector", "")
-        if not button_selector or not image_selector:
-            raise RuntimeError("Configure verified Naver photo controls before cooking saves")
-        verify_photos(photos)
-        button = editor.locator(button_selector)
+    def _attach_photo(self, page: Page, editor, photo: dict) -> None:
+        images = editor.locator(self.selectors.get(
+            "uploaded_image_selector", ".se-component.se-image img"
+        ))
+        before = images.count()
+        button = editor.get_by_role("button", name="사진 추가", exact=True)
         if button.count() != 1 or not button.is_visible():
             raise RuntimeError("Photo upload control is ambiguous")
-        images = editor.locator(image_selector)
-        before = images.count()
         with page.expect_file_chooser(timeout=10000) as chooser:
             button.click()
-        chooser.value.set_files([p["file"] for p in photos])
-        expect(images).to_have_count(before + len(photos), timeout=60000)
-        for i in range(before, before + len(photos)):
-            expect(images.nth(i)).to_be_visible(timeout=10000)
+        chooser.value.set_files(photo["file"])
+        expect(images).to_have_count(before + 1, timeout=60000)
+        expect(images.nth(before)).to_be_visible(timeout=10000)
+
+    @staticmethod
+    def _save_draft(page: Page, editor, title: str) -> None:
+        save = editor.get_by_role("button", name="저장", exact=True)
+        if save.count() != 1 or not save.is_visible():
+            raise RuntimeError("Exactly one visible save button is required")
+        save.click()
+        draft_list = editor.get_by_role(
+            "button", name=re.compile(r"^임시저장된 글 보기,\s*\d+개$")
+        )
+        draft_list.wait_for(state="visible", timeout=20000)
+        draft_list.click()
+        entry = editor.get_by_role("button", name=re.compile(rf"^{re.escape(title)}\s+\d{{4}}\."))
+        expect(entry.first).to_be_visible(timeout=15000)
 
     def login(self) -> None:
         self.profile_dir.mkdir(parents=True, exist_ok=True)
@@ -120,18 +122,16 @@ class NaverDraftWriter:
             )
             try:
                 page = context.pages[0] if context.pages else context.new_page()
-                page.goto(self.editor_url, wait_until="domcontentloaded")
+                page.goto(self.editor_url(), wait_until="domcontentloaded")
                 input("브라우저에서 로그인/보안 확인을 마친 뒤 Enter를 누르세요: ")
             finally:
                 context.close()
 
     def preflight(self, post: PostDraft) -> None:
-        if post.category == "cooking":
-            verify_photos(post.photos)
-            if not all(self.selectors.get(k) for k in (
-                "photo_button_selector", "uploaded_image_selector",
-            )):
-                raise RuntimeError("Photo selectors must be configured before cooking saves")
+        self.editor_url(post.category)
+        if not post.photos:
+            raise RuntimeError("A reviewed or generated article image is required")
+        verify_photos(post.photos)
 
     def save(self, post: PostDraft) -> None:
         self.preflight(post)
@@ -140,22 +140,34 @@ class NaverDraftWriter:
             context = p.chromium.launch_persistent_context(
                 user_data_dir=str(self.profile_dir), channel="chrome", headless=self.headless,
                 viewport={"width": 1440, "height": 1000},
+                permissions=["clipboard-read", "clipboard-write"],
             )
             try:
                 page = context.pages[0] if context.pages else context.new_page()
-                self._ensure_login(page)
+                self._ensure_login(page, post.category)
                 page.wait_for_timeout(1500)
                 if self._has_security_challenge(page):
                     raise RuntimeError("Security challenge: automation stopped")
                 editor = self._editor_frame(page)
-                # No generic popup confirmation: unknown editor dialogs stop the run.
-                self._fill(editor, self.selectors.get(
+                if editor.get_by_text("작성 중인 글이 있습니다.", exact=True).count():
+                    raise RuntimeError("Unresolved editor recovery prompt")
+                title = editor.locator(self.selectors.get(
                     "title_selector", ".se-documentTitle .se-text-paragraph",
-                ), post.title)
-                self._fill(editor, self.selectors.get(
-                    "body_selector", ".se-main-container .se-component.se-text .se-text-paragraph",
-                ), render_post_text(post))
-                self._attach_photos(page, editor, post.photos)
-                self._save_draft(page, editor)
+                )).first
+                title.wait_for(state="visible", timeout=20000)
+                title.click()
+                page.keyboard.insert_text(post.title)
+                expect(title).to_contain_text(post.title, timeout=5000)
+                first = True
+                for segment in render_segments(post):
+                    if segment.photo:
+                        self._attach_photo(page, editor, segment.photo)
+                    elif segment.html:
+                        selector = self.selectors.get(
+                            "body_selector", ".se-main-container .se-component.se-text .se-text-paragraph"
+                        ) if first else ""
+                        self._paste_html(page, editor, segment.html, selector)
+                        first = False
+                self._save_draft(page, editor, post.title)
             finally:
                 context.close()

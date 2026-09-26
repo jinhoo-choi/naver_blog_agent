@@ -23,9 +23,12 @@ from .core import (
     today_kst,
     validate_post,
 )
+from .images import generate_images
 from .inputs import collect_requests
 from .llm import BlogLLM
 from .naver import NaverDraftWriter
+from .presentation import validate_structure
+from .research import ResearchRequired, prepare_request
 
 
 def make_writer(settings: Settings) -> NaverDraftWriter:
@@ -33,6 +36,7 @@ def make_writer(settings: Settings) -> NaverDraftWriter:
         blog_id=settings.naver_blog_id, profile_dir=settings.naver_profile_dir,
         naver_id=settings.naver_id, naver_password=settings.naver_password,
         headless=settings.headless, selectors=settings.config.get("naver", {}),
+        categories=settings.config["categories"],
     )
 
 
@@ -109,12 +113,14 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
             result = {"attempt": attempt_id, "category": category_key}
             try:
                 info = settings.config["categories"][category_key]
+                request = prepare_request(settings, request)
                 if llm is None:
                     llm = BlogLLM(settings.openai_api_key, settings.openai_model,
                                   settings.root, settings.review_model)
                 existing = recent_titles(conn)
                 post = llm.create_draft(request, info, existing)
                 validate_post(post, info)
+                validate_structure(post, settings.config.get("editorial", {}).get("require_structure", True))
                 threshold = float(limits["max_similarity"])
                 if max_title_similarity(post.title, existing) >= threshold:
                     result["status"] = "DROP_DUPLICATE"
@@ -124,6 +130,7 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                     if decision == "REWRITE" and score >= int(limits["rewrite_score"]):
                         post = llm.rewrite(post, info, review, request)
                         validate_post(post, info)
+                        validate_structure(post, settings.config.get("editorial", {}).get("require_structure", True))
                         review = llm.review(post, info, request)
                         score, decision = review_result(review)
                     if max_title_similarity(post.title, recent_titles(conn)) >= threshold:
@@ -131,6 +138,7 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                     elif decision != "PASS" or score < int(limits["review_pass_score"]):
                         result.update(status="DROP_REVIEW", score=score)
                     else:
+                        post = generate_images(settings, request, post)
                         post.quality_score, post.status = score, "APPROVED"
                         post_id = save_post(conn, post)
                         result.update(id=post_id, status="APPROVED", score=score)
@@ -143,10 +151,12 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                         stem.with_suffix(".md").write_text(
                             f"# {post.title}\n\n{render_post_text(post)}\n", encoding="utf-8",
                         )
+            except ResearchRequired:
+                result["status"] = "RESEARCH_REQUIRED"
             except sqlite3.IntegrityError:
                 conn.rollback()
                 result["status"] = "DROP_DUPLICATE"
-            except (OpenAIError, OSError, RuntimeError, ValueError, TypeError, KeyError) as exc:
+            except (OpenAIError, PlaywrightError, OSError, RuntimeError, ValueError, TypeError, KeyError) as exc:
                 result.update(status="ERROR", error=type(exc).__name__)
             with conn:
                 conn.execute("UPDATE attempts SET status=? WHERE id=?", (result["status"], attempt_id))

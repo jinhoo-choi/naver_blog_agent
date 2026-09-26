@@ -67,7 +67,8 @@ def enqueue_file(settings: Settings, source: Path) -> str:
         context = raw.get("context", "")
         if not isinstance(context, str):
             raise TypeError("context must be text")
-        data = {"question": question.strip(), "age_months": age, "context": context}
+        data = {"question": question.strip(), "age_months": age, "context": context,
+                "benchmark_query": str(raw.get("benchmark_query", ""))}
         photos = []
     elif category == "cooking":
         recipe = raw.get("recipe", {})

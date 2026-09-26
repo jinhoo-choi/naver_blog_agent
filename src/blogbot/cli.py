@@ -75,7 +75,7 @@ def main() -> None:
         except (OSError, ValueError, RuntimeError) as exc:
             print(json.dumps({"notification": "FAILED", "error": type(exc).__name__}))
         errors = {"ERROR", "SAVE_UNCERTAIN", "MANUAL_CHECK_REQUIRED", "STALE_REVIEW_REQUIRED",
-                  "INPUT_REJECTED", "COMMUNITY_SOURCE_UNAVAILABLE", "SETUP_REQUIRED"}
+                  "INPUT_REJECTED", "COMMUNITY_SOURCE_UNAVAILABLE", "SETUP_REQUIRED", "RESEARCH_REQUIRED"}
         raise SystemExit(1 if any(r["status"] in errors for r in results) else 0)
     except (KeyboardInterrupt, SystemExit):
         raise

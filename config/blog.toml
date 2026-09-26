@@ -7,15 +7,25 @@ review_pass_score = 24
 rewrite_score = 20
 max_similarity = 0.82
 
+# Read-only reuse. The upstream bot is never executed or modified.
+[community]
+enabled = true
+repository = "jinhoo-choi/kis-community-bot"
+min_score = 14
+max_age_days = 7
+
 [categories.parenting]
 display_name = "육아"
-subcategories = ["성장·수면", "육아용품", "육아생활"]
+subcategories = ["성장·수면", "건강·피부", "육아용품·안전", "육아생활"]
 weight = 4
 max_daily = 2
 rules = [
+  "선우와 관련해 사용자가 실제로 입력한 질문에만 답한다. 자율 주제 선정 금지.",
   "건강·질병·약물 내용은 공공기관·학회·병원 등 신뢰 가능한 출처를 우선한다.",
   "개별 아동에 대한 진단이나 치료 지시를 하지 않는다.",
-  "월령과 적용 조건을 본문에 명시한다."
+  "월령이 입력되지 않았으면 선우의 나이를 추정하지 않고 적용 월령별 조건을 나눈다.",
+  "질문 → 핵심 답변 → 근거와 월령별 조건 → 실천 방법 → 진료·주의 신호 → 출처 순서로 구성한다.",
+  "실명·생년월일·병력 등 사적 정보는 원고에 노출하지 않는다. 체험담을 창작하지 않는다."
 ]
 
 [categories.investment]
@@ -24,9 +34,12 @@ subcategories = ["시장·산업", "기업·종목", "투자공부"]
 weight = 3
 max_daily = 1
 rules = [
+  "kis-community-bot의 통과 자료 facts/src/body를 기반으로만 작성한다.",
   "공개된 자료만 사용하고 비공개·사내 정보는 사용하지 않는다.",
   "매수·매도 지시, 수익 보장, 단정적 목표가 표현을 금지한다.",
-  "기준일과 데이터 출처를 명시하고 사실과 해석을 구분한다."
+  "기준일과 데이터 출처를 명시하고 사실과 해석을 구분한다.",
+  "핵심 이슈 → 확인된 사실·수치 → 의미와 해석 → 변수·리스크 → 확인할 항목 → 출처 순서로 구성한다.",
+  "원본이 뒷받침하지 않는 수치·원인·매매 경험을 추가하지 않는다. 부족한 내용은 억지로 늘리지 않는다."
 ]
 
 [categories.cooking]
@@ -35,9 +48,12 @@ subcategories = ["집밥", "간단요리", "면·한그릇"]
 weight = 3
 max_daily = 2
 rules = [
-  "재료의 양과 조리 시간을 가능한 구체적으로 쓴다.",
+  "사용자가 올린 레시피와 사진이 모두 있을 때만 작성한다. 외부 레시피와 대체 이미지 금지.",
+  "재료·양·시간·온도는 제공된 값을 유지하며 빠진 값은 추측하지 않는다.",
   "식품 안전과 알레르기 관련 표현은 과장하지 않는다.",
-  "직접 해볼 수 있는 실패 방지 팁을 포함한다."
+  "요리 소개 → 제공된 분량·재료 → 실제 조리 순서 → 제공된 팁 → 사진 설명 순서로 구성한다.",
+  "사진을 직접 분석하지 않았으므로 입력 캡션 외의 색·질감·맛을 단정하지 않는다.",
+  "성공 후기나 가족 반응을 창작하지 않는다. 미제공 팁은 추가하지 않는다."
 ]
 
 # Verify against the owner's live editor before scheduled operation.
@@ -45,3 +61,6 @@ rules = [
 title_selector = ".se-documentTitle .se-text-paragraph"
 body_selector = ".se-main-container .se-component.se-text .se-text-paragraph"
 save_confirmation_selector = ""
+# Set these only after inspecting the owner's editor; blank keeps cooking drafts local.
+photo_button_selector = ""
+uploaded_image_selector = ""

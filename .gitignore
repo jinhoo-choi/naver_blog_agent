@@ -19,6 +19,7 @@ test-results/
 build/
 dist/
 chrome-profile/
+inbox/
 *.db*
 *.sqlite*
 *storage_state*.json

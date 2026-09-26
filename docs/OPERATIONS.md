@@ -32,6 +32,7 @@ gh auth login
 | 선택 Secret | NAVER_ID, NAVER_PASSWORD | 세션 만료 시 보조 로그인 |
 | 선택 Secret | TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID | 알림 사용 시 |
 | Variable | BLOG_DATA_DIR | C:\blogbot\data |
+| Variable | BLOG_INBOX_DIR | 선택. 기본 BLOG_DATA_DIR 아래 inbox |
 | Variable | NAVER_PROFILE_DIR | C:\blogbot\chrome-profile |
 | Variable | OPENAI_MODEL | 기존 gpt-5 유지, 변경 가능 |
 | Variable | OPENAI_REVIEW_MODEL | 미설정 시 작성 모델과 같음 |
@@ -60,6 +61,10 @@ blogbot login
 본문 해시태그는 자동 첨부하며 실제 게시판/발행 태그는 최종 발행 때 확인합니다.
 
 ## 4. 실행·스케줄
+
+먼저 [입력 가이드](INPUTS.md)에 따라 실제 육아 질문 또는 레시피·사진을 등록합니다.
+투자는 `kis-community-bot`의 최신 심사 결과에서 자동으로 후보를 받습니다.
+원본이 없는 카테고리는 건너뛰며 주제를 임의 생성하지 않습니다.
 
 Actions → Naver Blog Draft → Run workflow:
 
@@ -106,6 +111,10 @@ blogbot status
 | STALE_REVIEW_REQUIRED | 전날 원고, 자료와 내용 재확인 필요 |
 | DROP_REVIEW / DROP_DUPLICATE | 심사·중복 보류 |
 | ERROR | 생성·자료·파일 오류, 타입만 로그에 기록 |
+| SETUP_REQUIRED | 사진 첨부 설정·파일 확인 필요. 승인 원고는 그대로 보관 |
+| INPUT_REJECTED | 입력 형식·누락·사진 변경 확인 |
+| COMMUNITY_SOURCE_UNAVAILABLE | 원본 GitHub 조회 실패. 사용자 질문·요리는 계속 처리 |
+| NO_ELIGIBLE_INPUT_OR_DAILY_LIMIT | 새 입력 없음 또는 일일 한도 도달, 유료 호출 없음 |
 
 네이버 임시저장 목록에서 제목·본문을 직접 확인한 뒤:
 
@@ -122,6 +131,9 @@ blogbot resolve --id 12 --outcome discard
 전날 원고는 not-saved로 되돌려도 자동 저장하지 않습니다. 직접 자료를 갱신해 활용하거나 폐기합니다.
 화면 구조 변경·보안 확인·알 수 없는 팝업은 작업을 중지합니다.
 `config/blog.toml`의 [naver] 셀렉터는 실제 편집기에서 확인한 값으로 조정합니다.
+요리는 `photo_button_selector`(파일 선택창을 여는 버튼)와 `uploaded_image_selector`(본문 이미지)를
+확인한 뒤 설정합니다. 두 값이 비어 있으면 브라우저를 열기 전에 SETUP_REQUIRED로 보류합니다.
+사진 첨부 후 본문 이미지 수 증가를 확인해야 임시저장으로 진행합니다.
 
 ## 공식 기술 문서
 

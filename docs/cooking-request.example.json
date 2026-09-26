@@ -1,0 +1,21 @@
+{
+  "enabled": false,
+  "id": "cooking-your-recipe-001",
+  "category": "cooking",
+  "recipe": {
+    "name": "직접 올리는 요리 이름",
+    "ingredients": [
+      "실제 재료와 제공한 계량"
+    ],
+    "steps": [
+      "실제 조리 과정 1",
+      "실제 조리 과정 2"
+    ]
+  },
+  "photos": [
+    {
+      "file": "photos/finished.jpg",
+      "caption": "직접 제공하는 사진 설명"
+    }
+  ]
+}

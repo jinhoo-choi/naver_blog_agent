@@ -1,64 +1,56 @@
-# Naver Blog structure
+# 게시글 구조와 글감 기준
 
-## Brand
-- Blog name: `생활연구소` (working title)
-- Tagline: `육아 · 투자 · 요리를 직접 공부하고 기록합니다.`
-- Principle: three topics are tied together as practical notes from everyday life, not three unrelated SEO sites.
+사용자 확정 기준: 2026-09-26 KST. 세 카테고리의 글감은 각각 정해진 입력에서만 가져옵니다.
+`생활연구소`는 미확정 제안명입니다.
 
-## Category tree
+| 카테고리 | 생성 조건 | 글 구조 |
+|---|---|---|
+| 요리 | 사용자가 제공한 레시피 + 실제 사진 모두 필요 | 요리 소개 → 제공된 분량·재료 → 조리 순서 → 제공된 팁 → 사진 설명 |
+| 육아 | 선우와 관련해 사용자가 실제로 물어본 질문 | 질문 → 핵심 답변 → 근거와 월령별 조건 → 실천 방법 → 관련 주의·진료 신호 → 출처 |
+| 투자 | kis-community-bot의 최종 배포 자료 중 블로그 기준 통과분 | 핵심 이슈 → 확인된 사실·수치 → 해석 → 변수·리스크 → 확인할 항목 → 출처·기준일 |
 
-- 육아
-  - 성장·수면
-  - 육아용품
-  - 육아생활
-- 투자
-  - 시장·산업
-  - 기업·종목
-  - 투자공부
-- 요리
-  - 집밥
-  - 간단요리
-  - 면·한그릇
+## 요리
 
-Start with 9 subcategories. Add a new category only when at least 10 existing posts clearly need it.
+레시피 또는 사진 한쪽만 있으면 생성하지 않습니다. 외부 레시피, 스톡 이미지, AI 대체 이미지를 넣지 않습니다.
+재료·계량·시간·온도·순서는 원본 값을 유지합니다. 미제공 항목을 모델이 채우지 않습니다.
+가족 반응, 맛 평가, 직접 해본 실패담도 사용자가 제공한 내용만 반영합니다.
+사진은 원본 파일을 로컬 큐로 복사해 보관하고 변경 여부를 해시로 확인합니다.
+현재 작성 모델에는 사진 캡션만 전달하며 사진 내용을 분석했다고 주장하지 않습니다.
+네이버 사진 선택기와 업로드된 이미지 셀렉터를 확인·설정한 뒤 원본을 입력 순서대로 첨부합니다.
+사진의 정확한 위치·캡션·대표 이미지는 최종 발행 전에 직접 확인합니다.
 
-## Home layout
-1. Profile / one-line description
-2. Top menu: 육아 | 투자 | 요리
-3. Latest posts
-4. Category representative posts (manual curation after data accumulates)
-5. Keep widgets minimal; do not build a banner-heavy 'revenue blog' look.
+## 육아
 
-## Content templates
+월령별 발달, 지루성 두피염, 목튜브 사용 여부는 사용자가 제시한 질문 유형의 예입니다.
+예시를 자동 예약하지 않으며 실제 질문을 입력 큐에 등록하면 처리합니다.
+정확한 월령을 제공하면 반영하고, 모르면 아이 나이를 추정하지 않고 월령별 적용 조건을 구분합니다.
+의료·발달·제품 안전 주장은 공공기관·학회·병원 등 1차 근거를 확인합니다.
+질문을 특정 진단으로 바꾸거나 진료받은 경험·치료 효과를 창작하지 않습니다.
+공개 원고에서는 아이 실명·생년월일·사적 병력을 생략합니다.
 
-### 육아
-- 3-line answer first
-- age/condition
-- key information
-- practical checklist
-- caution / when to seek professional help when relevant
-- sources
+## 투자
 
-### 투자
-- as-of date
-- what happened
-- verified facts/data
-- interpretation / scenarios (clearly separated)
-- risks / counterpoints
-- sources
-- no personalized buy/sell instruction, no return guarantee
+원본: https://github.com/jinhoo-choi/kis-community-bot
 
-### 요리
-- finished-dish summary
-- ingredients / quantities
-- time
-- steps
-- failure points
-- substitutions
-- one-line wrap-up
+`main.py`가 최종 배포분을 기록하는 `data/posts_latest.json`을 읽기 전용으로 가져옵니다.
+파일의 마지막 변경 커밋에 고정해 읽으며 원본 ID·커밋·출처·자료 날짜를 원고 이력에 남깁니다.
+원본 봇의 실행, 키 복사, Telegram 발송은 하지 않습니다.
 
-## Monetization readiness
-AdPost is a later stage. First optimize for original content, search usefulness, and stable posting. Any affiliate/sponsored content must be disclosed according to the applicable platform/rules.
+원본 봇은 리서치·정책 유형의 일부 문턱을 완화하지만 블로그에서는 별도 문턱을 적용합니다.
+6축 정수 심사값이 있어야 하며 fatal 없음, 사실성·준법성 각각 4 이상, fit 3 이상,
+30점을 20점으로 환산한 점수 14 이상만 후보로 받습니다. 템플릿 등 심사값이 없으면 건너뜁니다.
+커밋과 자료가 모두 최근 7일 이내여야 합니다. 동일 원본 ID는 이후 커밋에서도 중복 생성하지 않습니다.
+직원 담당자 이름과 내부 진단 필드는 가져오지 않습니다.
+원본의 짧은 커뮤니티 문체를 그대로 복사하지 않고 블로그 구조로 재작성·웹 검수합니다.
+내용이 부족하면 분량을 억지로 늘리지 않고 보류합니다.
 
-## Securities-company employee note
-Before monetizing or regularly publishing named-stock analysis, confirm internal rules on outside activities, employee trading/research communications, conflicts of interest, and use of non-public company information. The automation is designed to use public sources only.
+## 블로그 분류
+
+| 대분류 | 하위 분류 |
+|---|---|
+| 육아 | 성장·수면 / 건강·피부 / 육아용품·안전 / 육아생활 |
+| 투자 | 시장·산업 / 기업·종목 / 투자공부 |
+| 요리 | 집밥 / 간단요리 / 면·한그릇 |
+
+코드는 원고 분류를 기록합니다. 실제 네이버 게시판 선택·대표 이미지·발행 태그는 발행 전 직접 확인합니다.
+애드포스트는 콘텐츠가 누적된 뒤 검토하며 승인이나 수익을 보장하지 않습니다.

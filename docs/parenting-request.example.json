@@ -4,5 +4,6 @@
   "category": "parenting",
   "question": "목튜브를 사용해도 되는지 궁금합니다.",
   "age_months": null,
-  "context": "실제 적용 조건을 입력하세요. 실명과 생년월일은 넣지 않아도 됩니다."
+  "context": "실제 적용 조건을 입력하세요. 실명과 생년월일은 넣지 않아도 됩니다.",
+  "benchmark_query": "아기 목튜브 안전 사용시기"
 }

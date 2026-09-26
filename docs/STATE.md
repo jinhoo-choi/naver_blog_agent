@@ -38,7 +38,8 @@ GPT-5, 후보 3건, Windows Chrome 실행기, n8n 07:00 KST는 변경 가능한 
 | 항목 | 상태 |
 |---|---|
 | Windows 실행기 | 사용자 PC 등록 필요 |
-| OPENAI_API_KEY·NAVER_BLOG_ID | GitHub Secrets 입력 필요 |
+| GitHub Variables | 8개 등록 완료. 기본 3건·save, 스케줄·알림 false |
+| OPENAI_API_KEY·NAVER_BLOG_ID | GitHub Secrets 미등록. 입력 필요 |
 | 네이버 최초 로그인 | 실행기 PC에서 직접 로그인 필요 |
 | 편집기·임시저장·사진 첨부 | 실계정 확인 필요. 사진 셀렉터는 확인 전 빈 값으로 둠 |
 | 질문·요리 자료 | 개인 입력 큐에 등록 필요. ChatGPT 대화 상시 수집 연결은 없음 |
@@ -53,3 +54,4 @@ GPT-5, 후보 3건, Windows Chrome 실행기, n8n 07:00 KST는 변경 가능한 
 GitHub 앱의 쓰기 제한 때문에 사용자 보안 로그인 후 웹에서 직접 커밋했습니다.
 PAT는 사용하거나 저장하지 않았습니다. 유료 모델·네이버 실계정 호출과 외부 알림 발송은 수행하지 않았습니다.
 GitHub CI는 외부 계정 없이 입력 조건·원본 중복·일일 한도·미확인 저장 처리를 확인합니다.
+2026-09-26 현재 저장소 Variables 8개를 등록했고, Repository Secrets와 self-hosted runner는 비어 있음을 확인했습니다.

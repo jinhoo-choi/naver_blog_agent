@@ -2,6 +2,37 @@
 
 기준: 2026-09-27 KST.
 
+## 주제 후보의 검색 추세 조회
+
+원본 후보 수집 → NAVER API HUB 추세/캐시로 후보 정렬 → 기존 카테고리별 예약 →
+구조 비교·작성·검수·삽화 → 기존 암호화 인계·Work 임시저장 순서입니다.
+키 미등록·조회 장애·불충분한 자료가 있으면 기존 후보 순서로 계속합니다.
+
+1. NCP 콘솔의 NAVER API HUB에서 애플리케이션을 등록하고 검색어 트렌드 사용을 설정합니다.
+2. 해당 앱의 Client ID/Client Secret을 저장소의 Actions Secrets에 각각
+   `NAVER_API_HUB_CLIENT_ID`, `NAVER_API_HUB_CLIENT_SECRET`으로 등록합니다.
+   네이버 로그인 쿠키·GitHub PAT·OpenAI 키·NCP 계정용 Secret Key로 대체하지 않습니다.
+3. 기존 `Blog API Prepare` 작업이 다음 실행부터 두 값을 전달합니다. 별도 예약은 필요 없습니다.
+4. 복호화된 `topic-selection.json`의 날짜·`api_calls`·`credentials_present`·카테고리별
+   `ranked`·후보별 `status`를 확인합니다. 파일이 없거나 날짜가 다르면 당일 조회 성공으로
+   간주하지 않습니다. 선택 근거는 원고의 `provenance.topic_selection`에도 전달됩니다.
+5. 롤백은 `config/blog.toml`의 `[topics].enabled=false`로 정렬만 끕니다.
+
+키 등록·API 권한·실제 응답은 이번 구현에서 확인하지 않았습니다. `credentials_present`는
+환경변수 존재 여부일 뿐 인증 성공을 의미하지 않습니다. 자동화는 카테고리당 기존 앞 5개,
+최대 3회 호출하며 당일 캐시를 재사용합니다. 후보가 1개뿐이거나 일일 한도에 도달하면 조회하지 않습니다.
+예외 시 최대 7일 이전의 동일 기준일 캐시로 비교하고 없으면 기존 순서를 유지합니다.
+`benchmark_query`는 공개용으로 입력한 키워드만 사용합니다. 자동으로 새 주제를 만들지 않습니다.
+구글 트렌드·블랙키위는 현재 연결하지 않으며 공식 API 접근이 확인된 후 추가합니다.
+
+데이터랩은 절대 검색량·블로그 경쟁도·검색 노출 가능성을 제공하지 않습니다. 현재 점수는
+최근 7일/직전 7일의 상대 추이 변화만 반영하는 초기 우선순위 가설입니다. 특히 종목명 추이는
+해당 투자 글의 개별 사건 수요와 다를 수 있습니다. 이를 독자용 인기·추천 근거로 쓰지 않습니다.
+신규 의존 패키지와 추가 LLM 호출은 없으며 API 요금·한도는 이용 계정의 현행 약정을 따릅니다.
+
+공식 명세: https://api.ncloud-docs.com/docs/naver-api-hub-search-trend
+이관 일정: https://developers.naver.com/notice/article/32530
+
 ## API 분리 운영 (활성화 완료)
 
 2026-09-27 사용자 승인 후 두 Secrets와 비공개 인계 파일을 등록했습니다. bootstrap run 36283969527에서 모델 접근·암호화 상태 보관·연결 앱 다운로드·복호화(질문 큐20건)를 확인했습니다. BLOG_API_ENABLED=true, 기존 Work 예약은 검토·저장 전용입니다. 유료 콘텐츠 생성은 이번 초기화에 포함되지 않았습니다.

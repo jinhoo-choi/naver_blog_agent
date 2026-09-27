@@ -109,7 +109,7 @@ def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostD
                     time.sleep(10)
                     continue
                 raise ImagePending('Image API request not completed') from None
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 -- Any post-submission failure is uncertain.
                 atomic_json(manifest, {'state': 'UNCERTAIN', 'attempts': attempts,
                                       'error': type(exc).__name__})
                 raise ImagePending('Image API outcome uncertain') from None
@@ -121,7 +121,7 @@ def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostD
         for future in futures:
             try:
                 photos.append(future.result())
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 -- Collect worker failures, then raise below.
                 errors.append(exc)
         if errors:
             raise ImagePending('Some images are pending; completed files retained') from errors[0]

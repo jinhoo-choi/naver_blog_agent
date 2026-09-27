@@ -18,6 +18,15 @@ blogbot enqueue --file "C:/blogbot/incoming/parenting-question.json"
 새로운 id와 구체적인 질문을 등록합니다. 중복 제목·유사 본문은 이후 검수에서 걸러집니다.
 ChatGPT 대화를 자동 감시하는 기능은 없습니다. 이 대화에서 질문을 입력 파일로 정리한 뒤 실행기에 등록하는 방식입니다.
 
+### 주제 선정용 공개 키워드
+
+육아·운동 입력의 `benchmark_query`에는 실명·생년월일·개인 병력 없이 공개 검색에 쓸
+짧은 키워드를 넣습니다. 이 필드는 기존 구조 비교 외에 NAVER API HUB 추세 조회에도
+사용됩니다. 비공개 `question`·`context`는 추세 API에 전달하지 않습니다.
+미입력 시 자동으로 개인 질문을 검색어로 바꾸지 않고 후보 순서를 유지합니다.
+투자는 심사를 통과한 공개 원본의 `stock_name`을 사용하며, 종목 전체의 관심 추이이지
+해당 공시·사건 자체의 검색 수요나 투자 매력도를 측정하는 값은 아닙니다.
+
 ## 요리 자료
 
 `cooking-request.example.json`을 복사해 실제 `recipe.name`, `ingredients`, `steps`를 입력합니다.

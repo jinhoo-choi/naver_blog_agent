@@ -77,6 +77,10 @@ require_structure = true
 benchmark_target = 5
 benchmark_mode = "api"
 
+# Optional ranking of existing eligible inputs; missing credentials preserve queue order.
+[topics]
+enabled = true
+
 [images]
 mode = "generate"
 model = "gpt-image-2.5-flare"

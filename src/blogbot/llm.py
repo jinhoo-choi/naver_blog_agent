@@ -9,6 +9,7 @@ from openai import OpenAI
 
 from .core import PostDraft, today_kst
 from .inputs import ContentRequest
+from .responses import DRAFT_SCHEMA, REVIEW_SCHEMA, request_json
 
 
 def _load(path: Path) -> str:
@@ -54,10 +55,11 @@ def _source_urls(payload: dict, observed: list[str], required: bool = True) -> l
 
 
 class BlogLLM:
-    def __init__(self, api_key: str, model: str, root: Path, review_model: str = ""):
+    def __init__(self, api_key: str, model: str, root: Path, review_model: str = "", journal: Path | None = None):
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY is required")
         self.client = OpenAI(api_key=api_key, timeout=180, max_retries=0)
+        self.journal = journal or root / "private-state" / "usage.jsonl"
         self.model = model
         self.review_model = review_model or model
         self.writer_prompt = _load(root / "prompts/writer.md")
@@ -101,14 +103,12 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
             "tools": [{"type": "web_search"}], "tool_choice": "required",
             "include": ["web_search_call.action.sources"],
         }
-        response = self.client.responses.create(
-            model=self.model,
-            max_output_tokens=8000,
-            input=prompt,
-            store=False,
+        payload, response = request_json(
+            self.client, model=self.model, stage="writer", request_id=request.id,
+            schema=DRAFT_SCHEMA, journal=self.journal, max_output_tokens=12000,
+            retry_output_tokens=16000, reasoning={"effort": "low"}, input=prompt,
             **search,
         )
-        payload = _json_from_text(response.output_text)
         urls = _source_urls(payload, _extract_urls(response), required=category_key != "cooking")
         return PostDraft(
             category=category_key,
@@ -141,14 +141,12 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
         search = {} if post.category == "cooking" else {
             "tools": [{"type": "web_search"}], "tool_choice": "required",
         }
-        response = self.client.responses.create(
-            model=self.review_model,
-            max_output_tokens=6000,
-            input=prompt,
-            store=False,
-            **search,
+        payload, _ = request_json(
+            self.client, model=self.review_model, stage="reviewer", request_id=request.id,
+            schema=REVIEW_SCHEMA, journal=self.journal, max_output_tokens=6000,
+            retry_output_tokens=10000, reasoning={"effort": "low"}, input=prompt, **search,
         )
-        return _json_from_text(response.output_text)
+        return payload
 
     def rewrite(
         self, post: PostDraft, category_info: dict, review: dict, request: ContentRequest,
@@ -163,10 +161,11 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
 원본 입력:\n{json.dumps(request.prompt_data(), ensure_ascii=False)}
 기존 초안:\n{json.dumps(self._draft_data(post), ensure_ascii=False)}
 """.strip()
-        response = self.client.responses.create(
-            model=self.model, input=prompt, store=False, max_output_tokens=8000,
+        payload, _ = request_json(
+            self.client, model=self.model, stage="rewrite", request_id=request.id,
+            schema=DRAFT_SCHEMA, journal=self.journal, max_output_tokens=12000,
+            retry_output_tokens=16000, reasoning={"effort": "low"}, input=prompt,
         )
-        payload = _json_from_text(response.output_text)
         return replace(
             post,
             subcategory=str(payload.get("subcategory", post.subcategory)),
@@ -177,3 +176,4 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
             source_urls=_source_urls(payload, post.source_urls, required=post.category != "cooking"),
             as_of_date=str(payload.get("as_of_date", post.as_of_date)),
         )
+

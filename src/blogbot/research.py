@@ -118,9 +118,14 @@ def prepare_request(settings, request):
     if settings.config.get("editorial", {}).get("benchmark_mode") == "api":
         from openai import OpenAI
 
-        from .llm import _extract_urls, _json_from_text
-        response = OpenAI(api_key=settings.openai_api_key, timeout=90, max_retries=0).responses.create(
-            model=settings.openai_model, store=False, max_output_tokens=1800,
+        from .llm import _extract_urls
+        from .responses import BENCHMARK_SCHEMA, request_json
+        data, response = request_json(
+            OpenAI(api_key=settings.openai_api_key, timeout=120, max_retries=0),
+            model=settings.openai_model, stage="benchmark", request_id=request.id,
+            schema=BENCHMARK_SCHEMA, journal=settings.db_path.parent / "usage.jsonl",
+            max_output_tokens=6000, retry_output_tokens=10000, reasoning={"effort": "low"},
+            max_tool_calls=5,
             tools=[{"type": "web_search"}], tool_choice="required",
             include=["web_search_call.action.sources"],
             input=f"네이버 블로그 검색어: {query}. 상단 노출 글 5개를 찾아 실제 읽을 수 있는 것만 "
@@ -129,7 +134,6 @@ def prepare_request(settings, request):
                   '{"records":[{"url":"실제로 연 글 URL","observations":["짧은 구조 관찰"]}],'
                   '"limitations":"접근 한계"}',
         )
-        data = _json_from_text(response.output_text)
         observed = set(_extract_urls(response))
         records = [r for r in data.get("records", []) if isinstance(r, dict)
                    and r.get("url") in observed and canonical_blog_url(r.get("url", ""))]
@@ -139,3 +143,4 @@ def prepare_request(settings, request):
         return replace(request, provenance={**request.provenance, "benchmark": benchmark})
     benchmark = collect_benchmark(query, settings.naver_profile_dir)
     return replace(request, provenance={**request.provenance, "benchmark": benchmark})
+

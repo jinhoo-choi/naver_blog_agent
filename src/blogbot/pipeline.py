@@ -125,17 +125,19 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                 break
             attempt_id, request = reservation
             category_key = request.category
-            result = {"attempt": attempt_id, "category": category_key}
+            result = {"attempt": attempt_id, "category": category_key, "request_id": request.id}
+            stage = "benchmark"
             try:
                 info = settings.config["categories"][category_key]
                 request = prepare_request(settings, request)
                 if llm is None:
                     llm = BlogLLM(settings.openai_api_key, settings.openai_model,
-                                  settings.root, settings.review_model)
+                                  settings.root, settings.review_model, settings.db_path.parent / "usage.jsonl")
                 existing = recent_titles(conn)
                 context_path = settings.db_path.parent / 'context.json'
                 if context_path.exists():
                     existing += json.loads(context_path.read_text()).get('published_titles', [])
+                stage = "writer"
                 post = llm.create_draft(request, info, existing)
                 validate_post(post, info)
                 validate_structure(post, settings.config.get("editorial", {}).get("require_structure", True))
@@ -143,12 +145,15 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                 if max_title_similarity(post.title, existing) >= threshold:
                     result["status"] = "DROP_DUPLICATE"
                 else:
+                    stage = "reviewer"
                     review = llm.review(post, info, request)
                     score, decision = review_result(review)
                     if decision == "REWRITE" and score >= int(limits["rewrite_score"]):
+                        stage = "rewrite"
                         post = llm.rewrite(post, info, review, request)
                         validate_post(post, info)
                         validate_structure(post, settings.config.get("editorial", {}).get("require_structure", True))
+                        stage = "reviewer"
                         review = llm.review(post, info, request)
                         score, decision = review_result(review)
                     if max_title_similarity(post.title, recent_titles(conn)) >= threshold:
@@ -161,6 +166,7 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                         stem = settings.artifact_dir / f"{post.as_of_date}-{post_id:05d}"
                         atomic_json(stem.with_suffix('.json'),
                                     {'post': asdict(post), 'review': review, 'input': asdict(request)})
+                        stage = "images"
                         result.update(complete_media(settings, conn, post_id, post, request, review))
             except ResearchRequired:
                 result["status"] = "RESEARCH_REQUIRED"
@@ -168,7 +174,9 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                 conn.rollback()
                 result["status"] = "DROP_DUPLICATE"
             except (OpenAIError, PlaywrightError, OSError, RuntimeError, ValueError, TypeError, KeyError) as exc:
-                result.update(status="ERROR", error=type(exc).__name__)
+                result.update(status="ERROR", error=type(exc).__name__, stage=stage)
+                if hasattr(exc, "reason"):
+                    result["reason"] = exc.reason
             with conn:
                 conn.execute("UPDATE attempts SET status=? WHERE id=?", (result["status"], attempt_id))
             results.append(result)
@@ -194,3 +202,4 @@ def complete_media(settings, conn, post_id, post, request, review):
         conn.execute("UPDATE posts SET photos_json=?, status='APPROVED' WHERE id=?",
                      (json.dumps(post.photos, ensure_ascii=False), post_id))
     return {'id': post_id, 'category': post.category, 'status': 'APPROVED', 'score': post.quality_score}
+

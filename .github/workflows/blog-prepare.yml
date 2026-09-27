@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'prepare resumes durable state; bootstrap is initial setup only'
+        description: 'prepare resumes; bootstrap is setup; probe is one bounded API check'
         type: choice
-        options: [prepare, bootstrap]
+        options: [prepare, bootstrap, probe]
         default: prepare
   schedule:
     - cron: '0 15 * * *' # 00:00 Asia/Seoul, every day
@@ -62,3 +62,4 @@ jobs:
           path: handoff/bundle.enc
           if-no-files-found: error
           retention-days: 90
+

@@ -65,22 +65,39 @@ def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostD
         path = folder / f'{key}.{suffix}'
         manifest = folder / f'{key}.json'
         state = json.loads(manifest.read_text()) if manifest.exists() else {}
+
+        def checkpoint(**values):
+            nonlocal state
+            state = {**state, **values, 'updated_at': time.time()}
+            atomic_json(manifest, state)
+
         # A completed file survives even if a process died before its final manifest write.
         if path.exists() and path.stat().st_size > 0:
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
             if state.get('sha256') and digest != state['sha256']:
                 raise ImagePending('Image checksum mismatch')
-            atomic_json(manifest, {**state, 'state': 'READY', 'sha256': digest})
+            checkpoint(state='READY', sha256=digest)
             return {'file': str(path.resolve()), 'sha256': digest, 'caption': '',
                     'generated': True, 'cache_key': key}
-        if state.get('state') in {'STARTED', 'UNCERTAIN', 'FAILED'}:
-            raise ImagePending('Uncertain image request requires reconciliation')
         attempts = int(state.get('attempts', 0))
         maximum = min(2, int(config.get('max_attempts', 2)))
+        if state.get('recovery_attempted'):
+            raise ImagePending('Image recovery budget reached')
+        if state.get('state') in {'STARTED', 'UNCERTAIN', 'FAILED'} or attempts >= maximum:
+            updated = state.get('updated_at')
+            if not isinstance(updated, (int, float)) or not 0 < updated <= time.time():
+                # Legacy checkpoints have no reliable age after artifact extraction.
+                checkpoint()
+                raise ImagePending('Image cooldown starts at first observed checkpoint')
+            if time.time() - updated < 6 * 60 * 60:
+                raise ImagePending('Image recovery cooldown has not elapsed')
+            # Persist the one-call recovery budget before submitting another paid request.
+            checkpoint(recovery_attempted=True)
+            maximum = attempts + 1
         while attempts < maximum:
             attempts += 1
             started = time.monotonic()
-            atomic_json(manifest, {'state': 'STARTED', 'attempts': attempts, 'cache_key': key})
+            checkpoint(state='STARTED', attempts=attempts, cache_key=key)
             try:
                 result = client.images.generate(**params)
                 encoded = result.data[0].b64_json
@@ -94,24 +111,23 @@ def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostD
                 os.replace(temporary, path)
                 digest = hashlib.sha256(data).hexdigest()
                 usage = getattr(result, 'usage', None)
-                atomic_json(manifest, {'state': 'READY', 'attempts': attempts, 'sha256': digest,
-                    'elapsed_seconds': round(time.monotonic()-started, 2),
-                    'request_id': getattr(result, '_request_id', None),
-                    'usage': usage.model_dump() if usage else None})
+                checkpoint(state='READY', attempts=attempts, sha256=digest,
+                    elapsed_seconds=round(time.monotonic()-started, 2),
+                    request_id=getattr(result, '_request_id', None),
+                    usage=usage.model_dump() if usage else None)
                 return {'file': str(path.resolve()), 'sha256': digest, 'caption': '',
                         'generated': True, 'cache_key': key}
             except APIStatusError as exc:
                 # Only explicit rate-limit rejection is safe for one bounded retry.
                 retryable = exc.status_code == 429
-                atomic_json(manifest, {'state': 'RATE_LIMITED' if retryable else 'FAILED',
-                                      'attempts': attempts, 'http_status': exc.status_code})
+                checkpoint(state='RATE_LIMITED' if retryable else 'FAILED',
+                           attempts=attempts, http_status=exc.status_code)
                 if retryable and attempts < maximum:
                     time.sleep(10)
                     continue
                 raise ImagePending('Image API request not completed') from None
             except Exception as exc:  # noqa: BLE001 -- Any post-submission failure is uncertain.
-                atomic_json(manifest, {'state': 'UNCERTAIN', 'attempts': attempts,
-                                      'error': type(exc).__name__})
+                checkpoint(state='UNCERTAIN', attempts=attempts, error=type(exc).__name__)
                 raise ImagePending('Image API outcome uncertain') from None
         raise ImagePending('Image retry budget reached')
 

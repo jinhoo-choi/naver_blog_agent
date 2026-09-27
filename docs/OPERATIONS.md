@@ -46,12 +46,14 @@
 최초 `bootstrap`은 모델 접근 확인과 암호화 상태 초기화만 하며 유료 콘텐츠를 생성하지 않습니다.
 이후 `prepare`는 최신 `blog-state-<run id>-<attempt>`를 복원합니다. 상태가 유실되면 새 작업으로 간주해 중복 생성하지 않고 중지합니다.
 
-복호화는 비공개 키를 환경변수로 전달하고 `python -m blogbot.cloud unpack --file bundle.enc --destination <private path>`를 사용합니다.
-`ready.json`의 당일 APPROVED 글만 저장합니다. 파일 내 실제 제목·본문·segments·이미지 체크섬을 확인하고, 저장 결과는 비공개 성과 기록에 남깁니다.
+복호화는 비공개 키를 환경변수로 전달하고 `python -m blogbot.cloud unpack --file bundle.enc --destination <private path> --receipts <private receipts.json>`를 사용합니다.
+Work는 먼저 최신 비공개 성과 기록과 실제 임시저장/발행 목록을 확인해 `{"verified_date":"오늘 KST YYYY-MM-DD","records":[{"request_id":"원본 입력 ID","status":"SAVED_NAVER"}]}` 형식의 로컬 receipts를 만듭니다. 과거 날짜까지 모든 API 저장 이력을 포함하며 SAVING/SAVE_UNCERTAIN/SAVED_NAVER/PUBLISHED는 모두 재저장 제외입니다. 확인 없이 빈 records를 만들거나 기록 접근 실패를 빈 이력으로 취급하지 않습니다. 기존 수동 글은 제목·핵심 질문·원본 ID로도 대조합니다.
+`unpack`은 당일 검증 이력이 없으면 실패하며, 기록된 request_id와 같은 패킷 내 중복을 제외합니다. API DB에는 Work 저장 완료가 역전송되지 않으므로 매 실행 이 검사를 생략하지 않습니다. 저장 직전에도 최신 이력을 재확인하고 기존 SAVING→목록/재열기 확인→SAVED_NAVER 절차를 지킵니다. 원본 request_id는 최소 편집 후에도 유지하며 날짜가 바뀌었다고 기록을 지우지 않습니다.
+`ready.json.date`는 오늘이어야 하며 APPROVED 원고는 KST D-3~D0만 전달합니다. 이전 날짜 원고는 `requires_fresh_review=true`이고 원래 자료 기준일을 유지합니다. 특히 투자 사실·원본 유효기간을 재확인할 수 없으면 보류합니다. 복구 글부터 검토하되 기존 당일 저장분을 포함해 총3건·카테고리별1건 한도를 유지합니다. 파일 내 실제 제목·본문·segments·이미지 체크섬을 확인하고 저장 결과는 비공개 성과 기록에 남깁니다.
 GitHub 결과물은 암호화된 `bundle.enc` 한 개만 허용합니다. 원문·키·입력 큐를 공개 로그나 Git에 넣지 않습니다.
-상태는 매 실행 이어받으며 API 결과물 보존기간은 30일, 전달할 최근 원고·이미지는 7일입니다. 오래된 투자 글은 자동 저장하지 말고 근거일을 재검토합니다.
+상태는 매 실행 이어받으며 신규 API 결과물 보존기간은 90일, 전달할 최근 원고·이미지는 7일입니다. D-3~D0 TEXT_APPROVED/IMAGES_PENDING은 기존 원고·검수·입력을 재사용해 이미지 단계만 재개합니다. 오래된 투자 글은 자동 저장하지 말고 근거일을 재검토합니다.
 
-이미지 TIMEOUT/UNCERTAIN은 자동 재호출하지 않습니다. 429는 최대1회 재시도합니다. 완료 이미지는 재사용하고, 품질 문제는 Work 최종 확인에서 보류합니다.
+이미지 STARTED/UNCERTAIN/FAILED 및 소진된 429는 체크포인트 기록 시각(updated_at, UTC Unix 초)부터 6시간 후 API 단계에서만 1회 복구 호출합니다. 복구 예산은 호출 전에 영구 기록하며 다시 실패하면 보류합니다. 시각 없는 기존 manifest는 처음 확인한 시각부터 6시간 기다립니다. 최초 429의 최대1회 재시도는 유지하되 복구 호출에는 추가 429 재시도가 없습니다. 타임아웃된 기존 요청도 과금됐을 수 있습니다. 완료 이미지는 재사용하고, 품질 문제는 Work 최종 확인에서 보류합니다.
 통계는 발행72시간 이후 D0~D2 일간 기준이며, Work에서 최신 피드백을 확인하고 필요한 편집만 적용합니다. 기존 발행 글은 수정하지 않습니다.
 
 ## PC/API 실행기 대안

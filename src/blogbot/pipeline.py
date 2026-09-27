@@ -4,6 +4,7 @@ import json
 import sqlite3
 from contextlib import closing
 from dataclasses import asdict
+from datetime import timedelta
 
 from openai import OpenAIError
 from playwright.sync_api import Error as PlaywrightError
@@ -111,7 +112,8 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                                "('TEXT_APPROVED', 'IMAGES_PENDING') ORDER BY id").fetchall()
         for row in pending:
             post = load_post(row)
-            if post.as_of_date != today_kst().isoformat():
+            today = today_kst()
+            if not (today-timedelta(days=3)).isoformat() <= post.as_of_date <= today.isoformat():
                 continue
             stem = settings.artifact_dir / f"{post.as_of_date}-{row['id']:05d}"
             payload = json.loads(stem.with_suffix('.json').read_text(encoding='utf-8'))

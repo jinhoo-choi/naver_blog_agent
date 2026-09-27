@@ -1,0 +1,80 @@
+import json
+from types import SimpleNamespace
+
+import pytest
+
+from blogbot import cloud
+from blogbot.core import PostDraft
+from blogbot.presentation import markdown_html, render_segments
+
+
+@pytest.mark.parametrize('status,failed', [('ERROR',True),('IMAGES_PENDING',True),
+    ('RESEARCH_REQUIRED',True),('APPROVED',False),('DROP_REVIEW',False),
+    ('NO_ELIGIBLE_INPUT_OR_DAILY_LIMIT',False)])
+def test_cloud_nonzero_for_failed_preparation_and_always_packs(tmp_path, monkeypatch, status, failed):
+    settings = SimpleNamespace(db_path=tmp_path/'blog.db')
+    monkeypatch.setattr('sys.argv', ['cloud','prepare'])
+    monkeypatch.setattr(cloud,'load_settings',lambda:settings)
+    monkeypatch.setattr(cloud,'restore',lambda _:None)
+    monkeypatch.setattr(cloud,'seed_inputs',lambda _:None)
+    monkeypatch.setattr(cloud,'run_daily',lambda *a,**k:[{'status':status}])
+    packs=[]
+    monkeypatch.setattr(cloud,'pack',lambda *a:packs.append(a))
+    if failed:
+        with pytest.raises(RuntimeError): cloud.main()
+    else:
+        cloud.main()
+    assert len(packs)==1
+    assert json.loads((tmp_path/'run-summary.json').read_text())['failed'] is failed
+
+
+def test_separators_at_major_sections_and_references_only():
+    body='Opening\n\n## First\nFirst paragraph\n\nNext paragraph\n\n### Detail\nText\n\n## Second\nText'
+    html=markdown_html(body)
+    assert html.count('<hr>')==2
+    assert html.index('<hr>') < html.index('First')
+    post=PostDraft('parenting','육아생활','test','title',body,[],[],'2026-09-28')
+    segments=render_segments(post)
+    assert sum(s.html.count('<hr>') for s in segments)==3
+    assert segments[-1].html.startswith('<hr>')
+    assert '&lt;script&gt;' in markdown_html('<script>alert(1)</script>')
+
+
+def test_probe_never_runs_daily_or_writes_naver(tmp_path, monkeypatch):
+    settings = SimpleNamespace(db_path=tmp_path/'blog.db', openai_api_key='test', openai_model='gpt-5')
+    monkeypatch.setattr('sys.argv', ['cloud','probe'])
+    monkeypatch.setattr(cloud,'load_settings',lambda:settings)
+    monkeypatch.setattr(cloud,'restore',lambda _:None)
+    monkeypatch.setattr(cloud,'seed_inputs',lambda _:None)
+    monkeypatch.setattr(cloud,'run_daily',lambda *a,**k:pytest.fail('No daily run in probe'))
+    monkeypatch.setattr('openai.OpenAI', lambda **kwargs:object())
+    calls=[]
+    def request(*a,**kw):
+        calls.append(kw)
+        return {'records':[]}, SimpleNamespace(status='completed')
+    monkeypatch.setattr('blogbot.responses.request_json',request)
+    packs=[]
+    monkeypatch.setattr(cloud,'pack',lambda *a:packs.append(a))
+    cloud.main()
+    assert len(calls)==1 and calls[0]['max_tool_calls']==1
+    assert 'retry_output_tokens' not in calls[0]
+    assert len(packs)==1
+
+
+def test_manual_save_receipts_are_idempotent_and_consume_old_failed_input(tmp_path):
+    from blogbot.core import connect_db
+    (tmp_path/'config').mkdir()
+    path=tmp_path/'config/manual-saves.json'
+    path.write_text(json.dumps({'records':[{'request_id':'manual-1','day':'2026-09-28',
+        'category':'parenting','status':'SAVED_NAVER'}]}))
+    settings=SimpleNamespace(root=tmp_path,db_path=tmp_path/'blog.db',
+                             config={'categories':{'parenting':{}}})
+    conn=connect_db(settings.db_path)
+    with conn:
+        conn.execute("INSERT INTO attempts(day,category,request_id,status) VALUES(?,?,?,?)",
+                     ('2026-09-28','parenting','manual-1','ERROR'))
+    cloud.import_manual_saves(settings)
+    cloud.import_manual_saves(settings)
+    assert conn.execute('SELECT COUNT(*) FROM attempts').fetchone()[0]==1
+    assert conn.execute('SELECT status FROM attempts').fetchone()[0]=='SAVED_NAVER'
+    conn.close()

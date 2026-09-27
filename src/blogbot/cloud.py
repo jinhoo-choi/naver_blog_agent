@@ -7,7 +7,7 @@ import json
 import os
 import zipfile
 from contextlib import closing
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
@@ -90,7 +90,29 @@ def restore(directory: Path) -> None:
     extract_bundle(encrypted, directory, os.environ['BLOG_BUNDLE_KEY'])
 
 
+def import_manual_saves(settings) -> None:
+    path = settings.root / 'config/manual-saves.json'
+    if not path.exists():
+        return
+    payload = json.loads(path.read_text())
+    with closing(connect_db(settings.db_path)) as conn, conn:
+        for record in payload['records']:
+            if (record.get('status') != 'SAVED_NAVER' or not record.get('request_id')
+                    or record.get('category') not in settings.config['categories']
+                    or date.fromisoformat(record['day']) > today_kst()):
+                raise ValueError('Invalid manual-save receipt')
+            existing = conn.execute('SELECT id FROM attempts WHERE request_id=?',
+                                    (record['request_id'],)).fetchone()
+            if existing:
+                conn.execute("UPDATE attempts SET status='SAVED_NAVER' WHERE request_id=?",
+                             (record['request_id'],))
+            else:
+                conn.execute('INSERT INTO attempts(day,category,request_id,status) VALUES(?,?,?,?)',
+                             (record['day'], record['category'], record['request_id'], 'SAVED_NAVER'))
+
+
 def seed_inputs(settings) -> None:
+    import_manual_saves(settings)
     seed = json.loads(os.environ.get('BLOG_SEED_JSON', '{}'))
     for item in seed.get('requests', []):
         if not (settings.inbox_dir / item['id']).exists():
@@ -144,7 +166,7 @@ def pack(settings, destination: Path) -> None:
         for path in settings.inbox_dir.glob('*/request.json'):
             archive.write(path, path.relative_to(directory))
         for name in ['blog.db', 'bundle-info.json', 'ready.json', 'context.json',
-                     'topic-cache.json', 'topic-selection.json']:
+                     'topic-cache.json', 'topic-selection.json', 'usage.jsonl', 'run-summary.json']:
             path = directory/name
             if path.exists(): archive.write(path, name)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -185,7 +207,7 @@ def filter_ready(directory: Path, receipts: dict) -> None:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('mode', choices=['bootstrap', 'prepare', 'unpack'])
+    parser.add_argument('mode', choices=['bootstrap', 'prepare', 'unpack', 'probe'])
     parser.add_argument('--file', type=Path)
     parser.add_argument('--destination', type=Path)
     parser.add_argument('--receipts', type=Path)
@@ -218,8 +240,35 @@ def main():
     restore(directory)
     try:
         seed_inputs(settings)
-        results = run_daily(settings, count=3, save_to_naver=False)
+        if args.mode == 'probe':
+            from openai import OpenAI
+
+            from .responses import BENCHMARK_SCHEMA, request_json
+            # One bounded public test; no article generation, image charge or Naver write.
+            payload, response = request_json(
+                OpenAI(api_key=settings.openai_api_key, timeout=120, max_retries=0),
+                model=settings.openai_model, stage='benchmark', request_id='diagnostic-probe',
+                schema=BENCHMARK_SCHEMA, journal=directory/'usage.jsonl',
+                max_output_tokens=6000, reasoning={'effort':'low'},
+                max_tool_calls=1, tools=[{'type':'web_search'}], tool_choice='required',
+                include=['web_search_call.action.sources'],
+                input='네이버 블로그 데드리프트 초보 자세 검색 결과를 확인한다. '
+                      '검색은 1회만 한다. 실제 읽은 블로그 글만 records에 URL과 구조 관찰을 넣고, '
+                      '열람 불가하면 빈 records와 접근 한계를 limitations에 적는다. JSON으로 답한다.',
+            )
+            results = [{'status':'PROBE_PASSED', 'response_status':response.status,
+                        'records':len(payload['records'])}]
+        else:
+            results = run_daily(settings, count=3, save_to_naver=False)
         print(json.dumps(results, ensure_ascii=False))
+        failed = any(r.get('status') in {'ERROR', 'RESEARCH_REQUIRED', 'IMAGES_PENDING',
+                                        'SETUP_REQUIRED', 'MANUAL_CHECK_REQUIRED',
+                                        'INPUT_REJECTED', 'COMMUNITY_SOURCE_UNAVAILABLE',
+                                        'SAVE_UNCERTAIN'} for r in results)
+        atomic_json(directory / 'run-summary.json',
+                    {'date': today_kst().isoformat(), 'failed': failed, 'results': results})
+        if failed:
+            raise RuntimeError('Preparation did not complete; inspect private diagnostics')
     finally:
         # Checkpoints survive handled API errors; no raw files are uploaded to the public repository.
         pack(settings, destination)
@@ -231,3 +280,4 @@ if __name__ == '__main__':
     except Exception as exc:  # noqa: BLE001 -- CLI boundary: redact all errors and exit nonzero.
         print(json.dumps({'status': 'ERROR', 'error': type(exc).__name__}))
         raise SystemExit(1) from None
+

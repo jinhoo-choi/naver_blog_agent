@@ -50,6 +50,8 @@ def markdown_html(text: str) -> str:
                     if pending:
                         result.append(paragraph("\n".join(pending)))
                         pending = []
+                    if len(heading[1]) == 2:
+                        result.append("<hr>")
                     result.append(paragraph(heading[2], 24 if len(heading[1]) == 2 else 19, True))
                 else:
                     pending.append(re.sub(r"^[-*] ", "• ", line))
@@ -91,7 +93,7 @@ def render_segments(post: PostDraft) -> list[Segment]:
                 caption += f" / {photo['author']} · {photo['license']} (자료사진)"
             if caption:
                 result.append(Segment(html=paragraph(caption, 12)))
-    references = paragraph("참고자료와 이미지 출처", 24, True)
+    references = "<hr>" + paragraph("참고자료와 이미지 출처", 24, True)
     references += paragraph("\n".join(dict.fromkeys(post.source_urls)))
     for p in post.photos:
         if p.get("source_url"):
@@ -103,3 +105,4 @@ def render_segments(post: PostDraft) -> list[Segment]:
         references += paragraph(" ".join(f"#{t}" for t in post.tags))
     result.append(Segment(html=references))
     return result
+

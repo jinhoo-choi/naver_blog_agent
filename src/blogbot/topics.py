@@ -41,7 +41,7 @@ def _cache_key(keyword: str) -> str:
 
 def _signal(points, end: date) -> dict:
     if not isinstance(points, list):
-        raise ValueError("Invalid trend series")
+        raise TypeError("Invalid trend series")
     values = {}
     start = end - timedelta(days=27)
     for point in points:

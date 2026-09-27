@@ -2,11 +2,9 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import io
 import json
 import os
-import sqlite3
 import zipfile
 from contextlib import closing
 from datetime import timedelta
@@ -72,12 +70,11 @@ def extract_bundle(encrypted: bytes, directory: Path, key: str) -> None:
                 if segment.get('photo'):
                     rebase([segment['photo']])
         atomic_json(ready_path, ready)
-    with closing(connect_db(directory / 'blog.db')) as conn:
-        with conn:
-            for row in conn.execute('SELECT id,photos_json FROM posts').fetchall():
-                photos = json.loads(row['photos_json']); rebase(photos)
-                conn.execute('UPDATE posts SET photos_json=? WHERE id=?',
-                             (json.dumps(photos, ensure_ascii=False), row['id']))
+    with closing(connect_db(directory / 'blog.db')) as conn, conn:
+        for row in conn.execute('SELECT id,photos_json FROM posts').fetchall():
+            photos = json.loads(row['photos_json']); rebase(photos)
+            conn.execute('UPDATE posts SET photos_json=? WHERE id=?',
+                         (json.dumps(photos, ensure_ascii=False), row['id']))
 
 
 def restore(directory: Path) -> None:
@@ -101,12 +98,11 @@ def seed_inputs(settings) -> None:
             atomic_json(temporary, item)
             enqueue_file(settings, temporary)
             temporary.unlink()
-    with closing(connect_db(settings.db_path)) as conn:
+    with closing(connect_db(settings.db_path)) as conn, conn:
         # Persist already published source identities; never generate them again.
-        with conn:
-            for request_id in seed.get('consumed_request_ids', []):
-                conn.execute("INSERT OR IGNORE INTO attempts(day,category,request_id,status) "
-                             "VALUES(?,?,?,?)", ('2026-09-27', 'investment', request_id, 'SAVED_NAVER'))
+        for request_id in seed.get('consumed_request_ids', []):
+            conn.execute("INSERT OR IGNORE INTO attempts(day,category,request_id,status) "
+                         "VALUES(?,?,?,?)", ('2026-09-27', 'investment', request_id, 'SAVED_NAVER'))
     atomic_json(settings.db_path.parent / 'context.json',
                 {k: seed.get(k, [] if k != 'exclude_investment_topics_until' else '') for k in ['published_titles', 'exclude_investment_topics_until', 'excluded_investment_topics']})
 
@@ -198,6 +194,6 @@ def main():
 if __name__ == '__main__':
     try:
         main()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 -- CLI boundary: redact all errors and exit nonzero.
         print(json.dumps({'status': 'ERROR', 'error': type(exc).__name__}))
         raise SystemExit(1) from None

@@ -117,6 +117,7 @@ def prepare_request(settings, request):
     query = public_query(request)
     if settings.config.get("editorial", {}).get("benchmark_mode") == "api":
         from openai import OpenAI
+
         from .llm import _extract_urls, _json_from_text
         response = OpenAI(api_key=settings.openai_api_key, timeout=90, max_retries=0).responses.create(
             model=settings.openai_model, store=False, max_output_tokens=1800,

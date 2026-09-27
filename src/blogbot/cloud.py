@@ -145,7 +145,8 @@ def pack(settings, destination: Path) -> None:
                     archive.write(path, path.relative_to(directory))
         for path in settings.inbox_dir.glob('*/request.json'):
             archive.write(path, path.relative_to(directory))
-        for name in ['blog.db', 'bundle-info.json', 'ready.json', 'context.json']:
+        for name in ['blog.db', 'bundle-info.json', 'ready.json', 'context.json',
+                     'topic-cache.json', 'topic-selection.json']:
             path = directory/name
             if path.exists(): archive.write(path, name)
     destination.parent.mkdir(parents=True, exist_ok=True)

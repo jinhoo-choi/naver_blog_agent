@@ -29,6 +29,7 @@ from .llm import BlogLLM
 from .naver import NaverDraftWriter
 from .presentation import validate_structure
 from .research import ResearchRequired, prepare_request
+from .topics import rank_candidates
 
 
 def make_writer(settings: Settings) -> NaverDraftWriter:
@@ -104,6 +105,7 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
     settings.artifact_dir.mkdir(parents=True, exist_ok=True)
     results: list[dict] = list(notices)
     with closing(connect_db(settings.db_path)) as conn:
+        candidates = rank_candidates(settings, conn, candidates, requested)
         # Resume media only. Never purchase a new writer/reviewer call for approved text.
         pending = conn.execute("SELECT * FROM posts WHERE status IN "
                                "('TEXT_APPROVED', 'IMAGES_PENDING') ORDER BY id").fetchall()

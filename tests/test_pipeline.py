@@ -37,6 +37,8 @@ def draft():
 
 
 def test_quota_survives_connection_restart(settings):
+    # Isolate the total daily cap from the production one-post category cap.
+    settings.config["categories"]["parenting"]["max_daily"] = 3
     candidates = [ContentRequest(f"q-{i}", "parenting", {"question": "월령별 발달 과정"})
                   for i in range(3)]
     for _ in range(2):

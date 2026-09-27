@@ -115,11 +115,13 @@ def pack(settings, destination: Path) -> None:
     # Render transport segments; the saver can paste them without another generation.
     from .core import load_post
     with closing(connect_db(settings.db_path)) as conn:
-        rows = conn.execute("SELECT * FROM posts WHERE status='APPROVED' AND as_of_date=?",
-                            (today.isoformat(),)).fetchall()
+        rows = conn.execute("SELECT * FROM posts WHERE status='APPROVED' "
+                            "AND as_of_date BETWEEN ? AND ? ORDER BY as_of_date,id",
+                            ((today-timedelta(days=3)).isoformat(), today.isoformat())).fetchall()
         for row in rows:
             post = load_post(row)
             packet.append({'id': row['id'], 'category_no': settings.config['categories'][post.category]['naver_category_no'],
+                           'requires_fresh_review': post.as_of_date != today.isoformat(),
                            'post': post.__dict__, 'segments': [s.__dict__ for s in render_segments(post)]})
     atomic_json(directory / 'ready.json', {'date': today.isoformat(), 'posts': packet})
     atomic_json(directory / 'bundle-info.json', {'data_root': str(directory.resolve()),
@@ -149,14 +151,51 @@ def pack(settings, destination: Path) -> None:
     destination.write_bytes(Fernet(os.environ['BLOG_BUNDLE_KEY'].encode()).encrypt(buffer.getvalue()))
 
 
+def filter_ready(directory: Path, receipts: dict) -> None:
+    """Require today's verified Work ledger; old API state cannot acknowledge saves."""
+    today = today_kst()
+    if receipts.get('verified_date') != today.isoformat() or not isinstance(receipts.get('records'), list):
+        raise ValueError('A freshly verified Work save ledger is required')
+    blocked = set()
+    for record in receipts['records']:
+        if not record.get('request_id') or record.get('status') not in {
+            'SAVING', 'SAVE_UNCERTAIN', 'SAVED_NAVER', 'PUBLISHED',
+        }:
+            raise ValueError('Invalid Work save receipt')
+        blocked.add(record['request_id'])
+    path = directory / 'ready.json'
+    ready = json.loads(path.read_text())
+    if ready['date'] != today.isoformat():
+        raise ValueError('Stale handoff')
+    eligible = []
+    for item in ready['posts']:
+        post = item['post']
+        identity = post['request_id']
+        if not identity:
+            raise ValueError('Missing request identity')
+        if identity in blocked or post['status'] != 'APPROVED':
+            continue
+        if not (today-timedelta(days=3)).isoformat() <= post['as_of_date'] <= today.isoformat():
+            continue
+        item['requires_fresh_review'] = post['as_of_date'] != today.isoformat()
+        eligible.append(item)
+        blocked.add(identity)
+    atomic_json(path, {**ready, 'posts': eligible})
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('mode', choices=['bootstrap', 'prepare', 'unpack'])
     parser.add_argument('--file', type=Path)
     parser.add_argument('--destination', type=Path)
+    parser.add_argument('--receipts', type=Path)
     args = parser.parse_args()
     if args.mode == 'unpack':
+        if args.receipts is None:
+            parser.error('unpack requires --receipts from the verified Work save ledger')
+        receipts = json.loads(args.receipts.read_text())
         extract_bundle(args.file.read_bytes(), args.destination, os.environ['BLOG_BUNDLE_KEY'])
+        filter_ready(args.destination, receipts)
         # Recreate packet segments with local image paths after relocation.
         print(json.dumps({'status': 'UNPACKED', 'directory': str(args.destination)}))
         return

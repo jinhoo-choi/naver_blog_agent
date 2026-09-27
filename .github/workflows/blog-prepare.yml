@@ -9,7 +9,7 @@ on:
         options: [prepare, bootstrap]
         default: prepare
   schedule:
-    - cron: '15 19 * * 0-4' # 04:15 Asia/Seoul, Monday-Friday
+    - cron: '0 15 * * *' # 00:00 Asia/Seoul, every day
 
 permissions:
   contents: read

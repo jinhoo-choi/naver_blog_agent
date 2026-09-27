@@ -218,11 +218,6 @@ def main():
     restore(directory)
     try:
         seed_inputs(settings)
-        import holidays
-        today = today_kst()
-        if today.weekday() >= 5 or today in holidays.KR(years=today.year) or (today.month, today.day)==(5,1):
-            print(json.dumps({'status': 'NON_BUSINESS_DAY'}))
-            return
         results = run_daily(settings, count=3, save_to_naver=False)
         print(json.dumps(results, ensure_ascii=False))
     finally:

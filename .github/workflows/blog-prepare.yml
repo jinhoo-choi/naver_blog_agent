@@ -8,7 +8,7 @@ on:
         type: choice
         options: [prepare, recover, bootstrap, probe]
         default: prepare
-  # Daily 00:00 Asia/Seoul: cron-job.org dispatches mode=prepare.
+  # Daily 08:00 Asia/Seoul: cron-job.org dispatches mode=prepare.
   # No native schedule: avoid duplicate preparation after external cutover.
 
 permissions:

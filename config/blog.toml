@@ -84,7 +84,7 @@ enabled = true
 [images]
 mode = "generate"
 model = "gpt-image-2.5-flare"
-quality = "low"
+quality = "medium"
 size = "1024x1024"
 output_format = "jpeg"
 concurrency = 2

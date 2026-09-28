@@ -193,7 +193,14 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                     if max_title_similarity(post.title, recent_titles(conn)) >= threshold:
                         result["status"] = "DROP_DUPLICATE"
                     elif decision != "PASS" or score < int(limits["review_pass_score"]):
-                        result.update(status="DROP_REVIEW", score=score)
+                        result.update(
+                            status="DROP_REVIEW",
+                            score=score,
+                            score_breakdown=review.get("scores", []),
+                            review_decision=decision,
+                            review_issues=review.get("issues", []),
+                            blocking_issues=review.get("blocking_issues", []),
+                        )
                     else:
                         post.quality_score, post.status = score, "TEXT_APPROVED"
                         post_id = save_post(conn, post)

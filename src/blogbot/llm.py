@@ -9,7 +9,7 @@ from openai import OpenAI
 
 from .core import PostDraft, today_kst
 from .inputs import ContentRequest
-from .responses import DRAFT_SCHEMA, REVIEW_SCHEMA, ResponseFailure, _get, request_json
+from .responses import DRAFT_SCHEMA, REVIEW_SCHEMA, _get, request_json
 
 
 def _load(path: Path) -> str:
@@ -45,12 +45,12 @@ def _extract_urls(response) -> list[str]:
 def _source_urls(payload: dict, observed: list[str], required: bool = True) -> list[str]:
     claimed = payload.get("source_urls", [])
     if not isinstance(claimed, list) or (required and not claimed):
-        raise ResponseFailure('writer', 'no_sources')
+        raise ValueError("Writer returned no sources")
     if any(not isinstance(url, str) or url not in observed for url in claimed):
-        raise ResponseFailure('writer', 'unobserved_source_url')
+        raise ValueError("Source URL was not present in web-search results")
     body_urls = re.findall(r"https?://[^\s<>\]\)]+", payload.get("body", ""))
     if any(url.rstrip('.,') not in observed for url in body_urls):
-        raise ResponseFailure('writer', 'unobserved_body_url')
+        raise ValueError("Body contains an unverified URL")
     return list(dict.fromkeys(claimed))[:10]
 
 

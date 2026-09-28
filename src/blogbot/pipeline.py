@@ -201,6 +201,9 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                 elif isinstance(exc, ValueError):
                     # Only static local messages are safe for the public execution log.
                     reasons = {
+                        'Writer returned no sources': 'no_sources',
+                        'Source URL was not present in web-search results': 'unobserved_source_url',
+                        'Body contains an unverified URL': 'unobserved_body_url',
                         'Empty draft or invalid subcategory': 'invalid_subcategory_or_empty',
                         "Draft must specify today's KST reference date": 'invalid_reference_date',
                         'No search-backed sources; hold draft': 'no_sources',

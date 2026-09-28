@@ -79,3 +79,16 @@ def test_repeated_truncation_has_a_hard_cap(tmp_path):
     with pytest.raises(ResponseFailure, match='max_output_tokens'):
         request_json(client, **args)
     assert len(calls) == 2
+
+
+def test_completed_response_cache_reuses_only_identical_input(tmp_path):
+    first, second = response(), response()
+    for item in (first, second):
+        item.model_dump = lambda: {'status': 'completed', 'output': []}
+    client, calls, args = call(tmp_path, [first, second])
+    original, _ = request_json(client, **args)
+    cached, raw = request_json(client, **args)
+    assert cached == original and raw['status'] == 'completed'
+    assert len(calls) == 1
+    request_json(client, **{**args, 'input': 'changed context'})
+    assert len(calls) == 2

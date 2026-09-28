@@ -78,3 +78,26 @@ def test_manual_save_receipts_are_idempotent_and_consume_old_failed_input(tmp_pa
     assert conn.execute('SELECT COUNT(*) FROM attempts').fetchone()[0]==1
     assert conn.execute('SELECT status FROM attempts').fetchone()[0]=='SAVED_NAVER'
     conn.close()
+
+
+def test_unresolved_error_cannot_be_hidden_by_noop_rerun(tmp_path, monkeypatch):
+    from blogbot.core import connect_db, today_kst
+
+    settings = SimpleNamespace(db_path=tmp_path/'blog.db')
+    conn = connect_db(settings.db_path)
+    with conn:
+        conn.execute('INSERT INTO attempts(day,category,request_id,status) VALUES(?,?,?,?)',
+                     (str(today_kst()), 'investment', 'failed', 'ERROR'))
+    conn.close()
+    monkeypatch.setattr('sys.argv', ['cloud', 'prepare'])
+    monkeypatch.setattr(cloud, 'load_settings', lambda: settings)
+    monkeypatch.setattr(cloud, 'restore', lambda _: None)
+    monkeypatch.setattr(cloud, 'seed_inputs', lambda _: None)
+    monkeypatch.setattr(cloud, 'run_daily', lambda *a, **k: [])
+    packs = []
+    monkeypatch.setattr(cloud, 'pack', lambda *a: packs.append(a))
+    with pytest.raises(RuntimeError):
+        cloud.main()
+    summary = json.loads((tmp_path/'run-summary.json').read_text())
+    assert summary['failed'] and len(packs) == 1
+    assert summary['results'] == [{'status': 'UNRESOLVED_FAILED_ATTEMPTS', 'count': 1}]

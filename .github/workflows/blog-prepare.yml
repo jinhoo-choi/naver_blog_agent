@@ -8,7 +8,8 @@ on:
         type: choice
         options: [prepare, recover, bootstrap, probe]
         default: prepare
-  # Daily 08:00 Asia/Seoul: cron-job.org dispatches mode=prepare.
+  # Target: daily 09:00 Asia/Seoul, after the community source refresh at 08:00.
+  # cron-job.org job 8527289 must match; a comment does not change its live schedule.
   # No native schedule: avoid duplicate preparation after external cutover.
 
 permissions:
@@ -62,4 +63,3 @@ jobs:
           path: handoff/bundle.enc
           if-no-files-found: error
           retention-days: 90
-

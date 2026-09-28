@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import time
 from datetime import UTC, datetime
@@ -101,6 +102,16 @@ def request_json(client, *, model: str, stage: str, request_id: str, schema: dic
                  journal: Path, max_output_tokens: int, retry_output_tokens: int | None = None,
                  **kwargs):
     """One retry only for an explicitly truncated response; no timeout blind retry."""
+    cache = None
+    if stage in {'benchmark', 'writer'}:
+        from .core import today_kst
+        from .images import atomic_json
+        identity = json.dumps([model, stage, request_id, kwargs, schema], sort_keys=True)
+        cache = journal.parent / 'response-cache' / (
+            today_kst().isoformat() + '-' + hashlib.sha256(identity.encode()).hexdigest() + '.json')
+        if cache.exists():
+            saved = json.loads(cache.read_text(encoding='utf-8'))
+            return saved['payload'], saved['response']
     budgets = [max_output_tokens]
     if retry_output_tokens and retry_output_tokens > max_output_tokens:
         budgets.append(retry_output_tokens)
@@ -119,6 +130,8 @@ def request_json(client, *, model: str, stage: str, request_id: str, schema: dic
             missing = set(schema['required'])-set(payload)
             if missing:
                 raise ResponseFailure(stage, 'missing_fields')
+            if cache is not None and hasattr(response, 'model_dump'):
+                atomic_json(cache, {'payload': payload, 'response': response.model_dump()})
             return payload, response
         except ResponseFailure as exc:
             error = exc.reason

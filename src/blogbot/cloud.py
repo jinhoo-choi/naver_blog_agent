@@ -165,6 +165,9 @@ def pack(settings, destination: Path) -> None:
                     archive.write(path, path.relative_to(directory))
         for path in settings.inbox_dir.glob('*/request.json'):
             archive.write(path, path.relative_to(directory))
+        for path in (directory / 'response-cache').glob('*.json'):
+            if path.name[:10] >= cutoff:
+                archive.write(path, path.relative_to(directory))
         for name in ['blog.db', 'bundle-info.json', 'ready.json', 'context.json',
                      'topic-cache.json', 'topic-selection.json', 'usage.jsonl', 'run-summary.json']:
             path = directory/name
@@ -207,7 +210,7 @@ def filter_ready(directory: Path, receipts: dict) -> None:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('mode', choices=['bootstrap', 'prepare', 'unpack', 'probe'])
+    parser.add_argument('mode', choices=['bootstrap', 'prepare', 'recover', 'unpack', 'probe'])
     parser.add_argument('--file', type=Path)
     parser.add_argument('--destination', type=Path)
     parser.add_argument('--receipts', type=Path)
@@ -243,7 +246,7 @@ def main():
         if args.mode == 'probe':
             from openai import OpenAI
 
-            from .responses import BENCHMARK_SCHEMA, request_json
+            from .responses import BENCHMARK_SCHEMA, _get, request_json
             # One bounded public test; no article generation, image charge or Naver write.
             payload, response = request_json(
                 OpenAI(api_key=settings.openai_api_key, timeout=120, max_retries=0),
@@ -256,15 +259,16 @@ def main():
                       '검색은 1회만 한다. 실제 읽은 블로그 글만 records에 URL과 구조 관찰을 넣고, '
                       '열람 불가하면 빈 records와 접근 한계를 limitations에 적는다. JSON으로 답한다.',
             )
-            results = [{'status':'PROBE_PASSED', 'response_status':response.status,
+            results = [{'status':'PROBE_PASSED', 'response_status':_get(response, 'status'),
                         'records':len(payload['records'])}]
         else:
-            results = run_daily(settings, count=3, save_to_naver=False)
+            results = run_daily(settings, count=3, save_to_naver=False,
+                                retry_failed=args.mode == 'recover')
         print(json.dumps(results, ensure_ascii=False))
         failed = any(r.get('status') in {'ERROR', 'RESEARCH_REQUIRED', 'IMAGES_PENDING',
                                         'SETUP_REQUIRED', 'MANUAL_CHECK_REQUIRED',
                                         'INPUT_REJECTED', 'COMMUNITY_SOURCE_UNAVAILABLE',
-                                        'SAVE_UNCERTAIN'} for r in results)
+                                        'SAVE_UNCERTAIN', 'RECOVERY_INPUT_UNAVAILABLE'} for r in results)
         atomic_json(directory / 'run-summary.json',
                     {'date': today_kst().isoformat(), 'failed': failed, 'results': results})
         if failed:
@@ -280,4 +284,3 @@ if __name__ == '__main__':
     except Exception as exc:  # noqa: BLE001 -- CLI boundary: redact all errors and exit nonzero.
         print(json.dumps({'status': 'ERROR', 'error': type(exc).__name__}))
         raise SystemExit(1) from None
-

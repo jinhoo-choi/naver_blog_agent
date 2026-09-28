@@ -121,7 +121,7 @@ def prepare_request(settings, request):
         from .llm import _extract_urls
         from .responses import BENCHMARK_SCHEMA, request_json
         data, response = request_json(
-            OpenAI(api_key=settings.openai_api_key, timeout=120, max_retries=0),
+            OpenAI(api_key=settings.openai_api_key, timeout=240, max_retries=0),
             model=settings.openai_model, stage="benchmark", request_id=request.id,
             schema=BENCHMARK_SCHEMA, journal=settings.db_path.parent / "usage.jsonl",
             max_output_tokens=6000, retry_output_tokens=10000, reasoning={"effort": "low"},

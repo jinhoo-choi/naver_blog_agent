@@ -9,7 +9,7 @@ from openai import OpenAI
 
 from .core import PostDraft, today_kst
 from .inputs import ContentRequest
-from .responses import DRAFT_SCHEMA, REVIEW_SCHEMA, request_json
+from .responses import DRAFT_SCHEMA, REVIEW_SCHEMA, ResponseFailure, _get, request_json
 
 
 def _load(path: Path) -> str:
@@ -28,15 +28,15 @@ def _json_from_text(text: str) -> dict:
 
 def _extract_urls(response) -> list[str]:
     found: list[str] = []
-    for item in response.output:
-        action = getattr(item, "action", None)
-        for source in getattr(action, "sources", []) or []:
-            url = getattr(source, "url", None)
+    for item in _get(response, 'output', []) or []:
+        action = _get(item, "action")
+        for source in _get(action, "sources", []) or []:
+            url = _get(source, "url")
             if url and url not in found:
                 found.append(url)
-        for part in getattr(item, "content", []) or []:
-            for ann in getattr(part, "annotations", []) or []:
-                url = getattr(ann, "url", None)
+        for part in _get(item, "content", []) or []:
+            for ann in _get(part, "annotations", []) or []:
+                url = _get(ann, "url")
                 if url and url not in found:
                     found.append(url)
     return found
@@ -45,12 +45,12 @@ def _extract_urls(response) -> list[str]:
 def _source_urls(payload: dict, observed: list[str], required: bool = True) -> list[str]:
     claimed = payload.get("source_urls", [])
     if not isinstance(claimed, list) or (required and not claimed):
-        raise ValueError("Writer returned no sources")
+        raise ResponseFailure('writer', 'no_sources')
     if any(not isinstance(url, str) or url not in observed for url in claimed):
-        raise ValueError("Source URL was not present in web-search results")
+        raise ResponseFailure('writer', 'unobserved_source_url')
     body_urls = re.findall(r"https?://[^\s<>\]\)]+", payload.get("body", ""))
     if any(url.rstrip('.,') not in observed for url in body_urls):
-        raise ValueError("Body contains an unverified URL")
+        raise ResponseFailure('writer', 'unobserved_body_url')
     return list(dict.fromkeys(claimed))[:10]
 
 

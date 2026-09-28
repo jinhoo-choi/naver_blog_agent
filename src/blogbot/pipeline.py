@@ -88,7 +88,8 @@ def save_pending(settings: Settings) -> list[dict]:
     return results
 
 
-def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool = False) -> list[dict]:
+def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool = False,
+              retry_failed: bool = False) -> list[dict]:
     requested = settings.daily_count if count is None else count
     limits = settings.config["blog"]
     if not int(limits["daily_min"]) <= requested <= int(limits["daily_max"]):
@@ -107,6 +108,19 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
     results: list[dict] = list(notices)
     with closing(connect_db(settings.db_path)) as conn:
         candidates = rank_candidates(settings, conn, candidates, requested)
+        # Explicit recovery reuses today's failed reservations, never resets the budget.
+        retries = []
+        if retry_failed:
+            by_id = {request.id: request for request in candidates}
+            for row in conn.execute(
+                "SELECT * FROM attempts WHERE day=? AND status='ERROR' "
+                "AND NOT EXISTS (SELECT 1 FROM posts WHERE posts.request_id=attempts.request_id) "
+                "ORDER BY id", (today_kst().isoformat(),),
+            ).fetchall():
+                if row['request_id'] in by_id:
+                    retries.append((row['id'], by_id[row['request_id']]))
+                else:
+                    results.append({'status': 'RECOVERY_INPUT_UNAVAILABLE', 'attempt': row['id']})
         # Resume media only. Never purchase a new writer/reviewer call for approved text.
         pending = conn.execute("SELECT * FROM posts WHERE status IN "
                                "('TEXT_APPROVED', 'IMAGES_PENDING') ORDER BY id").fetchall()
@@ -120,10 +134,17 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
             request = ContentRequest(**payload['input'])
             results.append(complete_media(settings, conn, row['id'], post, request, payload['review']))
         for _ in range(requested):
-            reservation = reserve_attempt(conn, settings.config, requested, candidates)
+            reservation = (retries.pop(0) if retries else None) if retry_failed else reserve_attempt(
+                conn, settings.config, requested, candidates)
             if reservation is None:
                 break
             attempt_id, request = reservation
+            if retry_failed:
+                with conn:
+                    claimed = conn.execute("UPDATE attempts SET status='STARTED' WHERE id=? "
+                                           "AND status='ERROR'", (attempt_id,)).rowcount
+                if not claimed:
+                    continue
             category_key = request.category
             result = {"attempt": attempt_id, "category": category_key, "request_id": request.id}
             stage = "benchmark"
@@ -177,6 +198,19 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                 result.update(status="ERROR", error=type(exc).__name__, stage=stage)
                 if hasattr(exc, "reason"):
                     result["reason"] = exc.reason
+                elif isinstance(exc, ValueError):
+                    # Only static local messages are safe for the public execution log.
+                    reasons = {
+                        'Empty draft or invalid subcategory': 'invalid_subcategory_or_empty',
+                        "Draft must specify today's KST reference date": 'invalid_reference_date',
+                        'No search-backed sources; hold draft': 'no_sources',
+                        'Invalid source URL': 'invalid_source_url',
+                        'Guaranteed-return language requires manual review': 'guaranteed_return_language',
+                        'Use at least four major sections and a subsection': 'missing_headings',
+                        'Parenting draft is too short; add supported explanation, not filler': 'body_too_short',
+                        'Images are placed from verified files, not model URLs': 'inline_image_markup',
+                    }
+                    result['reason'] = reasons.get(str(exc), 'validation_error')
             with conn:
                 conn.execute("UPDATE attempts SET status=? WHERE id=?", (result["status"], attempt_id))
             results.append(result)

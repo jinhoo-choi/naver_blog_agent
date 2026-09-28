@@ -1,14 +1,10 @@
 name: Blog API Prepare
 
 on:
-  # Temporary recovery trigger: source URL repair; remove after completion.
-  push:
-    branches: [main]
-    paths: ['.github/workflows/blog-prepare.yml']
   workflow_dispatch:
     inputs:
       mode:
-        description: 'prepare resumes; bootstrap is setup; probe is one bounded API check'
+        description: 'prepare resumes media; recover retries failed inputs; bootstrap/probe diagnose setup'
         type: choice
         options: [prepare, recover, bootstrap, probe]
         default: prepare
@@ -28,8 +24,7 @@ jobs:
     if: >-
       github.repository == 'jinhoo-choi/naver_blog_agent' &&
       github.ref == 'refs/heads/main' &&
-      (github.event_name == 'workflow_dispatch' ||
-       (github.event_name == 'push' && github.event.head_commit.message == 'Recover blog generation 2026-09-29')) &&
+      github.event_name == 'workflow_dispatch' &&
       github.actor == github.repository_owner
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -57,7 +52,7 @@ jobs:
         run: python -m pip install -e .
       - name: Prepare or resume
         env:
-          PREPARE_MODE: ${{ github.event_name == 'push' && 'recover' || inputs.mode || 'prepare' }}
+          PREPARE_MODE: ${{ inputs.mode || 'prepare' }}
         run: python -m blogbot.cloud "$PREPARE_MODE"
       - name: Preserve encrypted checkpoints
         if: always()

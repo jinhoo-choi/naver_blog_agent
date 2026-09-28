@@ -264,11 +264,20 @@ def main():
         else:
             results = run_daily(settings, count=3, save_to_naver=False,
                                 retry_failed=args.mode == 'recover')
+        if args.mode != 'probe':
+            with closing(connect_db(settings.db_path)) as conn:
+                unresolved = conn.execute(
+                    "SELECT COUNT(*) FROM attempts WHERE day=? AND status IN ('ERROR', 'STARTED')",
+                    (today_kst().isoformat(),),
+                ).fetchone()[0]
+            if unresolved:
+                results.append({'status': 'UNRESOLVED_FAILED_ATTEMPTS', 'count': unresolved})
         print(json.dumps(results, ensure_ascii=False))
         failed = any(r.get('status') in {'ERROR', 'RESEARCH_REQUIRED', 'IMAGES_PENDING',
                                         'SETUP_REQUIRED', 'MANUAL_CHECK_REQUIRED',
                                         'INPUT_REJECTED', 'COMMUNITY_SOURCE_UNAVAILABLE',
-                                        'SAVE_UNCERTAIN', 'RECOVERY_INPUT_UNAVAILABLE'} for r in results)
+                                        'SAVE_UNCERTAIN', 'RECOVERY_INPUT_UNAVAILABLE',
+                                        'UNRESOLVED_FAILED_ATTEMPTS'} for r in results)
         atomic_json(directory / 'run-summary.json',
                     {'date': today_kst().isoformat(), 'failed': failed, 'results': results})
         if failed:

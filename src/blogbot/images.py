@@ -31,10 +31,16 @@ def image_prompt(post: PostDraft, section: str) -> str:
     subject = re.sub(r'[#|*_]', ' ', section).strip()[:300]
     return f'''Create one simple MS Paint mouse-drawn doodle for this Korean blog section.
 Article: {post.title}\nSection: {subject}
-White background, thin slightly wobbly black lines, asymmetric round heads,
-simple stick/box bodies, minimal facial expression, generous whitespace.
-One relatable situation or simple concept; optional single accent color.
-At most one short Korean note of 2-8 characters; omit text if unnecessary.
+Keep the same deliberately rough MS Paint doodle style in every image:
+pure white background, thin slightly wobbly black mouse-drawn lines, asymmetric
+round heads, simple stick/box bodies, tiny dot eyes, minimal expression and
+generous whitespace. Flat shapes only; at most one muted accent color.
+Show one clear everyday moment with at most one person and two simple props.
+Keep objects separate and grounded: each hand belongs to one arm, any held
+object touches that hand, furniture has a continuous outline, and nothing
+floats, merges, duplicates or passes through another object. If a scene would
+need complex anatomy or spatial relationships, show a single simple object
+instead. No labels, letters, numbers, speech bubbles or captions in the image.
 No polished vector style, photorealism, 3D, watercolor, gradients, logos or watermark.
 No medical or exercise anatomy diagrams, hazardous infant sleep arrangements,
 unsupported exercise technique, numeric charts, fabricated statistics or financial promises.
@@ -57,7 +63,7 @@ def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostD
     def one(index: int) -> dict:
         section = sections[min(len(sections)-1, (index+1)*len(sections)//(count+1))]
         params = {'model': str(config.get('model', 'gpt-image-2.5-flare')),
-                  'prompt': image_prompt(post, section), 'quality': str(config.get('quality', 'low')),
+                  'prompt': image_prompt(post, section), 'quality': str(config.get('quality', 'medium')),
                   'size': str(config.get('size', '1024x1024')),
                   'output_format': str(config.get('output_format', 'jpeg'))}
         key = hashlib.sha256(json.dumps(params, sort_keys=True).encode()).hexdigest()

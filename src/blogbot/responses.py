@@ -1,8 +1,8 @@
 """Bounded structured Responses calls with private, content-free usage diagnostics."""
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import os
 import time
 from datetime import UTC, datetime

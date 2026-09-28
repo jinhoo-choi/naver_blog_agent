@@ -152,7 +152,8 @@ def fetch_community(config: dict) -> tuple[list, dict]:
 
 def community_request(record: dict, provenance: dict, config: dict) -> ContentRequest | None:
     # posts_latest is the upstream final distribution export. Blog standards are separate.
-    if record.get("kind") not in {"disclosure", "research", "policy", "theme", "flow"}:
+    allowed_kinds = set(config.get("allowed_kinds", ["research", "policy", "disclosure"]))
+    if record.get("kind") not in allowed_kinds:
         return None
     score = record.get("score")
     if not isinstance(score, dict) or score.get("fatal") != []:
@@ -167,6 +168,18 @@ def community_request(record: dict, provenance: dict, config: dict) -> ContentRe
     if not all(isinstance(record.get(k), str) and record[k].strip()
                for k in ("id", "facts", "src", "body")):
         return None
+    if config.get("require_clear_issue_for_stocks", True) and (
+        record.get("stock_name") or record.get("stock_code")
+    ):
+        issue_text = " ".join(str(record.get(k, "")) for k in ("title", "facts", "body"))
+        if not re.search(
+            r"(공시|계약|수주|공급|기술이전|임상|승인|허가|규제|정책|실적|가이던스|"
+            r"자사주|배당|합병|분할|유증|무증|M&A|인수|매각|상장|특허|소송|"
+            r"전망|보고서|리포트|산업|시장|수출)",
+            issue_text,
+            re.IGNORECASE,
+        ):
+            return None
     source = urlsplit(record["src"])
     if source.scheme != "https" or not source.hostname:
         return None

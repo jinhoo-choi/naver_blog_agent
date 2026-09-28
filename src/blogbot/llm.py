@@ -4,6 +4,7 @@ import json
 import re
 from dataclasses import replace
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from openai import OpenAI
 
@@ -30,6 +31,9 @@ def _extract_urls(response) -> list[str]:
     found: list[str] = []
     for item in _get(response, 'output', []) or []:
         action = _get(item, "action")
+        if (_get(item, "status") == "completed" and _get(action, "type") == "open_page"
+                and _get(action, "url")):
+            found.append(_get(action, "url"))
         for source in _get(action, "sources", []) or []:
             url = _get(source, "url")
             if url and url not in found:
@@ -42,14 +46,29 @@ def _extract_urls(response) -> list[str]:
     return found
 
 
+def _source_identity(url: str) -> str:
+    """Ignore known tracking only; keep document IDs and all other query parameters."""
+    parts = urlsplit(url)
+    query = [(key, value) for key, value in parse_qsl(parts.query, keep_blank_values=True)
+             if not (key.lower().startswith('utm_') or key.lower() in {'gclid', 'fbclid', 'srsltid'}
+                     or (not key and value.startswith('___psv__')))]
+    # Verified Naver redirect on 2026-09-29; never equate different security codes.
+    if (parts.scheme == 'https' and parts.netloc == 'finance.naver.com'
+            and parts.path == '/item/main.naver' and len(query) == 1
+            and query[0][0] == 'code' and re.fullmatch(r'\d{6}', query[0][1])):
+        return f'https://stock.naver.com/domestic/stock/{query[0][1]}/price'
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+
 def _source_urls(payload: dict, observed: list[str], required: bool = True) -> list[str]:
     claimed = payload.get("source_urls", [])
     if not isinstance(claimed, list) or (required and not claimed):
         raise ValueError("Writer returned no sources")
-    if any(not isinstance(url, str) or url not in observed for url in claimed):
+    observed_ids = {_source_identity(url) for url in observed}
+    if any(not isinstance(url, str) or _source_identity(url) not in observed_ids for url in claimed):
         raise ValueError("Source URL was not present in web-search results")
     body_urls = re.findall(r"https?://[^\s<>\]\)]+", payload.get("body", ""))
-    if any(url.rstrip('.,') not in observed for url in body_urls):
+    if any(_source_identity(url.rstrip('.,')) not in observed_ids for url in body_urls):
         raise ValueError("Body contains an unverified URL")
     return list(dict.fromkeys(claimed))[:10]
 

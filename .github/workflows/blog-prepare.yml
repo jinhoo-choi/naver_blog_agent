@@ -1,7 +1,7 @@
 name: Blog API Prepare
 
 on:
-  # Temporary recovery trigger, removed after this repair.
+  # Temporary recovery trigger: source URL repair; remove after completion.
   push:
     branches: [main]
     paths: ['.github/workflows/blog-prepare.yml']

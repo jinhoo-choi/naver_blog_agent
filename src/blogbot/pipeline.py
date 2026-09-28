@@ -161,7 +161,20 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                 stage = "writer"
                 post = llm.create_draft(request, info, existing)
                 validate_post(post, info)
-                validate_structure(post, settings.config.get("editorial", {}).get("require_structure", True))
+                rewritten = False
+                try:
+                    validate_structure(post, settings.config.get("editorial", {}).get("require_structure", True))
+                except ValueError as exc:
+                    if str(exc) not in {
+                        'Use at least four major sections and a subsection',
+                        'Parenting draft is too short; add supported explanation, not filler',
+                    }:
+                        raise
+                    stage = "rewrite"
+                    post = llm.rewrite(post, info, {'rewrite_instructions': str(exc)}, request)
+                    rewritten = True
+                    validate_post(post, info)
+                    validate_structure(post, settings.config.get("editorial", {}).get("require_structure", True))
                 threshold = float(limits["max_similarity"])
                 if max_title_similarity(post.title, existing) >= threshold:
                     result["status"] = "DROP_DUPLICATE"
@@ -169,7 +182,7 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                     stage = "reviewer"
                     review = llm.review(post, info, request)
                     score, decision = review_result(review)
-                    if decision == "REWRITE" and score >= int(limits["rewrite_score"]):
+                    if decision == "REWRITE" and not rewritten and score >= int(limits["rewrite_score"]):
                         stage = "rewrite"
                         post = llm.rewrite(post, info, review, request)
                         validate_post(post, info)

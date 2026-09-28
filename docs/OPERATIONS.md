@@ -37,12 +37,12 @@
 
 2026-09-27 사용자 승인 후 두 Secrets와 비공개 인계 파일을 등록했습니다. bootstrap run 36283969527에서 모델 접근·암호화 상태 보관·연결 앱 다운로드·복호화(질문 큐20건)를 확인했습니다. BLOG_API_ENABLED=true, 기존 Work 예약은 검토·저장 전용입니다. 유료 콘텐츠 생성은 이번 초기화에 포함되지 않았습니다.
 
-1. `Blog API Prepare` (Ubuntu, 매일 00:00 KST): 원고·검수·삽화 API → 암호화 결과물.
-2. Work 예약 (매일 05:00 KST): 당일 결과물 다운로드·복호화·이미지 확인 → 네이버 임시저장 → 재열기 확인.
+1. cron-job.org → `Blog API Prepare` (Ubuntu, 매일 00:00 KST 요청): 원고·검수·삽화 API → 암호화 결과물.
+2. Work 예약 (매일 01:00 KST, 02:00 미완료분만 확인): 당일 결과물 다운로드·복호화·이미지 확인 → 네이버 임시저장 → 재열기 확인.
 3. 오류 시 완성된 결과물을 재사용하며 저장 단계만 이어갑니다. 발행은 사용자가 직접 합니다.
 
 설정: `OPENAI_API_KEY`(기존), `BLOG_BUNDLE_KEY`(새 키), `BLOG_SEED_JSON`(비공개 질문 큐) Secrets.
-`BLOG_API_ENABLED`만 새 API 준비 일정을 제어합니다. 기존 `BLOG_SCHEDULE_ENABLED=false`를 유지합니다.
+준비 예약은 cron-job.org의 활성 스위치로 제어합니다. `BLOG_API_ENABLED`는 외부 dispatch를 중지하지 않습니다. 기존 `BLOG_SCHEDULE_ENABLED=false`를 유지합니다.
 최초 `bootstrap`은 모델 접근 확인과 암호화 상태 초기화만 하며 유료 콘텐츠를 생성하지 않습니다.
 이후 `prepare`는 최신 `blog-state-<run id>-<attempt>`를 복원합니다. 상태가 유실되면 새 작업으로 간주해 중복 생성하지 않고 중지합니다.
 
@@ -205,7 +205,7 @@ blogbot resolve --id 12 --outcome discard
 1. 사용자 승인 후 BLOG_BUNDLE_KEY·BLOG_SEED_JSON 등록. OPENAI_API_KEY는 기존 Secret 사용, 외부 추출 없음.
 2. 비공개 인계 키를 사용자 파일에 보관하고 정확한 파일 ID를 Work 지침에 연결.
 3. 초기 bootstrap 성공 및 암호화 상태 결과물 다운로드·복호화 가능 여부 확인.
-4. BLOG_API_ENABLED=true 활성화. 기존 BLOG_SCHEDULE_ENABLED=false 유지.
+4. cron-job.org의 준비 예약을 활성화하고 GitHub 기본 schedule은 제거합니다. 기존 BLOG_SCHEDULE_ENABLED=false 유지.
 5. 기존 Work 예약을 생성 전용 도구를 호출하지 않는 저장 전용 지침으로 변경.
 6. Work는 당일 ready.json, 실제 이미지 파일·해시·카테고리1/8/7을 확인하고 임시저장만 수행. 최신 72시간 통계 피드백에 따른 최소 편집은 저장 전에 적용.
 7. 브라우저 장애 시 완성본을 비공개 파일에 보관하고 저장 상태를 불확실로 기록. 목록을 확인한 뒤 저장 단계만 재개.
@@ -250,3 +250,20 @@ blogbot resolve --id 12 --outcome discard
 - GPT-5 표준 단가로 계산되는 텍스트/검색 호출 추정치는 청구액이 아니다. 검색 콘텐츠 토큰·서비스 등급·할인·세금 등을 포함한 실제 금액은 계정 Costs 화면으로 대조한다. 이전 실행은 usage 미보존으로 0원이나 임의 총액을 쓰지 않는다.
 - workflow_dispatch의 probe는 공개 검색 1회 이내·6000 출력 토큰 이내의 구조화 응답 진단 1건만 수행한다. 원고·이미지를 생성하거나 네이버를 저장하지 않는다. prepare 재실행으로 진단하지 않는다.
 - 모든 새 글의 대제목(##) 앞과 참고자료 앞에 기본 실선 `<hr>`를 렌더링한다. 카시트 발행글의 구역 구분 배치를 반영하며 일반 문장/모든 문단마다 추가하지 않는다. Work 저장 후 실제 separator와 재열기 결과를 확인한다.
+
+
+## cron-job.org 외부 예약 — 2026-09-29부터
+
+| 설정 | 값 |
+|---|---|
+| 대상 | `https://api.github.com/repos/jinhoo-choi/naver_blog_agent/actions/workflows/blog-prepare.yml/dispatches` |
+| 방식 | POST |
+| 시간대 / 시간 | Asia/Seoul / 매일 00:00 (`0 0 * * *`) |
+| 본문 | `{"ref":"main","inputs":{"mode":"prepare"}}` |
+| 헤더 | Accept: application/vnd.github+json, Content-Type: application/json, X-GitHub-Api-Version: 2022-11-28 |
+| 인증 | Authorization: Bearer 토큰. 해당 저장소 Actions 쓰기 권한, 소유자 계정. 값은 cron-job.org에서만 관리 |
+| Work | 01:00 검토·임시저장, 02:00 미완료분 확인. 하루 합산 3건 |
+
+HTTP 204는 실행 요청 접수이며 원고/이미지/임시저장 성공이 아닙니다. Actions 결과와 암호화 ready.json, 실제 네이버 저장을 각각 확인합니다. 외부 호출 실패를 이유로 유료 생성을 반복 호출하지 않습니다. 원고 생성과 무관한 점검은 GET workflow 조회로 인증을 확인할 수 있고, 생성 POST의 최초 실제 성공은 첫 예약 실행에서 확인합니다.
+
+00시 요청 전에 외부 예약을 완성하고 GitHub 기본 schedule을 제거해 중복을 방지합니다. 외부 호출 성공 여부가 확인되지 않은 준비 단계에서는 기존 운영 예약을 보존합니다. 외부 크론을 중단할 때는 cron-job.org에서 Disable job을 적용하며 GitHub의 workflow 자체를 비활성화하면 수동 복구도 막히므로 구분합니다.

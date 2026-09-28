@@ -37,8 +37,10 @@
 
 2026-09-27 사용자 승인 후 두 Secrets와 비공개 인계 파일을 등록했습니다. bootstrap run 36283969527에서 모델 접근·암호화 상태 보관·연결 앱 다운로드·복호화(질문 큐20건)를 확인했습니다. BLOG_API_ENABLED=true, 기존 Work 예약은 검토·저장 전용입니다. 유료 콘텐츠 생성은 이번 초기화에 포함되지 않았습니다.
 
-1. cron-job.org → `Blog API Prepare` (Ubuntu, 매일 00:00 KST 요청): 원고·검수·삽화 API → 암호화 결과물.
-2. Work 예약 (매일 01:00 KST, 02:00 미완료분만 확인): 당일 결과물 다운로드·복호화·이미지 확인 → 네이버 임시저장 → 재열기 확인.
+**2026-09-29 현재 목표 시간**: 아래 09시 생성은 외부 크론에서 별도 적용·확인이 필요합니다. 재점검 중 브라우저 연결 오류로 작업 8527289의 실제 시간을 확인하지 못했습니다. Work 09·10시 예약은 연결 도구로 확인했습니다. 09시는 준비 확인 시각이며 저장 완료 보장이 아닙니다.
+
+1. cron-job.org → `Blog API Prepare` (Ubuntu, 매일 09:00 KST 요청): 원고·검수·삽화 API → 암호화 결과물.
+2. Work 예약 (매일 09:00 KST 준비 확인, 10:00 미완료분 검토·저장): 당일 결과물 다운로드·복호화·이미지 확인 → 네이버 임시저장 → 재열기 확인.
 3. 오류 시 완성된 결과물을 재사용하며 저장 단계만 이어갑니다. 발행은 사용자가 직접 합니다.
 
 설정: `OPENAI_API_KEY`(기존), `BLOG_BUNDLE_KEY`(새 키), `BLOG_SEED_JSON`(비공개 질문 큐) Secrets.
@@ -258,15 +260,15 @@ blogbot resolve --id 12 --outcome discard
 |---|---|
 | 대상 | `https://api.github.com/repos/jinhoo-choi/naver_blog_agent/actions/workflows/blog-prepare.yml/dispatches` |
 | 방식 | POST |
-| 시간대 / 시간 | Asia/Seoul / 매일 00:00 (`0 0 * * *`) |
+| 시간대 / 시간 | Asia/Seoul / 매일 09:00 (`0 9 * * *`) |
 | 본문 | `{"ref":"main","inputs":{"mode":"prepare"}}` |
 | 헤더 | Accept: application/vnd.github+json, Content-Type: application/json, X-GitHub-Api-Version: 2022-11-28 |
 | 인증 | Authorization: Bearer 토큰. 해당 저장소 Actions 쓰기 권한, 소유자 계정. 값은 cron-job.org에서만 관리 |
-| Work | 01:00 검토·임시저장, 02:00 미완료분 확인. 하루 합산 3건 |
+| Work | 09:00 준비 확인·완료분 저장, 10:00 미완료분 검토·저장. 하루 합산 3건 |
 
 HTTP 204는 실행 요청 접수이며 원고/이미지/임시저장 성공이 아닙니다. Actions 결과와 암호화 ready.json, 실제 네이버 저장을 각각 확인합니다. 외부 호출 실패를 이유로 유료 생성을 반복 호출하지 않습니다. 원고 생성과 무관한 점검은 GET workflow 조회로 인증을 확인할 수 있고, 생성 POST의 최초 실제 성공은 첫 예약 실행에서 확인합니다.
 
-00시 요청 전에 외부 예약을 완성하고 GitHub 기본 schedule을 제거해 중복을 방지합니다. 외부 호출 성공 여부가 확인되지 않은 준비 단계에서는 기존 운영 예약을 보존합니다. 외부 크론을 중단할 때는 cron-job.org에서 Disable job을 적용하며 GitHub의 workflow 자체를 비활성화하면 수동 복구도 막히므로 구분합니다.
+09시 요청 전에 외부 예약을 완성하고 GitHub 기본 schedule을 제거해 중복을 방지합니다. 외부 호출 성공 여부가 확인되지 않은 준비 단계에서는 기존 운영 예약을 보존합니다. 외부 크론을 중단할 때는 cron-job.org에서 Disable job을 적용하며 GitHub의 workflow 자체를 비활성화하면 수동 복구도 막히므로 구분합니다.
 
 
 ## 해시태그 누락 방지 — 2026-09-28

@@ -7,10 +7,11 @@ import json
 import re
 import shutil
 from dataclasses import asdict, dataclass, field
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 from urllib.request import Request, urlopen
+from zoneinfo import ZoneInfo
 
 from .config import Settings
 from .core import today_kst
@@ -142,9 +143,12 @@ def fetch_community(config: dict) -> tuple[list, dict]:
     records = json.loads(base64.b64decode(content["content"]))
     if not isinstance(records, list):
         raise TypeError("Community export must be a list")
+    stamp = datetime.fromisoformat(commit["commit"]["committer"]["date"])
+    stamp = stamp.astimezone(ZoneInfo("Asia/Seoul"))
     provenance = {
         "repository": repo, "commit": sha,
-        "snapshot_date": commit["commit"]["committer"]["date"][:10],
+        "snapshot_date": stamp.date().isoformat(),
+        "snapshot_at": stamp.isoformat(),
         "url": f"https://github.com/{repo}/blob/{sha}/{path}",
     }
     return records, provenance
@@ -168,14 +172,20 @@ def community_request(record: dict, provenance: dict, config: dict) -> ContentRe
     if not all(isinstance(record.get(k), str) and record[k].strip()
                for k in ("id", "facts", "src", "body")):
         return None
-    if config.get("require_clear_issue_for_stocks", True) and (
+    # Policy exports may carry a stock merely as an upstream posting destination.
+    sector_only = record.get("kind") == "policy" and (
+        record.get("theme_assigned") is True or record.get("board_mapping") == "SECTOR_PROXY"
+    )
+    if not sector_only and config.get("require_clear_issue_for_stocks", True) and (
         record.get("stock_name") or record.get("stock_code")
     ):
-        issue_text = " ".join(str(record.get(k, "")) for k in ("title", "facts", "body"))
+        # Generated prose and caution/instruction lines are not event evidence.
+        issue_text = " ".join(line for line in record["facts"].splitlines()
+                              if not line.lstrip().startswith("※"))
         if not re.search(
-            r"(공시|계약|수주|공급|기술이전|임상|승인|허가|규제|정책|실적|가이던스|"
+            r"(계약|수주|기술이전|기술수출|임상|승인|허가|규제|정책|실적|가이던스|"
             r"자사주|배당|합병|분할|유증|무증|M&A|인수|매각|상장|특허|소송|"
-            r"전망|보고서|리포트|산업|시장|수출)",
+            r"매출|영업이익|순이익|증설|생산능력)",
             issue_text,
             re.IGNORECASE,
         ):
@@ -184,9 +194,14 @@ def community_request(record: dict, provenance: dict, config: dict) -> ContentRe
     if source.scheme != "https" or not source.hostname:
         return None
     stamp = date.fromisoformat(provenance["snapshot_date"])
-    dates = re.findall(r"\b20\d{2}-\d{2}-\d{2}\b", record["facts"] + " " + record["id"])
-    data_date = max(date.fromisoformat(d) for d in dates) if dates else stamp
-    age_limit = int(config.get("max_age_days", 7))
+    # A fresh export or a future event date cannot make an old report current.
+    dates = re.findall(
+        r"(?:발간일|발행일|공시일|접수일|보도\s*시각|보도일|자료\s*기준일|기준일)"
+        r"\s*[:：]?\s*(20\d{2}-\d{2}-\d{2})", record["facts"])
+    if not dates:
+        return None
+    data_date = min(date.fromisoformat(d) for d in dates)
+    age_limit = int(config.get("max_age_days", 1))
     if not (0 <= (today_kst() - stamp).days <= age_limit
             and 0 <= (today_kst() - data_date).days <= age_limit):
         return None
@@ -195,6 +210,8 @@ def community_request(record: dict, provenance: dict, config: dict) -> ContentRe
         "id", "kind", "stock_code", "stock_name", "title", "facts", "src", "body",
     )}
     data["source_date"] = data_date.isoformat()
+    if sector_only:
+        data.update(stock_name="", stock_code="", sector_only=True)
     key = hashlib.sha256(f"{provenance['repository']}:{record['id']}".encode()).hexdigest()[:24]
     return ContentRequest(f"community-{key}", "investment", data, provenance={
         **provenance, "source_date": data_date.isoformat(), "source_url": record["src"],
@@ -221,6 +238,13 @@ def collect_requests(settings: Settings) -> tuple[list[ContentRequest], list[dic
     if config.get("enabled", False):
         try:
             records, provenance = fetch_community(config)
+            if config.get("require_today_snapshot", True):
+                stamp = datetime.fromisoformat(provenance["snapshot_at"])
+                stamp = stamp.astimezone(ZoneInfo("Asia/Seoul"))
+                if stamp.date() != today_kst() or stamp.hour < 8:
+                    notices.append({"status": "COMMUNITY_SOURCE_PENDING"})
+                    return requests, notices
+            eligible = 0
             for record in records:
                 if today_kst().isoformat() <= context.get("exclude_investment_topics_until", ""):
                     source_text = " ".join(str(record.get(k, "")) for k in ["stock_name", "title", "facts"])
@@ -230,8 +254,11 @@ def collect_requests(settings: Settings) -> tuple[list[ContentRequest], list[dic
                     request = community_request(record, provenance, config)
                     if request:
                         requests.append(request)
+                        eligible += 1
                 except (ValueError, TypeError, KeyError, AttributeError):
                     continue  # Malformed one-off records do not block the owner's input.
+            if not eligible:
+                notices.append({"status": "NO_ELIGIBLE_INVESTMENT"})
         except (OSError, ValueError, TypeError, KeyError):
             notices.append({"status": "COMMUNITY_SOURCE_UNAVAILABLE"})
     return requests, notices

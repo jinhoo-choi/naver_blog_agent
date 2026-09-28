@@ -108,6 +108,12 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
     results: list[dict] = list(notices)
     with closing(connect_db(settings.db_path)) as conn:
         candidates = rank_candidates(settings, conn, candidates, requested)
+        # Editorial priority must survive optional trend ranking or missing credentials.
+        investments = iter(sorted(
+            (r for r in candidates if r.category == "investment"),
+            key=lambda r: r.data.get("kind") not in {"research", "policy"},
+        ))
+        candidates = [next(investments) if r.category == "investment" else r for r in candidates]
         # Explicit recovery reuses today's failed reservations, never resets the budget.
         retries = []
         if retry_failed:
@@ -198,8 +204,9 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                             score=score,
                             score_breakdown=review.get("scores", []),
                             review_decision=decision,
-                            review_issues=review.get("issues", []),
-                            blocking_issues=review.get("blocking_issues", []),
+                            # Free-text feedback may quote private drafts; never print it.
+                            issue_count=len(review.get("issues", [])),
+                            blocking_issue_count=len(review.get("blocking_issues", [])),
                         )
                     else:
                         post.quality_score, post.status = score, "TEXT_APPROVED"
@@ -259,4 +266,3 @@ def complete_media(settings, conn, post_id, post, request, review):
         conn.execute("UPDATE posts SET photos_json=?, status='APPROVED' WHERE id=?",
                      (json.dumps(post.photos, ensure_ascii=False), post_id))
     return {'id': post_id, 'category': post.category, 'status': 'APPROVED', 'score': post.quality_score}
-

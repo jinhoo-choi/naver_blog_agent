@@ -15,6 +15,7 @@ min_score = 14
 max_age_days = 1
 allowed_kinds = ["research", "policy", "disclosure"]
 require_clear_issue_for_stocks = true
+require_today_snapshot = true
 
 [categories.parenting]
 naver_category_no = 1
@@ -39,6 +40,7 @@ weight = 1
 max_daily = 1
 rules = [
   "kis-community-bot의 당일 research·policy·disclosure 통과 자료 facts/src/body를 기반으로만 작성한다.",
+  "research·policy를 우선 선정하고 적격 자료가 없을 때만 명확한 이슈의 disclosure를 선택한다.",
   "공개된 자료만 사용하고 비공개·사내 정보는 사용하지 않는다.",
   "종목 글은 공시·계약·수주·임상·승인·정책·규제·실적 등 이슈가 본문에 명확히 드러날 때만 작성한다.",
   "전일 또는 당일 자료만 사용하고 이틀 이상 지난 시세·수급 요약은 작성하지 않는다.",

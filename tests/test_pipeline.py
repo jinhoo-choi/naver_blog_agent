@@ -122,3 +122,56 @@ def test_empty_input_makes_no_paid_calls(settings, monkeypatch):
 
     monkeypatch.setattr("blogbot.pipeline.BlogLLM", fail_if_called)
     assert run_daily(settings, count=3) == [{"status": "NO_ELIGIBLE_INPUT_OR_DAILY_LIMIT"}]
+
+
+@pytest.mark.parametrize('kind', ['research', 'policy'])
+def test_reports_and_policy_precede_disclosures_even_after_trend_sort(settings, monkeypatch, kind):
+    candidates = [ContentRequest('disclosure', 'investment', {'kind': 'disclosure'}),
+                  ContentRequest('preferred', 'investment', {'kind': kind})]
+    monkeypatch.setattr('blogbot.pipeline.collect_requests', lambda _: (candidates, []))
+    monkeypatch.setattr('blogbot.pipeline.rank_candidates', lambda *a: candidates)
+
+    def stop_before_paid_call(settings, request):
+        raise ValueError('stop before generation')
+
+    monkeypatch.setattr('blogbot.pipeline.prepare_request', stop_before_paid_call)
+    assert run_daily(settings, count=1)[0]['request_id'] == 'preferred'
+
+
+def test_recovery_reuses_error_reservation_without_consuming_new_input(settings, monkeypatch):
+    candidates = [ContentRequest('failed', 'parenting', {'question': '질문'}),
+                  ContentRequest('unused', 'exercise', {'question': '운동'})]
+    with closing(connect_db(settings.db_path)) as conn, conn:
+        conn.execute('INSERT INTO attempts(day,category,request_id,status) VALUES(?,?,?,?)',
+                     (str(today_kst()), 'parenting', 'failed', 'ERROR'))
+    monkeypatch.setattr('blogbot.pipeline.collect_requests', lambda _: (candidates, []))
+
+    def stop_before_paid_call(settings, request):
+        raise ValueError('stop before generation')
+
+    monkeypatch.setattr('blogbot.pipeline.prepare_request', stop_before_paid_call)
+    result = run_daily(settings, count=3, retry_failed=True)
+    assert len(result) == 1 and result[0]['request_id'] == 'failed'
+    with closing(connect_db(settings.db_path)) as conn:
+        assert conn.execute('SELECT COUNT(*) FROM attempts').fetchone()[0] == 1
+
+
+def test_source_normalization_keeps_document_and_stock_identity():
+    old = 'https://finance.naver.com/item/main.naver?code=123456&utm_source=test'
+    new = 'https://stock.naver.com/domestic/stock/123456/price'
+    assert _source_urls({'source_urls': [old]}, [new]) == [old]
+    with pytest.raises(ValueError):
+        _source_urls({'source_urls': [old]}, [new.replace('123456', '654321')])
+    with pytest.raises(ValueError):
+        _source_urls({'source_urls': ['https://example.com/report?id=2']},
+                     ['https://example.com/report?id=1'])
+
+
+def test_cached_response_dict_preserves_observed_urls():
+    from blogbot.llm import _extract_urls
+
+    result = _extract_urls({'output': [
+        {'status': 'completed', 'action': {'type': 'open_page', 'url': 'https://example.com/a'}},
+        {'status': 'failed', 'action': {'type': 'open_page', 'url': 'https://example.com/b'}},
+    ]})
+    assert result == ['https://example.com/a']

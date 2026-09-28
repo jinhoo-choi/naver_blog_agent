@@ -1,6 +1,7 @@
 name: Blog API Prepare
 
 on:
+  # Temporary recovery trigger, removed after this repair.
   push:
     branches: [main]
     paths: ['.github/workflows/blog-prepare.yml']
@@ -66,5 +67,4 @@ jobs:
           path: handoff/bundle.enc
           if-no-files-found: error
           retention-days: 90
-
 

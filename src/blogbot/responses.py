@@ -109,6 +109,7 @@ def request_json(client, *, model: str, stage: str, request_id: str, schema: dic
         identity = json.dumps([model, stage, request_id, kwargs, schema], sort_keys=True)
         cache = journal.parent / 'response-cache' / (
             today_kst().isoformat() + '-' + hashlib.sha256(identity.encode()).hexdigest() + '.json')
+        cache.parent.mkdir(parents=True, exist_ok=True)
         if cache.exists():
             saved = json.loads(cache.read_text(encoding='utf-8'))
             return saved['payload'], saved['response']

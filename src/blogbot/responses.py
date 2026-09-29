@@ -103,7 +103,7 @@ def request_json(client, *, model: str, stage: str, request_id: str, schema: dic
                  **kwargs):
     """One retry only for an explicitly truncated response; no timeout blind retry."""
     cache = None
-    if stage in {'benchmark', 'writer'}:
+    if stage in {'benchmark', 'writer', 'reviewer', 'rewrite'}:
         from .core import today_kst
         from .images import atomic_json
         identity = json.dumps([model, stage, request_id, kwargs, schema], sort_keys=True)
@@ -123,6 +123,7 @@ def request_json(client, *, model: str, stage: str, request_id: str, schema: dic
         try:
             response = client.responses.create(
                 model=model, store=False, max_output_tokens=budget,
+                prompt_cache_key=f'naver-blog-agent:{stage}',
                 text={'format': {'type': 'json_schema', 'name': stage, 'strict': True,
                                  'schema': schema}},
                 **kwargs,

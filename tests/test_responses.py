@@ -90,5 +90,18 @@ def test_completed_response_cache_reuses_only_identical_input(tmp_path):
     cached, raw = request_json(client, **args)
     assert cached == original and raw['status'] == 'completed'
     assert len(calls) == 1
+    assert calls[0]['prompt_cache_key'] == 'naver-blog-agent:benchmark'
     request_json(client, **{**args, 'input': 'changed context'})
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize('stage', ['reviewer', 'rewrite'])
+def test_review_and_rewrite_resume_from_identical_cached_response(tmp_path, stage):
+    item = response()
+    item.model_dump = lambda: {'status': 'completed', 'output': []}
+    client, calls, args = call(tmp_path, [item])
+    args['stage'] = stage
+    request_json(client, **args)
+    request_json(client, **args)
+    assert len(calls) == 1
+    assert calls[0]['prompt_cache_key'] == f'naver-blog-agent:{stage}'

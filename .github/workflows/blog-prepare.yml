@@ -27,7 +27,7 @@ jobs:
       github.ref == 'refs/heads/main' &&
       github.event_name == 'workflow_dispatch' &&
       github.actor == github.repository_owner &&
-      vars.BLOG_PREPARE_ENABLED == 'true'
+      (inputs.mode != 'prepare' || vars.BLOG_PREPARE_ENABLED == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:

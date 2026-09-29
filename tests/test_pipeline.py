@@ -127,7 +127,7 @@ def test_one_review_rejection_can_be_replaced_with_bounded_attempt(settings):
                 conn.execute("INSERT INTO attempts(day, category, request_id, status) "
                              "VALUES (?, ?, ?, 'APPROVED')",
                              (today_kst().isoformat(), category, category))
-        second, request = reserve_attempt(conn, settings.config, 3, requests)
+        _second, request = reserve_attempt(conn, settings.config, 3, requests)
         assert request.id == "investment-1"
         assert reserve_attempt(conn, settings.config, 3, requests) is None
 

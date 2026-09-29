@@ -116,6 +116,22 @@ def test_only_supplied_category_is_reserved_once(settings):
         assert reserve_attempt(conn, settings.config, 3, [request]) is None
 
 
+def test_one_review_rejection_can_be_replaced_with_bounded_attempt(settings):
+    requests = [ContentRequest(f"investment-{i}", "investment", {"kind": "research"})
+                for i in range(3)]
+    with closing(connect_db(settings.db_path)) as conn:
+        first, _ = reserve_attempt(conn, settings.config, 3, requests)
+        with conn:
+            conn.execute("UPDATE attempts SET status='DROP_REVIEW' WHERE id=?", (first,))
+            for category in ("parenting", "exercise"):
+                conn.execute("INSERT INTO attempts(day, category, request_id, status) "
+                             "VALUES (?, ?, ?, 'APPROVED')",
+                             (today_kst().isoformat(), category, category))
+        second, request = reserve_attempt(conn, settings.config, 3, requests)
+        assert request.id == "investment-1"
+        assert reserve_attempt(conn, settings.config, 3, requests) is None
+
+
 def test_empty_input_makes_no_paid_calls(settings, monkeypatch):
     def fail_if_called(*args):
         pytest.fail("Empty inputs must not call the LLM")

@@ -166,16 +166,27 @@ def reserve_attempt(conn: sqlite3.Connection, config: dict, daily_target: int, c
     with conn:
         conn.execute("BEGIN IMMEDIATE")
         rows = conn.execute(
-            "SELECT category, COUNT(*) FROM attempts WHERE day=? GROUP BY category",
+            "SELECT category, status, COUNT(*) FROM attempts WHERE day=? GROUP BY category, status",
             (today_kst().isoformat(),),
         ).fetchall()
-        used = {row[0]: row[1] for row in rows}
-        if sum(used.values()) >= daily_target:
+        attempted = sum(row[2] for row in rows)
+        dropped = sum(row[2] for row in rows if row[1] == "DROP_REVIEW")
+        # Permit one replacement after editorial rejection, with a hard cap on paid attempts.
+        if attempted >= daily_target + min(dropped, 1) or attempted - dropped >= daily_target:
             return None
+        used = {category: sum(n for c, status, n in rows
+                              if c == category and status != "DROP_REVIEW")
+                for category, _, _ in rows}
+        # A category with a rejected draft can be attempted once more, never indefinitely.
+        exhausted = {category for category, _, _ in rows
+                     if sum(n for c, _, n in rows if c == category) >=
+                     int(config["categories"][category]["max_daily"]) +
+                     int(any(c == category and status == "DROP_REVIEW" for c, status, _ in rows))}
         seen = {row[0] for row in conn.execute("SELECT request_id FROM attempts")}
         available = [r for r in candidates if r.id not in seen]
         present = {r.category for r in available}
-        limited = {"categories": {k: v for k, v in config["categories"].items() if k in present}}
+        limited = {"categories": {k: v for k, v in config["categories"].items()
+                                  if k in present and k not in exhausted}}
         if not limited["categories"]:
             return None
         choices = choose_categories(limited, 1, used)

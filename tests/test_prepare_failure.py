@@ -9,6 +9,7 @@ from blogbot.presentation import markdown_html, render_segments
 
 
 @pytest.mark.parametrize('status,failed', [('ERROR',True),('IMAGES_PENDING',True),
+    ('COMMUNITY_SOURCE_PENDING',True),
     ('RESEARCH_REQUIRED',True),('APPROVED',False),('DROP_REVIEW',False),
     ('NO_ELIGIBLE_INPUT_OR_DAILY_LIMIT',False)])
 def test_cloud_nonzero_for_failed_preparation_and_always_packs(tmp_path, monkeypatch, status, failed):

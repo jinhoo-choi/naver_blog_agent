@@ -275,7 +275,8 @@ def main():
         print(json.dumps(results, ensure_ascii=False))
         failed = any(r.get('status') in {'ERROR', 'RESEARCH_REQUIRED', 'IMAGES_PENDING',
                                         'SETUP_REQUIRED', 'MANUAL_CHECK_REQUIRED',
-                                        'INPUT_REJECTED', 'COMMUNITY_SOURCE_UNAVAILABLE',
+                                        'INPUT_REJECTED', 'COMMUNITY_SOURCE_PENDING',
+                                        'COMMUNITY_SOURCE_UNAVAILABLE',
                                         'SAVE_UNCERTAIN', 'RECOVERY_INPUT_UNAVAILABLE',
                                         'UNRESOLVED_FAILED_ATTEMPTS'} for r in results)
         atomic_json(directory / 'run-summary.json',

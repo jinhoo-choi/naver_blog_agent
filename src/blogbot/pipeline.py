@@ -176,6 +176,13 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                     conn.execute("UPDATE attempts SET status=? WHERE request_id=?",
                                  (result['status'], post.request_id))
                 results.append(result)
+        if retry_failed:
+            # Replace the old investment prompt that accidentally contained infant scene instructions.
+            for row in conn.execute("SELECT * FROM posts WHERE status='APPROVED' AND category='investment' "
+                                    "AND as_of_date=?", (str(today_kst()),)).fetchall():
+                post = load_post(row)
+                if any(p.get('generated') and p.get('policy_version') != 'category-scene-v2' for p in post.photos):
+                    set_status(conn, row['id'], 'IMAGES_PENDING')
         # Resume media only. Never purchase a new writer/reviewer call for approved text.
         pending = conn.execute("SELECT * FROM posts WHERE status IN "
                                "('TEXT_APPROVED', 'IMAGES_PENDING') ORDER BY id").fetchall()

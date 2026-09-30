@@ -29,16 +29,27 @@ def atomic_json(path: Path, value: dict) -> None:
 
 def image_prompt(post: PostDraft, section: str) -> str:
     subject = re.sub(r'[#|*_]', ' ', section).strip()[:300]
+    scene = ''
+    figures = 'asymmetric round heads, simple stick/box bodies, tiny dot eyes, minimal expression and'
+    if post.category == 'parenting':
+        scene = '''For parenting about an infant: show one plainly recognizable awake baby with round baby
+proportions, short limbs and a plain onesie, or a relevant simple object. Never substitute an
+adult, a screen/tablet, office work or a generic checking scene for an infant topic.
+No toys, pillows, blankets, cords or loose objects in or near an infant sleep space.'''
+    elif post.category == 'investment':
+        figures = ''
+        scene = '''Objects only: no people, children, infants, baby-care props or medical crosses.
+Use simple inanimate objects from the article. No letters at all, including the letters AI.'''
+        if 'AI' in post.title:
+            scene += '\nDraw a plain rectangular microchip protected by a simple plain umbrella, and nothing else.'
+    elif post.category == 'exercise':
+        scene = 'Use adults or exercise equipment only; match the actual movement and age in the article.'
     return f'''Create one simple MS Paint mouse-drawn doodle for this Korean blog section.
 Article: {post.title}\nSection: {subject}
 Category: {post.category}. The depicted age, activity and props must match this title and section.
-For parenting about an infant: show one plainly recognizable awake baby with round baby
-proportions, short limbs and a plain onesie, or a relevant simple object. Never substitute an
-adult, a screen/tablet, office work or a generic checking scene for an infant topic.
-No toys, pillows, blankets, cords or loose objects in or near an infant sleep space.
+{scene}
 Keep the same deliberately rough MS Paint doodle style in every image:
-pure white background, thin slightly wobbly black mouse-drawn lines, asymmetric
-round heads, simple stick/box bodies, tiny dot eyes, minimal expression and
+pure white background, thin slightly wobbly black mouse-drawn lines, {figures}
 generous whitespace. Flat shapes only; at most one muted accent color.
 Show one clear everyday moment with at most one person and two simple props.
 Keep objects separate and grounded: each hand belongs to one arm, any held
@@ -47,7 +58,7 @@ floats, merges, duplicates or passes through another object. If a scene would
 need complex anatomy or spatial relationships, show a single simple object
 instead. No labels, letters, numbers, speech bubbles or captions in the image.
 No polished vector style, photorealism, 3D, watercolor, gradients, logos or watermark.
-No medical or exercise anatomy diagrams, hazardous infant sleep arrangements,
+No medical or exercise anatomy diagrams,
 unsupported exercise technique, numeric charts, fabricated statistics or financial promises.
 Show the actual topic, not a generic thinking/checking/preparation scene. Do not depict a real family.'''
 
@@ -89,7 +100,7 @@ def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostD
                 raise ImagePending('Image checksum mismatch')
             checkpoint(state='READY', sha256=digest)
             return {'file': str(path.resolve()), 'sha256': digest, 'caption': '',
-                    'generated': True, 'cache_key': key}
+                    'generated': True, 'cache_key': key, 'policy_version': 'category-scene-v2'}
         attempts = int(state.get('attempts', 0))
         maximum = min(2, int(config.get('max_attempts', 2)))
         if state.get('recovery_attempted'):
@@ -127,7 +138,7 @@ def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostD
                     request_id=getattr(result, '_request_id', None),
                     usage=usage.model_dump() if usage else None)
                 return {'file': str(path.resolve()), 'sha256': digest, 'caption': '',
-                        'generated': True, 'cache_key': key}
+                        'generated': True, 'cache_key': key, 'policy_version': 'category-scene-v2'}
             except APIStatusError as exc:
                 # Only explicit rate-limit rejection is safe for one bounded retry.
                 retryable = exc.status_code == 429

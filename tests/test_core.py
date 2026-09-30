@@ -28,6 +28,7 @@ def test_structure_and_html_renderer_reject_model_image_urls():
 
     post = PostDraft(
         "parenting", "육아생활", "호명", "호명반응 기준",
+        "이름을 부를 때의 반응은 월령과 상황을 함께 살펴봐요.\n\n"
         "## 핵심 답변\n\n### 기준\n\n설명입니다. " + "근거 있는 문장입니다. " * 160
         + "\n\n## 관찰 방법\n\n설명\n\n## 함께 놀기\n\n설명\n\n## 상담 기준\n\n설명",
         [], ["https://www.cdc.gov/"], today_kst().isoformat(),

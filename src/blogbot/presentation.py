@@ -4,6 +4,7 @@ from __future__ import annotations
 import html
 import re
 from dataclasses import dataclass, replace
+from urllib.parse import urlsplit
 
 from .core import PostDraft
 
@@ -73,6 +74,12 @@ def normalize_structure(post: PostDraft) -> PostDraft:
 def validate_structure(post: PostDraft, required: bool = True) -> None:
     if not required:
         return
+    opening = re.split(r"\n\s*\n|(?=^## )", post.body.strip(), maxsplit=1,
+                       flags=re.MULTILINE)[0]
+    if not opening.strip() or re.search(
+        r"https?://|기준일\s*[:：]|작성일\s*[:：]|작성 기준일\s*[:：]", opening
+    ):
+        raise ValueError("Start with a plain-language preview summary, not dates or URLs")
     heads = re.findall(r"^## (.+)$", post.body, re.MULTILINE)
     if len(heads) < 4 or not re.search(r"^### .+", post.body, re.MULTILINE):
         raise ValueError("Use at least four major sections and a subsection")
@@ -85,14 +92,13 @@ def validate_structure(post: PostDraft, required: bool = True) -> None:
 def render_segments(post: PostDraft) -> list[Segment]:
     chunks = re.split(r"(?=^## )", post.body, flags=re.MULTILINE)
     chunks = [c for c in chunks if c.strip()]
-    dated = f"작성일: {post.as_of_date}"
-    if post.provenance.get("source_date"):
-        dated += f" · 원본 자료 기준일: {post.provenance['source_date']}"
-    result = [Segment(html=paragraph(dated, 12))]
-    # Distribute actual files between sections. One photo is placed near the midpoint.
+    result = []
+    # The opening summary precedes the cover; supporting images follow body sections.
     slots: dict[int, list[dict]] = {}
     for i, photo in enumerate(post.photos):
-        pos = min(len(chunks) - 1, max(0, (i + 1) * len(chunks) // (len(post.photos) + 1) - 1))
+        pos = 0 if photo.get("role") == "thumbnail" else min(
+            len(chunks) - 1, max(0, (i + 1) * len(chunks) // (len(post.photos) + 1) - 1)
+        )
         slots.setdefault(pos, []).append(photo)
     for i, chunk in enumerate(chunks):
         result.append(Segment(html=markdown_html(chunk)))
@@ -104,7 +110,10 @@ def render_segments(post: PostDraft) -> list[Segment]:
             if caption:
                 result.append(Segment(html=paragraph(caption, 12)))
     references = "<hr>" + paragraph("참고자료와 이미지 출처", 24, True)
-    references += paragraph("\n".join(dict.fromkeys(post.source_urls)))
+    for i, url in enumerate(dict.fromkeys(post.source_urls), 1):
+        label = f"참고자료 {i} · {urlsplit(url).hostname}"
+        references += ('<p style="font-size:12px;line-height:1.9"><a href="'
+                       + html.escape(url, quote=True) + '">' + html.escape(label) + '</a></p>')
     for p in post.photos:
         if p.get("source_url"):
             references += paragraph(
@@ -115,4 +124,3 @@ def render_segments(post: PostDraft) -> list[Segment]:
         references += paragraph(" ".join(f"#{t}" for t in post.tags))
     result.append(Segment(html=references))
     return result
-

@@ -66,6 +66,70 @@ def test_investment_image_prompt_excludes_parenting_scene_instructions():
     assert 'onesie' in image_prompt(replace(post, category='parenting', title='아기 손가락'), '수면')
 
 
+def test_preview_precedes_cover_and_sources_keep_working_links():
+    from blogbot.core import render_post_text
+
+    opening = '아기의 행동은 월령과 상황을 함께 살펴봐요. 확인할 점을 정리했어요.'
+    url = 'https://example.com/long/reference.aspx?document=1'
+    post = PostDraft('parenting', '육아생활', 'topic', 'title',
+                     opening + '\n\n## 확인\n본문', [], [url], '2026-09-30',
+                     photos=[{'file': f'{i}.jpg', 'role': 'thumbnail' if i == 0 else 'section'}
+                             for i in range(3)], provenance={'source_date': '2026-09-29'})
+    segments = render_segments(post)
+    assert opening in segments[0].html
+    assert segments[1].photo['role'] == 'thumbnail'
+    assert len([s for s in segments if s.photo]) == 3
+    assert f'href="{url}"' in segments[-1].html
+    assert f'>{url}<' not in segments[-1].html
+    assert render_post_text(post).startswith(opening)
+    assert '작성일' not in ''.join(s.html for s in segments)
+    assert '기준일' not in render_post_text(post)
+    assert post.as_of_date == '2026-09-30'
+    assert post.provenance['source_date'] == '2026-09-29'
+
+
+@pytest.mark.parametrize('opening', ['', 'https://example.com/reference.aspx',
+                                      '작성일: 2026-09-30', '기준일: 2026-09-29'])
+def test_preview_rejects_missing_summary_dates_and_raw_urls(opening):
+    post = PostDraft('investment', '시장·산업', 'topic', 'title',
+                     opening + '\n\n## 확인\n본문', [], [], '2026-09-30')
+    with pytest.raises(ValueError, match='preview summary'):
+        validate_structure(post)
+
+
+def test_three_image_jobs_use_article_summary_cover_and_reuse_cache(tmp_path, monkeypatch):
+    import base64
+    import tomllib
+    from pathlib import Path
+
+    from blogbot.images import generate_images
+    from blogbot.inputs import ContentRequest
+
+    config = tomllib.loads((Path(__file__).parents[1] / 'config/blog.toml').read_text())
+    calls = []
+
+    def generate(**params):
+        calls.append(params)
+        return SimpleNamespace(data=[SimpleNamespace(b64_json=base64.b64encode(b'image').decode())])
+
+    monkeypatch.setattr('blogbot.images.OpenAI', lambda **kw: SimpleNamespace(
+        images=SimpleNamespace(generate=generate)))
+    settings = SimpleNamespace(config=config, artifact_dir=tmp_path, openai_api_key='placeholder')
+    for category in ['parenting', 'exercise', 'investment']:
+        post = PostDraft(category, '정보', 'topic', '주제 핵심',
+                         '글의 핵심 답변입니다.\n\n## 원인\n본문\n\n## 방법\n본문\n\n## 주의\n본문',
+                         [], [], '2026-09-30', request_id=category)
+        request = ContentRequest(category, category, {})
+        result = generate_images(settings, request, post)
+        assert len(result.photos) == 3
+        assert [p['role'] for p in result.photos] == ['thumbnail', 'section', 'section']
+        assert generate_images(settings, request, post).photos == result.photos
+    assert len(calls) == 9
+    covers = [c['prompt'] for c in calls if 'summary cover' in c['prompt']]
+    assert len(covers) == 3
+    assert all('글의 핵심 답변입니다.' in p and '주제 핵심' in p for p in covers)
+
+
 def test_restore_uses_creation_time_instead_of_artifact_id(tmp_path, monkeypatch):
     import io
     import zipfile

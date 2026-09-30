@@ -261,10 +261,7 @@ def review_result(review: dict) -> tuple[int, str]:
 
 def render_post_text(post: PostDraft) -> str:
     sources = "\n".join(f"- {u}" for u in post.source_urls[:8])
-    text = f"작성 기준일: {post.as_of_date}"
-    if post.provenance.get("source_date"):
-        text += f"\n원본 자료 기준일: {post.provenance['source_date']}"
-    text += f"\n\n{post.body.rstrip()}"
+    text = post.body.rstrip()
     if sources:
         text += f"\n\n참고자료\n{sources}"
     if post.provenance.get("source_url"):

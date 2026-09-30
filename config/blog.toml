@@ -45,7 +45,7 @@ rules = [
   "종목 글은 공시·계약·수주·임상·승인·정책·규제·실적 등 이슈가 본문에 명확히 드러날 때만 작성한다.",
   "전일 또는 당일 자료만 사용하고 이틀 이상 지난 시세·수급 요약은 작성하지 않는다.",
   "매수·매도 지시, 수익 보장, 단정적 목표가 표현을 금지한다.",
-  "기준일과 데이터 출처를 명시하고 사실과 해석을 구분한다.",
+  "자료 날짜는 내부 메타데이터로 검증하고 데이터 출처·실제 사건의 시점·통계 기간을 보존한다. 공개 글에 기준일·작성일 머리말을 붙이지 않고 사실과 해석을 구분한다.",
   "핵심 이슈 → 확인된 사실·수치 → 의미와 해석 → 변수·리스크 → 확인할 항목 → 출처 순서로 구성한다.",
   "원본이 뒷받침하지 않는 수치·원인·매매 경험을 추가하지 않는다. 부족한 내용은 억지로 늘리지 않는다."
 ]
@@ -96,9 +96,9 @@ output_format = "jpeg"
 concurrency = 2
 timeout_seconds = 120
 max_attempts = 2
-parenting_count = 2
-exercise_count = 2
-investment_count = 1
+parenting_count = 3
+exercise_count = 3
+investment_count = 3
 
 # Verified in the owner editor on 2026-09-26; UI changes stop saving.
 [naver]

@@ -27,7 +27,7 @@ def atomic_json(path: Path, value: dict) -> None:
     os.replace(temporary, path)
 
 
-def image_prompt(post: PostDraft, section: str) -> str:
+def image_prompt(post: PostDraft, section: str, *, thumbnail: bool = False) -> str:
     subject = re.sub(r'[#|*_]', ' ', section).strip()[:300]
     scene = ''
     figures = 'asymmetric round heads, simple stick/box bodies, tiny dot eyes, minimal expression and'
@@ -40,23 +40,40 @@ No toys, pillows, blankets, cords or loose objects in or near an infant sleep sp
         figures = ''
         scene = '''Objects only: no people, children, infants, baby-care props or medical crosses.
 Use simple inanimate objects from the article. No letters at all, including the letters AI.'''
-        if 'AI' in post.title:
+        if 'AI' in post.title and not thumbnail:
             scene += '\nDraw a plain rectangular microchip protected by a simple plain umbrella, and nothing else.'
     elif post.category == 'exercise':
         scene = 'Use adults or exercise equipment only; match the actual movement and age in the article.'
+    lettering = 'No labels, letters, numbers, speech bubbles or captions in the image.'
+    emphasis = ''
+    if thumbnail:
+        opening = re.split(r'\n\s*\n|(?=^## )', post.body.strip(), maxsplit=1,
+                           flags=re.MULTILINE)[0][:300]
+        lettering = f'''Use only this exact Korean headline, split into at most two large bold lines:
+{post.title}
+No other text, numbers, labels or speech bubbles. Render the Korean spelling accurately.'''
+        scene = scene.replace('No letters at all, including the letters AI.', '')
+        emphasis = f'''This is the article's summary cover for a small mobile preview.
+Verified opening answer: {opening}
+Summarize that answer with one immediately recognizable subject and one meaningful visual cue.
+Use a large central subject, strong black-line contrast and one bright flat accent color.
+Keep headline and subject inside the central 80% so a square crop stays understandable.
+Readable at 160 by 160 pixels; no dense checklist, collage or decorative filler.
+The cover must promise only what the article supports, with no fear bait or invented facts.'''
     return f'''Create one simple MS Paint mouse-drawn doodle for this Korean blog section.
 Article: {post.title}\nSection: {subject}
 Category: {post.category}. The depicted age, activity and props must match this title and section.
 {scene}
 Keep the same deliberately rough MS Paint doodle style in every image:
 pure white background, thin slightly wobbly black mouse-drawn lines, {figures}
-generous whitespace. Flat shapes only; at most one muted accent color.
+generous whitespace. Flat shapes only; at most one {'bright' if thumbnail else 'muted'} accent color.
+{emphasis}
 Show one clear everyday moment with at most one person and two simple props.
 Keep objects separate and grounded: each hand belongs to one arm, any held
 object touches that hand, furniture has a continuous outline, and nothing
 floats, merges, duplicates or passes through another object. If a scene would
 need complex anatomy or spatial relationships, show a single simple object
-instead. No labels, letters, numbers, speech bubbles or captions in the image.
+instead. {lettering}
 No polished vector style, photorealism, 3D, watercolor, gradients, logos or watermark.
 No medical or exercise anatomy diagrams,
 unsupported exercise technique, numeric charts, fabricated statistics or financial promises.
@@ -77,9 +94,12 @@ def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostD
                     timeout=float(config.get('timeout_seconds', 120)), max_retries=0)
 
     def one(index: int) -> dict:
-        section = sections[min(len(sections)-1, (index+1)*len(sections)//(count+1))]
+        thumbnail = index == 0
+        section = '글 전체 핵심 요약' if thumbnail else sections[
+            min(len(sections)-1, index*len(sections)//count)]
         params = {'model': str(config.get('model', 'gpt-image-2.5-flare')),
-                  'prompt': image_prompt(post, section), 'quality': str(config.get('quality', 'medium')),
+                  'prompt': image_prompt(post, section, thumbnail=thumbnail),
+                  'quality': str(config.get('quality', 'medium')),
                   'size': str(config.get('size', '1024x1024')),
                   'output_format': str(config.get('output_format', 'jpeg'))}
         key = hashlib.sha256(json.dumps(params, sort_keys=True).encode()).hexdigest()
@@ -100,7 +120,8 @@ def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostD
                 raise ImagePending('Image checksum mismatch')
             checkpoint(state='READY', sha256=digest)
             return {'file': str(path.resolve()), 'sha256': digest, 'caption': '',
-                    'generated': True, 'cache_key': key, 'policy_version': 'category-scene-v2'}
+                    'generated': True, 'cache_key': key, 'policy_version': 'category-scene-v2',
+                    'role': 'thumbnail' if thumbnail else 'section'}
         attempts = int(state.get('attempts', 0))
         maximum = min(2, int(config.get('max_attempts', 2)))
         if state.get('recovery_attempted'):
@@ -138,7 +159,8 @@ def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostD
                     request_id=getattr(result, '_request_id', None),
                     usage=usage.model_dump() if usage else None)
                 return {'file': str(path.resolve()), 'sha256': digest, 'caption': '',
-                        'generated': True, 'cache_key': key, 'policy_version': 'category-scene-v2'}
+                        'generated': True, 'cache_key': key, 'policy_version': 'category-scene-v2',
+                        'role': 'thumbnail' if thumbnail else 'section'}
             except APIStatusError as exc:
                 # Only explicit rate-limit rejection is safe for one bounded retry.
                 retryable = exc.status_code == 429

@@ -302,6 +302,7 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                         'Use at least four major sections and a subsection': 'missing_headings',
                         'Parenting draft is too short; add supported explanation, not filler': 'body_too_short',
                         'Images are placed from verified files, not model URLs': 'inline_image_markup',
+                        'Start with a plain-language preview summary, not dates or URLs': 'invalid_preview',
                     }
                     result['reason'] = reasons.get(str(exc), 'validation_error')
             with conn:

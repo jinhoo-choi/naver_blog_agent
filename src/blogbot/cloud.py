@@ -21,6 +21,10 @@ from .pipeline import run_daily
 from .presentation import render_segments
 
 
+class PreparationFailed(RuntimeError):
+    """A persisted preparation failure whose detailed notification was already attempted."""
+
+
 class SafeRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
@@ -301,7 +305,7 @@ def main():
         atomic_json(directory / 'run-summary.json',
                     {'date': today_kst().isoformat(), 'failed': failed, 'results': results})
         if failed:
-            raise RuntimeError('Preparation did not complete; inspect private diagnostics')
+            raise PreparationFailed('Preparation did not complete; inspect private diagnostics')
     finally:
         # Checkpoints survive handled API errors; no raw files are uploaded to the public repository.
         pack(settings, destination)
@@ -322,8 +326,9 @@ if __name__ == '__main__':
         print(json.dumps({'status': 'ERROR', 'error': type(exc).__name__}))
         # Restore/setup failures can happen before run-summary exists.
         from .notify import telegram
-        try:
-            telegram([{'status': 'ERROR', 'stage': 'cloud', 'error': type(exc).__name__}])
-        except (OSError, RuntimeError, ValueError) as notify_exc:
-            print(json.dumps({'notification': 'FAILED', 'error': type(notify_exc).__name__}))
+        if not isinstance(exc, PreparationFailed):
+            try:
+                telegram([{'status': 'ERROR', 'stage': 'cloud', 'error': type(exc).__name__}])
+            except (OSError, RuntimeError, ValueError) as notify_exc:
+                print(json.dumps({'notification': 'FAILED', 'error': type(notify_exc).__name__}))
         raise SystemExit(1) from None

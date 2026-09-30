@@ -103,6 +103,22 @@ def test_missing_category_is_failure_even_without_an_api_exception(tmp_path, mon
                                     'missing_categories': ['exercise', 'investment', 'parenting']}
 
 
+def test_preparation_failure_retains_detailed_alert_without_generic_duplicate(tmp_path, monkeypatch):
+    settings = SimpleNamespace(db_path=tmp_path/'blog.db')
+    monkeypatch.setattr('sys.argv', ['cloud', 'prepare'])
+    monkeypatch.setattr(cloud, 'load_settings', lambda: settings)
+    monkeypatch.setattr(cloud, 'restore', lambda _: None)
+    monkeypatch.setattr(cloud, 'seed_inputs', lambda _: None)
+    monkeypatch.setattr(cloud, 'pack', lambda *a: None)
+    failure = {'status': 'ERROR', 'stage': 'writer', 'reason': 'invalid_reference_date'}
+    monkeypatch.setattr(cloud, 'run_daily', lambda *a, **k: [failure])
+    alerts = []
+    monkeypatch.setattr('blogbot.notify.telegram', lambda results: alerts.append(results))
+    with pytest.raises(cloud.PreparationFailed):
+        cloud.main()
+    assert alerts == [[failure]]
+
+
 def test_notification_distinguishes_preparation_from_save_and_shows_reason(tmp_path, monkeypatch):
     from blogbot.notify import telegram
     path = tmp_path/'summary.md'

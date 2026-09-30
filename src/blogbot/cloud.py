@@ -83,7 +83,7 @@ def restore(directory: Path) -> None:
                  if a['name'].startswith('blog-state-') and not a['expired']]
     if not artifacts:
         raise RuntimeError('No durable state. Explicit bootstrap required; refuse a fresh duplicate run.')
-    latest = max(artifacts, key=lambda a: a['id'])
+    latest = max(artifacts, key=lambda a: (a['created_at'], a['id']))
     archive = github_get(f"/actions/artifacts/{latest['id']}/zip")
     with zipfile.ZipFile(io.BytesIO(archive)) as z:
         encrypted = z.read('bundle.enc')

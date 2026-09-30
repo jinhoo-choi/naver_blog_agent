@@ -28,7 +28,7 @@ from .images import ImagePending, atomic_json, generate_images
 from .inputs import ContentRequest, collect_requests
 from .llm import BlogLLM
 from .naver import NaverDraftWriter
-from .presentation import validate_structure
+from .presentation import normalize_structure, validate_structure
 from .research import ResearchRequired, prepare_request
 from .topics import rank_candidates
 
@@ -150,6 +150,7 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                                       settings.review_model, settings.db_path.parent / 'usage.jsonl')
                     post = llm.rewrite(post, info, payload['review'], request,
                                        **({'cache_only': True} if resume_cached else {}))
+                    post = normalize_structure(post)
                     validate_post(post, info)
                     validate_structure(post, settings.config.get('editorial', {}).get('require_structure', True))
                     review = llm.review(post, info, request)
@@ -218,6 +219,7 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                     existing += json.loads(context_path.read_text()).get('published_titles', [])
                 stage = "writer"
                 post = llm.create_draft(request, info, existing)
+                post = normalize_structure(post)
                 validate_post(post, info)
                 rewritten = False
                 try:
@@ -230,6 +232,7 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                         raise
                     stage = "rewrite"
                     post = llm.rewrite(post, info, {'rewrite_instructions': str(exc)}, request)
+                    post = normalize_structure(post)
                     # Structural repair is separate from the one editorial revision below.
                     validate_post(post, info)
                     validate_structure(post, settings.config.get("editorial", {}).get("require_structure", True))
@@ -243,6 +246,7 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                     if decision == "REWRITE" and not rewritten and score >= int(limits["rewrite_score"]):
                         stage = "rewrite"
                         post = llm.rewrite(post, info, review, request)
+                        post = normalize_structure(post)
                         validate_post(post, info)
                         validate_structure(post, settings.config.get("editorial", {}).get("require_structure", True))
                         stage = "reviewer"

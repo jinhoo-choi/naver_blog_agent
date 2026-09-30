@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import html
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .core import PostDraft
 
@@ -58,6 +58,16 @@ def markdown_html(text: str) -> str:
             if pending:
                 result.append(paragraph("\n".join(pending)))
     return "".join(result)
+
+
+def normalize_structure(post: PostDraft) -> PostDraft:
+    """Fix presentation only, preserving factual text and existing section titles."""
+    body = re.sub(r'^\[(?:도해|삽화)(?:\s*계획)?\][^\n]*\n?', '', post.body, flags=re.MULTILINE)
+    heads = list(re.finditer(r'^## .+$', body, re.MULTILINE))
+    if len(heads) >= 5 and not re.search(r'^### .+', body, re.MULTILINE):
+        last = heads[-1].start()
+        body = body[:last] + '#' + body[last:]
+    return replace(post, body=body)
 
 
 def validate_structure(post: PostDraft, required: bool = True) -> None:

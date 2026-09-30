@@ -70,6 +70,23 @@ def investment_record():
             {'repository': 'owner/source', 'snapshot_date': today, 'commit': 'a' * 40})
 
 
+@pytest.mark.parametrize('date_line', [
+    '공시일: {compact}', '발간일: {today}', '보도 시각: {today} 08:30 KST',
+    '발간: 미래에셋증권 / {today}',
+])
+def test_real_export_date_formats_keep_the_same_source_date(date_line):
+    record, origin = investment_record()
+    today = today_kst().isoformat()
+    record['facts'] = date_line.format(today=today, compact=today.replace('-', '')) + '\n영업이익 상향'
+    assert community_request(record, origin, {}).data['source_date'] == today
+
+
+def test_old_report_with_future_contract_date_is_still_rejected():
+    record, origin = investment_record()
+    record['facts'] = f'발간: 증권사 / 2020-01-01\n계약 종료일: {today_kst()}\n매출 증가'
+    assert community_request(record, origin, {}) is None
+
+
 @pytest.mark.parametrize('facts', [
     '시장 전망과 산업 리포트',
     '자료 요약\n※ 계약·수주·임상 이슈가 있으면 확인할 것',

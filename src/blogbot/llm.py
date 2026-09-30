@@ -77,7 +77,7 @@ class BlogLLM:
     def __init__(self, api_key: str, model: str, root: Path, review_model: str = "", journal: Path | None = None):
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY is required")
-        self.client = OpenAI(api_key=api_key, timeout=180, max_retries=0)
+        self.client = OpenAI(api_key=api_key, timeout=360, max_retries=0)
         self.journal = journal or root / "private-state" / "usage.jsonl"
         self.model = model
         self.review_model = review_model or model
@@ -121,6 +121,7 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
         search = {} if category_key == "cooking" else {
             "tools": [{"type": "web_search"}], "tool_choice": "required",
             "include": ["web_search_call.action.sources"],
+            "max_tool_calls": 3,
         }
         payload, response = request_json(
             self.client, model=self.model, stage="writer", request_id=request.id,
@@ -152,6 +153,8 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
         prompt = f"""
 {self.reviewer_prompt}
 
+오늘 한국시간 기준일: {today_kst().isoformat()}
+작성 기준일은 위 날짜와 대조한다. UTC 날짜나 모델 내부 날짜로 어제/내일을 추정하지 않는다.
 카테고리 규칙:\n{rules}
 
 원본 입력 JSON:\n{json.dumps(request.prompt_data(), ensure_ascii=False)}
@@ -159,6 +162,7 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
 """.strip()
         search = {} if post.category == "cooking" else {
             "tools": [{"type": "web_search"}], "tool_choice": "required",
+            "max_tool_calls": 3,
         }
         payload, _ = request_json(
             self.client, model=self.review_model, stage="reviewer", request_id=request.id,
@@ -174,16 +178,23 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
         prompt = f"""
 {self.writer_prompt}
 
+오늘 한국시간 기준일: {today_kst().isoformat()}
 기존 초안을 심사 지적사항에 맞게 수정한다. 주제와 핵심 출처는 유지하되 오류·과장·중복을 제거한다.
+심사자의 날짜·의학 주장도 검증 대상이다. 잘못된 지적을 그대로 복사하지 않는다.
+원고 기준일은 오늘 한국시간을 유지한다. 벤치마크 접근 한계·read_count 등 운영 정보는 본문에 넣지 않는다.
 카테고리 규칙:\n{rules}
 심사 결과:\n{json.dumps(review, ensure_ascii=False)}
 원본 입력:\n{json.dumps(request.prompt_data(), ensure_ascii=False)}
 기존 초안:\n{json.dumps(self._draft_data(post), ensure_ascii=False)}
 """.strip()
-        payload, _ = request_json(
+        search = {} if post.category == "cooking" else {
+            "tools": [{"type": "web_search"}], "tool_choice": "required",
+            "include": ["web_search_call.action.sources"], "max_tool_calls": 3,
+        }
+        payload, response = request_json(
             self.client, model=self.model, stage="rewrite", request_id=request.id,
             schema=DRAFT_SCHEMA, journal=self.journal, max_output_tokens=12000,
-            retry_output_tokens=16000, reasoning={"effort": "low"}, input=prompt,
+            retry_output_tokens=16000, reasoning={"effort": "low"}, input=prompt, **search,
         )
         return replace(
             post,
@@ -192,7 +203,8 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
             title=str(payload.get("title", post.title)).strip(),
             body=str(payload.get("body", post.body)).strip(),
             tags=[str(x).lstrip("#") for x in payload.get("tags", post.tags)][:8],
-            source_urls=_source_urls(payload, post.source_urls, required=post.category != "cooking"),
+            source_urls=_source_urls(payload, post.source_urls + _extract_urls(response),
+                                    required=post.category != "cooking"),
             as_of_date=str(payload.get("as_of_date", post.as_of_date)),
         )
 

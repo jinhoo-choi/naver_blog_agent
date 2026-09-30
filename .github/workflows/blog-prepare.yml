@@ -41,7 +41,9 @@ jobs:
       GITHUB_TOKEN: ${{ github.token }}
       BLOG_DATA_DIR: ${{ github.workspace }}/private-state
       BLOG_ENCRYPTED_OUTPUT: ${{ github.workspace }}/handoff/bundle.enc
-      BLOG_NOTIFY_ENABLED: 'false'
+      BLOG_NOTIFY_ENABLED: 'true'
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       PYTHONUTF8: '1'
     steps:
       - uses: actions/checkout@v4

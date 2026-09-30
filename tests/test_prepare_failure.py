@@ -10,7 +10,7 @@ from blogbot.presentation import markdown_html, render_segments
 
 @pytest.mark.parametrize('status,failed', [('ERROR',True),('IMAGES_PENDING',True),
     ('COMMUNITY_SOURCE_PENDING',True),
-    ('RESEARCH_REQUIRED',True),('APPROVED',False),('DROP_REVIEW',False),
+    ('RESEARCH_REQUIRED',True),('APPROVED',False),('DROP_REVIEW',True),
     ('NO_ELIGIBLE_INPUT_OR_DAILY_LIMIT',False)])
 def test_cloud_nonzero_for_failed_preparation_and_always_packs(tmp_path, monkeypatch, status, failed):
     settings = SimpleNamespace(db_path=tmp_path/'blog.db')
@@ -39,6 +39,35 @@ def test_separators_at_major_sections_and_references_only():
     assert sum(s.html.count('<hr>') for s in segments)==3
     assert segments[-1].html.startswith('<hr>')
     assert '&lt;script&gt;' in markdown_html('<script>alert(1)</script>')
+
+
+def test_missing_category_is_failure_even_without_an_api_exception(tmp_path, monkeypatch):
+    settings = SimpleNamespace(db_path=tmp_path/'blog.db', config={'categories': {
+        'parenting': {}, 'exercise': {}, 'investment': {}, 'cooking': {}}})
+    monkeypatch.setattr('sys.argv', ['cloud', 'prepare'])
+    monkeypatch.setattr(cloud, 'load_settings', lambda: settings)
+    monkeypatch.setattr(cloud, 'restore', lambda _: None)
+    monkeypatch.setattr(cloud, 'seed_inputs', lambda _: None)
+    monkeypatch.setattr(cloud, 'run_daily', lambda *a, **k: [{'status': 'NO_ELIGIBLE_INVESTMENT'}])
+    monkeypatch.setattr(cloud, 'pack', lambda *a: None)
+    with pytest.raises(RuntimeError):
+        cloud.main()
+    summary = json.loads((tmp_path/'run-summary.json').read_text())
+    assert summary['failed']
+    assert summary['results'][-1] == {'status': 'PREPARATION_PARTIAL',
+                                    'missing_categories': ['exercise', 'investment', 'parenting']}
+
+
+def test_notification_distinguishes_preparation_from_save_and_shows_reason(tmp_path, monkeypatch):
+    from blogbot.notify import telegram
+    path = tmp_path/'summary.md'
+    monkeypatch.setenv('GITHUB_STEP_SUMMARY', str(path))
+    monkeypatch.setenv('BLOG_NOTIFY_ENABLED', 'false')
+    telegram([{'status': 'APPROVED'}, {'status': 'ERROR', 'category': 'exercise',
+                                     'stage': 'writer', 'error': 'APITimeoutError'}])
+    text = path.read_text()
+    assert '원고 준비 1건 / 네이버 임시저장 0건' in text
+    assert 'exercise / writer / ERROR / APITimeoutError' in text
 
 
 def test_probe_never_runs_daily_or_writes_naver(tmp_path, monkeypatch):

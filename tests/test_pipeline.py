@@ -289,6 +289,47 @@ def test_rewrite_preserves_original_reference_date(monkeypatch):
     assert rewritten.as_of_date == post.as_of_date
 
 
+def test_rejected_recovery_reuses_identity_and_caps_paid_revision(settings, monkeypatch):
+    from dataclasses import asdict
+
+    from blogbot.recovery import recover_rejected
+    post = draft()
+    post.category, post.subcategory = 'parenting', '육아생활'
+    post.request_id, post.status = 'rejected-existing', 'DROP_REVIEW'
+    request = ContentRequest(post.request_id, post.category, {'question': '원본 질문'})
+    settings.artifact_dir.mkdir(parents=True)
+    (settings.db_path.parent/'response-cache').mkdir()
+    monkeypatch.setattr('blogbot.recovery.prepare_request', lambda _, r: r)
+    monkeypatch.setattr('blogbot.recovery.rejected_checkpoint', lambda *a: {
+        'post': asdict(post), 'input': asdict(request), 'review': {'decision': 'REWRITE'}})
+    monkeypatch.setattr('blogbot.recovery.validate_structure', lambda *a: None)
+    monkeypatch.setattr('blogbot.pipeline.generate_images', lambda s, r, p: p)
+    calls = []
+    class FakeLLM:
+        def __init__(self, *a): pass
+        def rewrite(self, post, *a, cache_only=False):
+            calls.append(cache_only)
+            if not cache_only: raise ValueError('failure after completed cached response')
+            post.body += ' 검증된 수정'
+            return post
+        def review(self, *a):
+            return {'scores': [5]*6, 'total': 30, 'decision': 'PASS', 'issues': [],
+                    'rewrite_instructions': ''}
+    monkeypatch.setattr('blogbot.recovery.BlogLLM', FakeLLM)
+    with closing(connect_db(settings.db_path)) as conn:
+        post_id = save_post(conn, post)
+        with conn:
+            conn.execute('INSERT INTO attempts(day,category,request_id,status) VALUES(?,?,?,?)',
+                         (str(today_kst()), post.category, post.request_id, 'DROP_REVIEW'))
+        assert recover_rejected(settings, conn, [request])[0]['status'] == 'ERROR'
+        result = recover_rejected(settings, conn, [request])[0]
+        assert result['status'] == 'APPROVED' and result['id'] == post_id
+        assert recover_rejected(settings, conn, [request]) == []
+        assert conn.execute('SELECT COUNT(*) FROM posts').fetchone()[0] == 1
+        assert conn.execute('SELECT COUNT(*) FROM attempts').fetchone()[0] == 1
+    assert calls == [False, True]
+
+
 def test_cached_response_dict_preserves_observed_urls():
     from blogbot.llm import _extract_urls
 

@@ -139,6 +139,9 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                 set_status(conn, row['id'], 'REPAIR_PENDING')
                 try:
                     resume_cached = bool(payload.get('repair_attempted'))
+                    if resume_cached:
+                        # Operational status changed after the original request was cached.
+                        post.status = payload['post']['status']
                     atomic_json(stem.with_suffix('.json'), {**payload, 'repair_attempted': True})
                     request = ContentRequest(**payload['input'])
                     info = settings.config['categories'][post.category]

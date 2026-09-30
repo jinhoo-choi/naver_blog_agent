@@ -234,8 +234,12 @@ def test_legacy_approval_repair_keeps_identity_and_is_not_repeated(settings, mon
     class FakeLLM:
         def __init__(self, *args):
             pass
-        def rewrite(self, post, *args):
+        def rewrite(self, post, *args, **kwargs):
             calls.append(post.request_id)
+            assert post.status == 'APPROVED'
+            if len(calls) == 1:
+                raise ValueError('deterministic validation failure after cached response')
+            assert kwargs == {'cache_only': True}
             post.body += '\n보완된 안전 문장'
             return post
         def review(self, *args):
@@ -246,9 +250,10 @@ def test_legacy_approval_repair_keeps_identity_and_is_not_repeated(settings, mon
     monkeypatch.setattr('blogbot.pipeline.validate_structure', lambda *args: None)
     monkeypatch.setattr('blogbot.pipeline.generate_images', lambda settings, request, post: post)
     monkeypatch.setattr('blogbot.pipeline.BlogLLM', FakeLLM)
+    assert run_daily(settings, retry_failed=True)[0]['status'] == 'ERROR'
     assert run_daily(settings, retry_failed=True)[0]['status'] == 'APPROVED'
     run_daily(settings, retry_failed=True)
-    assert calls == [post.request_id]
+    assert calls == [post.request_id, post.request_id]
     assert json.loads(path.read_text())['post']['request_id'] == post.request_id
     with closing(connect_db(settings.db_path)) as conn:
         assert conn.execute('SELECT COUNT(*) FROM posts').fetchone()[0] == 1

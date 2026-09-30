@@ -19,7 +19,7 @@ from .core import (
 from .images import atomic_json
 from .inputs import ContentRequest
 from .llm import BlogLLM, _extract_urls, _source_urls
-from .presentation import validate_structure
+from .presentation import normalize_structure, validate_structure
 from .research import prepare_request
 
 
@@ -77,6 +77,7 @@ def recover_rejected(settings, conn, candidates):
             llm = BlogLLM(settings.openai_api_key, settings.openai_model, settings.root,
                           settings.review_model, settings.db_path.parent / 'usage.jsonl')
             post = llm.rewrite(post, info, payload['review'], request, cache_only=resumed)
+            post = normalize_structure(post)
             validate_post(post, info)
             validate_structure(post, settings.config.get('editorial', {}).get('require_structure', True))
             review = llm.review(post, info, request)

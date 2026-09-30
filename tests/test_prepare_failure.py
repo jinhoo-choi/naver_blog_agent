@@ -5,7 +5,12 @@ import pytest
 
 from blogbot import cloud
 from blogbot.core import PostDraft
-from blogbot.presentation import markdown_html, render_segments
+from blogbot.presentation import (
+    markdown_html,
+    normalize_structure,
+    render_segments,
+    validate_structure,
+)
 
 
 @pytest.mark.parametrize('status,failed', [('ERROR',True),('IMAGES_PENDING',True),
@@ -39,6 +44,35 @@ def test_separators_at_major_sections_and_references_only():
     assert sum(s.html.count('<hr>') for s in segments)==3
     assert segments[-1].html.startswith('<hr>')
     assert '&lt;script&gt;' in markdown_html('<script>alert(1)</script>')
+
+
+def test_structure_repair_preserves_text_and_existing_titles():
+    body = 'Opening\n\n' + '\n\n'.join(f'## Existing {i}\nVerified fact {i}' for i in range(5))
+    post = PostDraft('investment', '시장·산업', 'topic', 'title', body, [], [], '2026-09-30')
+    fixed = normalize_structure(post)
+    validate_structure(fixed)
+    assert fixed.body == body.replace('## Existing 4', '### Existing 4')
+    assert normalize_structure(fixed) == fixed
+
+
+def test_restore_uses_creation_time_instead_of_artifact_id(tmp_path, monkeypatch):
+    import io
+    import zipfile
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, 'w') as z: z.writestr('bundle.enc', b'placeholder')
+    artifacts = [{'id': 100, 'name': 'blog-state-old', 'expired': False,
+                  'created_at': '2026-09-30T01:00:00Z'},
+                 {'id': 90, 'name': 'blog-state-new', 'expired': False,
+                  'created_at': '2026-09-30T02:00:00Z'}]
+    requests = []
+    def get(path):
+        requests.append(path)
+        return json.dumps({'artifacts': artifacts}).encode() if 'per_page' in path else buffer.getvalue()
+    monkeypatch.setattr(cloud, 'github_get', get)
+    monkeypatch.setattr(cloud, 'extract_bundle', lambda *a: None)
+    monkeypatch.setenv('BLOG_BUNDLE_KEY', 'placeholder')
+    cloud.restore(tmp_path)
+    assert requests[-1] == '/actions/artifacts/90/zip'
 
 
 def test_missing_category_is_failure_even_without_an_api_exception(tmp_path, monkeypatch):

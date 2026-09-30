@@ -127,6 +127,51 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                     retries.append((row['id'], by_id[row['request_id']]))
                 else:
                     results.append({'status': 'RECOVERY_INPUT_UNAVAILABLE', 'attempt': row['id']})
+            # Repair contradictory legacy approvals once, preserving request identity and quota.
+            for row in conn.execute("SELECT * FROM posts WHERE status='APPROVED' AND as_of_date=?",
+                                    (today_kst().isoformat(),)).fetchall():
+                post = load_post(row)
+                stem = settings.artifact_dir / f"{post.as_of_date}-{row['id']:05d}"
+                payload = json.loads(stem.with_suffix('.json').read_text())
+                if review_result(payload['review'])[1] == 'PASS':
+                    continue
+                result = {'id': row['id'], 'category': post.category, 'request_id': post.request_id}
+                set_status(conn, row['id'], 'REPAIR_PENDING')
+                try:
+                    if payload.get('repair_attempted'):
+                        raise RuntimeError('Legacy repair budget reached')
+                    atomic_json(stem.with_suffix('.json'), {**payload, 'repair_attempted': True})
+                    request = ContentRequest(**payload['input'])
+                    info = settings.config['categories'][post.category]
+                    if llm is None:
+                        llm = BlogLLM(settings.openai_api_key, settings.openai_model, settings.root,
+                                      settings.review_model, settings.db_path.parent / 'usage.jsonl')
+                    post = llm.rewrite(post, info, payload['review'], request)
+                    validate_post(post, info)
+                    validate_structure(post, settings.config.get('editorial', {}).get('require_structure', True))
+                    review = llm.review(post, info, request)
+                    score, decision = review_result(review)
+                    if decision != 'PASS' or score < int(limits['review_pass_score']):
+                        result.update(status='DROP_REVIEW', score=score)
+                        set_status(conn, row['id'], 'DROP_REVIEW')
+                    else:
+                        post.quality_score, post.status = score, 'TEXT_APPROVED'
+                        with conn:
+                            conn.execute("UPDATE posts SET subcategory=?, title=?, body=?, tags_json=?, "
+                                         "sources_json=?, quality_score=?, status=?, fingerprint=? WHERE id=?",
+                                         (post.subcategory, post.title, post.body, json.dumps(post.tags),
+                                          json.dumps(post.source_urls), score, post.status,
+                                          post.fingerprint, row['id']))
+                        atomic_json(stem.with_suffix('.json'),
+                                    {'post': asdict(post), 'input': asdict(request), 'review': review,
+                                     'repair_attempted': True})
+                        result.update(complete_media(settings, conn, row['id'], post, request, review))
+                except (OpenAIError, OSError, RuntimeError, ValueError, TypeError, KeyError) as exc:
+                    result.update(status='ERROR', stage='legacy_repair', error=type(exc).__name__)
+                with conn:
+                    conn.execute("UPDATE attempts SET status=? WHERE request_id=?",
+                                 (result['status'], post.request_id))
+                results.append(result)
         # Resume media only. Never purchase a new writer/reviewer call for approved text.
         pending = conn.execute("SELECT * FROM posts WHERE status IN "
                                "('TEXT_APPROVED', 'IMAGES_PENDING') ORDER BY id").fetchall()
@@ -140,12 +185,13 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
             request = ContentRequest(**payload['input'])
             results.append(complete_media(settings, conn, row['id'], post, request, payload['review']))
         for _ in range(requested):
-            reservation = (retries.pop(0) if retries else None) if retry_failed else reserve_attempt(
+            is_retry = bool(retry_failed and retries)
+            reservation = retries.pop(0) if is_retry else reserve_attempt(
                 conn, settings.config, requested, candidates)
             if reservation is None:
                 break
             attempt_id, request = reservation
-            if retry_failed:
+            if is_retry:
                 with conn:
                     claimed = conn.execute("UPDATE attempts SET status='STARTED' WHERE id=? "
                                            "AND status='ERROR'", (attempt_id,)).rowcount

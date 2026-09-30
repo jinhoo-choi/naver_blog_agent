@@ -31,6 +31,11 @@ def image_prompt(post: PostDraft, section: str) -> str:
     subject = re.sub(r'[#|*_]', ' ', section).strip()[:300]
     return f'''Create one simple MS Paint mouse-drawn doodle for this Korean blog section.
 Article: {post.title}\nSection: {subject}
+Category: {post.category}. The depicted age, activity and props must match this title and section.
+For parenting about an infant: show one plainly recognizable awake baby with round baby
+proportions, short limbs and a plain onesie, or a relevant simple object. Never substitute an
+adult, a screen/tablet, office work or a generic checking scene for an infant topic.
+No toys, pillows, blankets, cords or loose objects in or near an infant sleep space.
 Keep the same deliberately rough MS Paint doodle style in every image:
 pure white background, thin slightly wobbly black mouse-drawn lines, asymmetric
 round heads, simple stick/box bodies, tiny dot eyes, minimal expression and
@@ -44,7 +49,7 @@ instead. No labels, letters, numbers, speech bubbles or captions in the image.
 No polished vector style, photorealism, 3D, watercolor, gradients, logos or watermark.
 No medical or exercise anatomy diagrams, hazardous infant sleep arrangements,
 unsupported exercise technique, numeric charts, fabricated statistics or financial promises.
-Prefer a generic thinking/checking/preparation scene. Do not depict a real family.'''
+Show the actual topic, not a generic thinking/checking/preparation scene. Do not depict a real family.'''
 
 
 def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostDraft:

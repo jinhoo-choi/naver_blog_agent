@@ -245,6 +245,14 @@ def review_result(review: dict) -> tuple[int, str]:
     if type(review.get("total")) is not int or total != review["total"]:
         return 0, "DROP"
     decision = str(review.get("decision", "DROP")).upper()
+    if decision not in {"PASS", "REWRITE", "DROP"}:
+        return total, "DROP"
+    # A contradictory PASS must not silently ignore requested corrections.
+    instructions = str(review.get("rewrite_instructions", "")).strip()
+    if decision == "PASS" and review.get("issues") and instructions not in {
+        "", "없음", "수정 없음", "수정 필요 없음", "none", "None",
+    }:
+        decision = "REWRITE"
     # High total cannot override an accuracy or category-safety failure.
     if values[0] < 4 or values[5] < 4 or review.get("blocking_issues"):
         decision = "REWRITE" if total >= 20 else "DROP"

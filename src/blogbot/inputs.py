@@ -196,11 +196,14 @@ def community_request(record: dict, provenance: dict, config: dict) -> ContentRe
     stamp = date.fromisoformat(provenance["snapshot_date"])
     # A fresh export or a future event date cannot make an old report current.
     dates = re.findall(
-        r"(?:발간일|발행일|공시일|접수일|보도\s*시각|보도일|자료\s*기준일|기준일)"
-        r"\s*[:：]?\s*(20\d{2}-\d{2}-\d{2})", record["facts"])
+        r"(?m)^(?:발간일|발행일|공시일|접수일|보도\s*시각|보도일|자료\s*기준일|기준일)"
+        r"[ \t]*[:：]?[ \t]*(20\d{2})-?(\d{2})-?(\d{2})\b", record["facts"])
+    dates += re.findall(
+        r"(?m)^발간[ \t]*[:：][^\r\n]*?[/／][ \t]*(20\d{2})-?(\d{2})-?(\d{2})\b",
+        record["facts"])
     if not dates:
         return None
-    data_date = min(date.fromisoformat(d) for d in dates)
+    data_date = min(date.fromisoformat('-'.join(d)) for d in dates)
     age_limit = int(config.get("max_age_days", 1))
     if not (0 <= (today_kst() - stamp).days <= age_limit
             and 0 <= (today_kst() - data_date).days <= age_limit):
@@ -258,7 +261,8 @@ def collect_requests(settings: Settings) -> tuple[list[ContentRequest], list[dic
                 except (ValueError, TypeError, KeyError, AttributeError):
                     continue  # Malformed one-off records do not block the owner's input.
             if not eligible:
-                notices.append({"status": "NO_ELIGIBLE_INVESTMENT"})
+                notices.append({"status": "NO_ELIGIBLE_INVESTMENT", "source_count": len(records),
+                                "reason": "source_date_score_or_issue_not_eligible"})
         except (OSError, ValueError, TypeError, KeyError):
             notices.append({"status": "COMMUNITY_SOURCE_UNAVAILABLE"})
     return requests, notices

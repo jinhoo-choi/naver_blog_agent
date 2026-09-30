@@ -278,7 +278,26 @@ def main():
                                         'INPUT_REJECTED', 'COMMUNITY_SOURCE_PENDING',
                                         'COMMUNITY_SOURCE_UNAVAILABLE',
                                         'SAVE_UNCERTAIN', 'RECOVERY_INPUT_UNAVAILABLE',
-                                        'UNRESOLVED_FAILED_ATTEMPTS'} for r in results)
+                                        'UNRESOLVED_FAILED_ATTEMPTS', 'NO_ELIGIBLE_INVESTMENT',
+                                        'DROP_REVIEW', 'DROP_DUPLICATE'} for r in results)
+        # A no-op/partial run must not report success when a category has no deliverable.
+        categories = getattr(settings, 'config', {}).get('categories', {})
+        if categories:
+            with closing(connect_db(settings.db_path)) as conn:
+                ready_categories = {row[0] for row in conn.execute(
+                    "SELECT category FROM posts WHERE as_of_date=? AND status IN ('APPROVED','SAVED_NAVER')",
+                    (today_kst().isoformat(),))}
+                ready_categories.update(row[0] for row in conn.execute(
+                    "SELECT category FROM attempts WHERE day=? AND status='SAVED_NAVER'",
+                    (today_kst().isoformat(),)))
+            missing = sorted(set(categories) - {'cooking'} - ready_categories)
+            if missing:
+                results.append({'status': 'PREPARATION_PARTIAL', 'missing_categories': missing})
+                failed = True
+            elif all(r.get('status') in {'APPROVED', 'SAVED_NAVER', 'DROP_REVIEW',
+                                         'DROP_DUPLICATE', 'NO_ELIGIBLE_INPUT_OR_DAILY_LIMIT'}
+                     for r in results):
+                failed = False  # A bounded replacement can resolve an earlier editorial rejection.
         atomic_json(directory / 'run-summary.json',
                     {'date': today_kst().isoformat(), 'failed': failed, 'results': results})
         if failed:
@@ -286,6 +305,14 @@ def main():
     finally:
         # Checkpoints survive handled API errors; no raw files are uploaded to the public repository.
         pack(settings, destination)
+        summary_path = directory / 'run-summary.json'
+        if (args.mode != 'probe' and summary_path.exists()
+                and json.loads(summary_path.read_text()).get('date') == today_kst().isoformat()):
+            from .notify import telegram
+            try:
+                telegram(json.loads(summary_path.read_text())['results'])
+            except (OSError, RuntimeError, ValueError) as exc:
+                print(json.dumps({'notification': 'FAILED', 'error': type(exc).__name__}))
 
 
 if __name__ == '__main__':
@@ -293,4 +320,10 @@ if __name__ == '__main__':
         main()
     except Exception as exc:  # noqa: BLE001 -- CLI boundary: redact all errors and exit nonzero.
         print(json.dumps({'status': 'ERROR', 'error': type(exc).__name__}))
+        # Restore/setup failures can happen before run-summary exists.
+        from .notify import telegram
+        try:
+            telegram([{'status': 'ERROR', 'stage': 'cloud', 'error': type(exc).__name__}])
+        except (OSError, RuntimeError, ValueError) as notify_exc:
+            print(json.dumps({'notification': 'FAILED', 'error': type(notify_exc).__name__}))
         raise SystemExit(1) from None

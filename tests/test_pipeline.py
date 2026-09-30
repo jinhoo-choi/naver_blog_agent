@@ -55,6 +55,46 @@ def test_review_rejects_inconsistent_or_unsafe_scores():
     })[1] != "PASS"
 
 
+def test_high_score_cannot_ignore_actionable_review_corrections():
+    assert review_result({'scores': [5, 5, 5, 4, 5, 4], 'total': 28, 'decision': 'PASS',
+                          'issues': ['수면 안전 문장을 수정'],
+                          'rewrite_instructions': '영아 잠자리 인형 권고를 삭제'})[1] == 'REWRITE'
+
+
+def test_recovery_retries_failed_category_and_fills_new_category(settings, monkeypatch):
+    requests = [ContentRequest('failed-exercise', 'exercise', {'question': '운동 자세'}),
+                ContentRequest('new-investment', 'investment', {'kind': 'research'})]
+    with closing(connect_db(settings.db_path)) as conn, conn:
+        conn.execute('INSERT INTO attempts(day,category,request_id,status) VALUES(?,?,?,?)',
+                     (str(today_kst()), 'exercise', 'failed-exercise', 'ERROR'))
+        conn.execute('INSERT INTO attempts(day,category,request_id,status) VALUES(?,?,?,?)',
+                     (str(today_kst()), 'parenting', 'already-ready', 'APPROVED'))
+    calls = []
+    class FakeLLM:
+        def __init__(self, *args):
+            pass
+        def create_draft(self, request, info, titles):
+            calls.append(request.id)
+            post = draft()
+            post.category, post.subcategory = request.category, info['subcategories'][0]
+            post.request_id, post.title = request.id, request.id
+            return post
+        def review(self, *args):
+            return {'scores': [5]*6, 'total': 30, 'decision': 'PASS'}
+    monkeypatch.setattr('blogbot.pipeline.collect_requests', lambda _: (requests, []))
+    monkeypatch.setattr('blogbot.pipeline.rank_candidates', lambda *args: requests)
+    monkeypatch.setattr('blogbot.pipeline.prepare_request', lambda settings, request: request)
+    monkeypatch.setattr('blogbot.pipeline.validate_structure', lambda *args: None)
+    monkeypatch.setattr('blogbot.pipeline.generate_images', lambda settings, request, post: post)
+    monkeypatch.setattr('blogbot.pipeline.BlogLLM', FakeLLM)
+    results = run_daily(settings, retry_failed=True)
+    assert calls == ['failed-exercise', 'new-investment']
+    assert all(r['status'] == 'APPROVED' for r in results)
+    with closing(connect_db(settings.db_path)) as conn:
+        assert conn.execute('SELECT COUNT(*) FROM attempts WHERE day=?',
+                            (str(today_kst()),)).fetchone()[0] == 3
+
+
 def test_writer_cannot_invent_source_url():
     with pytest.raises(ValueError):
         _source_urls({"source_urls": ["https://invented.example/"]}, ["https://actual.example/"])
@@ -154,7 +194,7 @@ def test_reports_and_policy_precede_disclosures_even_after_trend_sort(settings, 
     assert run_daily(settings, count=1)[0]['request_id'] == 'preferred'
 
 
-def test_recovery_reuses_error_reservation_without_consuming_new_input(settings, monkeypatch):
+def test_recovery_reuses_failed_reservation_before_new_missing_category(settings, monkeypatch):
     candidates = [ContentRequest('failed', 'parenting', {'question': '질문'}),
                   ContentRequest('unused', 'exercise', {'question': '운동'})]
     with closing(connect_db(settings.db_path)) as conn, conn:
@@ -167,8 +207,51 @@ def test_recovery_reuses_error_reservation_without_consuming_new_input(settings,
 
     monkeypatch.setattr('blogbot.pipeline.prepare_request', stop_before_paid_call)
     result = run_daily(settings, count=3, retry_failed=True)
-    assert len(result) == 1 and result[0]['request_id'] == 'failed'
+    assert [r['request_id'] for r in result] == ['failed', 'unused']
     with closing(connect_db(settings.db_path)) as conn:
+        assert conn.execute('SELECT COUNT(*) FROM attempts').fetchone()[0] == 2
+
+
+def test_legacy_approval_repair_keeps_identity_and_is_not_repeated(settings, monkeypatch):
+    import json
+    from dataclasses import asdict
+
+    from blogbot.images import atomic_json
+    post = draft()
+    post.category, post.subcategory = 'parenting', settings.config['categories']['parenting']['subcategories'][0]
+    post.request_id = 'legacy-approved'
+    request = ContentRequest(post.request_id, 'parenting', {'question': '실제 질문'})
+    with closing(connect_db(settings.db_path)) as conn, conn:
+        post_id = save_post(conn, post)
+        conn.execute('INSERT INTO attempts(day,category,request_id,status) VALUES(?,?,?,?)',
+                     (str(today_kst()), 'parenting', post.request_id, 'APPROVED'))
+    settings.artifact_dir.mkdir(parents=True)
+    path = settings.artifact_dir/f'{post.as_of_date}-{post_id:05d}.json'
+    atomic_json(path, {'post': asdict(post), 'input': asdict(request), 'review': {
+        'scores': [5]*6, 'total': 30, 'decision': 'PASS', 'issues': ['안전 문장 수정'],
+        'rewrite_instructions': '위험한 권고 삭제'}})
+    calls = []
+    class FakeLLM:
+        def __init__(self, *args):
+            pass
+        def rewrite(self, post, *args):
+            calls.append(post.request_id)
+            post.body += '\n보완된 안전 문장'
+            return post
+        def review(self, *args):
+            return {'scores': [5]*6, 'total': 30, 'decision': 'PASS', 'issues': [],
+                    'rewrite_instructions': ''}
+    monkeypatch.setattr('blogbot.pipeline.collect_requests', lambda _: ([], []))
+    monkeypatch.setattr('blogbot.pipeline.rank_candidates', lambda *args: [])
+    monkeypatch.setattr('blogbot.pipeline.validate_structure', lambda *args: None)
+    monkeypatch.setattr('blogbot.pipeline.generate_images', lambda settings, request, post: post)
+    monkeypatch.setattr('blogbot.pipeline.BlogLLM', FakeLLM)
+    assert run_daily(settings, retry_failed=True)[0]['status'] == 'APPROVED'
+    run_daily(settings, retry_failed=True)
+    assert calls == [post.request_id]
+    assert json.loads(path.read_text())['post']['request_id'] == post.request_id
+    with closing(connect_db(settings.db_path)) as conn:
+        assert conn.execute('SELECT COUNT(*) FROM posts').fetchone()[0] == 1
         assert conn.execute('SELECT COUNT(*) FROM attempts').fetchone()[0] == 1
 
 

@@ -187,6 +187,9 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
             payload = json.loads(stem.with_suffix('.json').read_text(encoding='utf-8'))
             request = ContentRequest(**payload['input'])
             results.append(complete_media(settings, conn, row['id'], post, request, payload['review']))
+        if retry_failed:
+            from .recovery import recover_rejected
+            results.extend(recover_rejected(settings, conn, candidates))
         for _ in range(requested):
             is_retry = bool(retry_failed and retries)
             reservation = retries.pop(0) if is_retry else reserve_attempt(
@@ -227,7 +230,7 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                         raise
                     stage = "rewrite"
                     post = llm.rewrite(post, info, {'rewrite_instructions': str(exc)}, request)
-                    rewritten = True
+                    # Structural repair is separate from the one editorial revision below.
                     validate_post(post, info)
                     validate_structure(post, settings.config.get("editorial", {}).get("require_structure", True))
                 threshold = float(limits["max_similarity"])

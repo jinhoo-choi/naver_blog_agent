@@ -85,8 +85,12 @@ def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostD
         return replace(post, photos=request.photos)
     config = settings.config.get('images', {})
     count = int(config.get(post.category + '_count', 1))
+    if post.category == 'investment' and len(post.body) >= int(
+        config.get('investment_extended_min_chars', 2500)
+    ):
+        count = int(config.get('investment_extended_count', count))
     sections = re.findall(r'^##\s+(.+)$', post.body, re.MULTILINE)
-    if len(sections) < count:
+    if len(sections) < max(1, count - 1):
         raise ValueError('Not enough sections to place images')
     folder = settings.artifact_dir / 'generated-images' / post.request_id
     folder.mkdir(parents=True, exist_ok=True)
@@ -96,7 +100,7 @@ def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostD
     def one(index: int) -> dict:
         thumbnail = index == 0
         section = '글 전체 핵심 요약' if thumbnail else sections[
-            min(len(sections)-1, index*len(sections)//count)]
+            round((index - 1) * (len(sections) - 1) / max(1, count - 2))]
         params = {'model': str(config.get('model', 'gpt-image-2.5-flare')),
                   'prompt': image_prompt(post, section, thumbnail=thumbnail),
                   'quality': str(config.get('quality', 'medium')),

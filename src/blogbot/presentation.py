@@ -96,9 +96,16 @@ def render_segments(post: PostDraft) -> list[Segment]:
     # The opening summary precedes the cover; supporting images follow body sections.
     slots: dict[int, list[dict]] = {}
     for i, photo in enumerate(post.photos):
-        pos = 0 if photo.get("role") == "thumbnail" else min(
-            len(chunks) - 1, max(0, (i + 1) * len(chunks) // (len(post.photos) + 1) - 1)
-        )
+        if photo.get("role") == "thumbnail":
+            pos = 0
+        elif photo.get("role") == "section" and post.photos[0].get("role") == "thumbnail":
+            pos = min(len(chunks) - 1, 1 + round(
+                (i - 1) * max(0, len(chunks) - 2) / max(1, len(post.photos) - 2)
+            ))
+        else:
+            pos = min(len(chunks) - 1, max(
+                0, (i + 1) * len(chunks) // (len(post.photos) + 1) - 1
+            ))
         slots.setdefault(pos, []).append(photo)
     for i, chunk in enumerate(chunks):
         result.append(Segment(html=markdown_html(chunk)))

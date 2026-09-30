@@ -96,9 +96,11 @@ output_format = "jpeg"
 concurrency = 2
 timeout_seconds = 120
 max_attempts = 2
-parenting_count = 3
-exercise_count = 3
+parenting_count = 5
+exercise_count = 5
 investment_count = 3
+investment_extended_count = 4
+investment_extended_min_chars = 2500
 
 # Verified in the owner editor on 2026-09-26; UI changes stop saving.
 [naver]

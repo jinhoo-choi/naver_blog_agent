@@ -97,7 +97,8 @@ def test_preview_rejects_missing_summary_dates_and_raw_urls(opening):
         validate_structure(post)
 
 
-def test_three_image_jobs_use_article_summary_cover_and_reuse_cache(tmp_path, monkeypatch):
+@pytest.mark.parametrize('long_investment', [False, True])
+def test_daily_image_counts_use_summary_cover_and_reuse_cache(tmp_path, monkeypatch, long_investment):
     import base64
     import tomllib
     from pathlib import Path
@@ -117,17 +118,36 @@ def test_three_image_jobs_use_article_summary_cover_and_reuse_cache(tmp_path, mo
     settings = SimpleNamespace(config=config, artifact_dir=tmp_path, openai_api_key='placeholder')
     for category in ['parenting', 'exercise', 'investment']:
         post = PostDraft(category, '정보', 'topic', '주제 핵심',
-                         '글의 핵심 답변입니다.\n\n## 원인\n본문\n\n## 방법\n본문\n\n## 주의\n본문',
+                         '글의 핵심 답변입니다.\n\n## 원인\n본문\n\n## 방법\n본문'
+                         '\n\n## 실천\n본문\n\n## 주의\n본문',
                          [], [], '2026-09-30', request_id=category)
+        if category == 'investment' and long_investment:
+            post.body += '\n' + '확인된 설명입니다. ' * 250
+        expected = 4 if long_investment else 3
+        if category != 'investment':
+            expected = 5
         request = ContentRequest(category, category, {})
         result = generate_images(settings, request, post)
-        assert len(result.photos) == 3
-        assert [p['role'] for p in result.photos] == ['thumbnail', 'section', 'section']
+        assert len(result.photos) == expected
+        assert [p['role'] for p in result.photos] == ['thumbnail'] + ['section'] * (expected - 1)
         assert generate_images(settings, request, post).photos == result.photos
-    assert len(calls) == 9
+    assert len(calls) == (14 if long_investment else 13)
     covers = [c['prompt'] for c in calls if 'summary cover' in c['prompt']]
     assert len(covers) == 3
     assert all('글의 핵심 답변입니다.' in p and '주제 핵심' in p for p in covers)
+
+
+def test_five_images_do_not_cluster_after_the_opening():
+    post = PostDraft('parenting', '정보', 'topic', 'title', '요약입니다.\n\n' +
+                     '\n\n'.join(f'## 구역 {i}\n설명 {i}' for i in range(4)),
+                     [], [], '2026-09-30', photos=[
+                         {'file': str(i), 'role': 'thumbnail' if i == 0 else 'section'}
+                         for i in range(5)])
+    segments = render_segments(post)
+    assert segments[1].photo['role'] == 'thumbnail'
+    for i in range(4):
+        index = next(j for j, s in enumerate(segments) if f'구역 {i}' in s.html)
+        assert segments[index + 1].photo['file'] == str(i + 1)
 
 
 def test_restore_uses_creation_time_instead_of_artifact_id(tmp_path, monkeypatch):

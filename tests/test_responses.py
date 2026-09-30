@@ -95,6 +95,18 @@ def test_completed_response_cache_reuses_only_identical_input(tmp_path):
     assert len(calls) == 2
 
 
+def test_cache_only_never_buys_a_missing_response(tmp_path):
+    item = response()
+    item.model_dump = lambda: {'status': 'completed', 'output': []}
+    client, calls, args = call(tmp_path, [item])
+    with pytest.raises(ResponseFailure, match='cached_response_unavailable'):
+        request_json(client, cache_only=True, **args)
+    assert calls == []
+    original, _ = request_json(client, **args)
+    assert request_json(client, cache_only=True, **args)[0] == original
+    assert len(calls) == 1
+
+
 @pytest.mark.parametrize('stage', ['reviewer', 'rewrite'])
 def test_review_and_rewrite_resume_from_identical_cached_response(tmp_path, stage):
     item = response()

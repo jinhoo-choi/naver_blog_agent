@@ -266,6 +266,24 @@ def test_source_normalization_keeps_document_and_stock_identity():
                      ['https://example.com/report?id=1'])
 
 
+def test_encoded_tracking_suffix_preserves_the_actual_document():
+    url = 'https://www.acefitness.org/resources/everyone/exercise-library/158/seated-lat-pulldown/'
+    assert _source_urls({'source_urls': [url]}, [url + '%3Fsrsltid%3Dtracking']) == [url]
+    with pytest.raises(ValueError):
+        _source_urls({'source_urls': [url]}, [url.replace('/158/', '/159/') + '%3Fsrsltid%3Dtracking'])
+
+
+def test_rewrite_preserves_original_reference_date(monkeypatch):
+    from blogbot.llm import BlogLLM
+    post = draft()
+    llm = object.__new__(BlogLLM)
+    llm.writer_prompt, llm.model, llm.client, llm.journal = '', 'test', None, None
+    monkeypatch.setattr('blogbot.llm.request_json', lambda *args, **kwargs: (
+        {'as_of_date': '2026-09-29', 'source_urls': post.source_urls}, {'output': []}))
+    rewritten = llm.rewrite(post, {}, {}, ContentRequest('date-test', post.category, {}))
+    assert rewritten.as_of_date == post.as_of_date
+
+
 def test_cached_response_dict_preserves_observed_urls():
     from blogbot.llm import _extract_urls
 

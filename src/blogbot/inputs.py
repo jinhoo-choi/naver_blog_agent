@@ -4,13 +4,14 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import re
 import shutil
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import quote, urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 from zoneinfo import ZoneInfo
 
 from .config import Settings
@@ -114,10 +115,18 @@ def enqueue_file(settings: Settings, source: Path) -> str:
     return request_id
 
 
+class _NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def _get_json(url: str):
-    request = Request(url, headers={"Accept": "application/vnd.github+json",
-                                    "User-Agent": "naver-blog-agent/0.3"})
-    with urlopen(request, timeout=25) as response:
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "naver-blog-agent/0.3"}
+    token = os.environ.get('GITHUB_TOKEN', '')
+    if token and urlsplit(url).hostname == 'api.github.com':
+        headers['Authorization'] = f'Bearer {token}'
+    request = Request(url, headers=headers)
+    with build_opener(_NoRedirect()).open(request, timeout=25) as response:
         payload = response.read(5_000_001)
     if len(payload) > 5_000_000:
         raise ValueError("Community source exceeded size limit")
@@ -263,6 +272,7 @@ def collect_requests(settings: Settings) -> tuple[list[ContentRequest], list[dic
             if not eligible:
                 notices.append({"status": "NO_ELIGIBLE_INVESTMENT", "source_count": len(records),
                                 "reason": "source_date_score_or_issue_not_eligible"})
-        except (OSError, ValueError, TypeError, KeyError):
-            notices.append({"status": "COMMUNITY_SOURCE_UNAVAILABLE"})
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            notices.append({"status": "COMMUNITY_SOURCE_UNAVAILABLE", "error": type(exc).__name__,
+                            "http_status": getattr(exc, 'code', None)})
     return requests, notices

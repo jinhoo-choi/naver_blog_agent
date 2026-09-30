@@ -128,7 +128,7 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                 else:
                     results.append({'status': 'RECOVERY_INPUT_UNAVAILABLE', 'attempt': row['id']})
             # Repair contradictory legacy approvals once, preserving request identity and quota.
-            for row in conn.execute("SELECT * FROM posts WHERE status='APPROVED' AND as_of_date=?",
+            for row in conn.execute("SELECT * FROM posts WHERE status IN ('APPROVED', 'REPAIR_PENDING') AND as_of_date=?",
                                     (today_kst().isoformat(),)).fetchall():
                 post = load_post(row)
                 stem = settings.artifact_dir / f"{post.as_of_date}-{row['id']:05d}"
@@ -138,15 +138,15 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                 result = {'id': row['id'], 'category': post.category, 'request_id': post.request_id}
                 set_status(conn, row['id'], 'REPAIR_PENDING')
                 try:
-                    if payload.get('repair_attempted'):
-                        raise RuntimeError('Legacy repair budget reached')
+                    resume_cached = bool(payload.get('repair_attempted'))
                     atomic_json(stem.with_suffix('.json'), {**payload, 'repair_attempted': True})
                     request = ContentRequest(**payload['input'])
                     info = settings.config['categories'][post.category]
                     if llm is None:
                         llm = BlogLLM(settings.openai_api_key, settings.openai_model, settings.root,
                                       settings.review_model, settings.db_path.parent / 'usage.jsonl')
-                    post = llm.rewrite(post, info, payload['review'], request)
+                    post = llm.rewrite(post, info, payload['review'], request,
+                                       **({'cache_only': True} if resume_cached else {}))
                     validate_post(post, info)
                     validate_structure(post, settings.config.get('editorial', {}).get('require_structure', True))
                     review = llm.review(post, info, request)

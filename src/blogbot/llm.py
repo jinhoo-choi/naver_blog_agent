@@ -49,6 +49,9 @@ def _extract_urls(response) -> list[str]:
 def _source_identity(url: str) -> str:
     """Ignore known tracking only; keep document IDs and all other query parameters."""
     parts = urlsplit(url)
+    # Search results sometimes encode a tracking query into the final path segment.
+    path = re.sub(r'/%3f(?:srsltid|gclid|fbclid|utm_[a-z_]+)%3d[^/]*$', '/',
+                  parts.path, flags=re.IGNORECASE)
     query = [(key, value) for key, value in parse_qsl(parts.query, keep_blank_values=True)
              if not (key.lower().startswith('utm_') or key.lower() in {'gclid', 'fbclid', 'srsltid'}
                      or (not key and value.startswith('___psv__')))]
@@ -57,7 +60,7 @@ def _source_identity(url: str) -> str:
             and parts.path == '/item/main.naver' and len(query) == 1
             and query[0][0] == 'code' and re.fullmatch(r'\d{6}', query[0][1])):
         return f'https://stock.naver.com/domestic/stock/{query[0][1]}/price'
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+    return urlunsplit((parts.scheme, parts.netloc, path, urlencode(query), parts.fragment))
 
 
 def _source_urls(payload: dict, observed: list[str], required: bool = True) -> list[str]:
@@ -173,6 +176,7 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
 
     def rewrite(
         self, post: PostDraft, category_info: dict, review: dict, request: ContentRequest,
+        *, cache_only: bool = False,
     ) -> PostDraft:
         rules = "\n".join(f"- {r}" for r in category_info.get("rules", []))
         prompt = f"""
@@ -194,7 +198,8 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
         payload, response = request_json(
             self.client, model=self.model, stage="rewrite", request_id=request.id,
             schema=DRAFT_SCHEMA, journal=self.journal, max_output_tokens=12000,
-            retry_output_tokens=16000, reasoning={"effort": "low"}, input=prompt, **search,
+            retry_output_tokens=16000, reasoning={"effort": "low"}, input=prompt,
+            cache_only=cache_only, **search,
         )
         return replace(
             post,
@@ -205,6 +210,5 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
             tags=[str(x).lstrip("#") for x in payload.get("tags", post.tags)][:8],
             source_urls=_source_urls(payload, post.source_urls + _extract_urls(response),
                                     required=post.category != "cooking"),
-            as_of_date=str(payload.get("as_of_date", post.as_of_date)),
+            as_of_date=post.as_of_date,
         )
-

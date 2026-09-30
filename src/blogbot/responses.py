@@ -100,7 +100,7 @@ def _payload(response, stage: str) -> dict:
 
 def request_json(client, *, model: str, stage: str, request_id: str, schema: dict,
                  journal: Path, max_output_tokens: int, retry_output_tokens: int | None = None,
-                 **kwargs):
+                 cache_only: bool = False, **kwargs):
     """One retry only for an explicitly truncated response; no timeout blind retry."""
     cache = None
     if stage in {'benchmark', 'writer', 'reviewer', 'rewrite'}:
@@ -113,6 +113,8 @@ def request_json(client, *, model: str, stage: str, request_id: str, schema: dic
         if cache.exists():
             saved = json.loads(cache.read_text(encoding='utf-8'))
             return saved['payload'], saved['response']
+    if cache_only:
+        raise ResponseFailure(stage, 'cached_response_unavailable')
     budgets = [max_output_tokens]
     if retry_output_tokens and retry_output_tokens > max_output_tokens:
         budgets.append(retry_output_tokens)

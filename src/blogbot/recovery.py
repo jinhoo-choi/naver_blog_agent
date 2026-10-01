@@ -43,7 +43,8 @@ def rejected_checkpoint(settings, request):
     post = PostDraft(request.category, data['subcategory'], original['payload']['title'],
                      data['title'], data['body'], data['tags'], sources, str(today_kst()),
                      request_id=request.id, photos=request.photos, provenance=request.provenance)
-    return {'post': asdict(post), 'input': asdict(request), 'review': cached['reviewer']['payload']}
+    return {'post': asdict(post), 'input': asdict(request),
+            'review': cached.get('reviewer', {}).get('payload', {})}
 
 
 def recover_rejected(settings, conn, candidates):

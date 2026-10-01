@@ -42,6 +42,31 @@ def test_dart_shell_without_report_body_stops_before_generation(tmp_path, monkey
         prepare_primary_evidence(SimpleNamespace(db_path=tmp_path/'blog.db'), request)
 
 
+def test_prepare_recovers_editorial_failure_only_once_per_day(tmp_path, monkeypatch):
+    from blogbot.core import connect_db, save_post, today_kst
+    settings = SimpleNamespace(db_path=tmp_path/'blog.db', config={
+        'categories': {'parenting': {}, 'cooking': {}}})
+    monkeypatch.setattr('sys.argv', ['cloud', 'prepare'])
+    monkeypatch.setattr(cloud, 'load_settings', lambda: settings)
+    monkeypatch.setattr(cloud, 'restore', lambda _: None)
+    monkeypatch.setattr(cloud, 'seed_inputs', lambda _: None)
+    monkeypatch.setattr(cloud, 'pack', lambda *a: None)
+    calls = []
+    def run(*args, retry_failed=False, **kwargs):
+        calls.append(retry_failed)
+        if not retry_failed:
+            return [{'request_id': 'q', 'status': 'DROP_REVIEW'}]
+        with connect_db(settings.db_path) as conn:
+            save_post(conn, PostDraft('parenting', '정보', '질문', '제목', '본문', [], [],
+                      str(today_kst()), status='APPROVED', request_id='q'))
+        return [{'request_id': 'q', 'status': 'APPROVED'}]
+    monkeypatch.setattr(cloud, 'run_daily', run)
+    cloud.main()
+    cloud.main()
+    assert calls == [False, True, False]
+    assert json.loads((tmp_path/'auto-recovery.json').read_text())['attempted'] is True
+
+
 @pytest.mark.parametrize('status,failed', [('ERROR',True),('IMAGES_PENDING',True),
     ('COMMUNITY_SOURCE_PENDING',True),
     ('RESEARCH_REQUIRED',True),('APPROVED',False),('DROP_REVIEW',True),

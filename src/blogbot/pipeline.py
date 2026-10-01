@@ -11,6 +11,7 @@ from playwright.sync_api import Error as PlaywrightError
 
 from .config import Settings
 from .core import (
+    PostDraft,
     connect_db,
     load_post,
     mark_saved,
@@ -175,10 +176,10 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                         post.quality_score, post.status = score, 'TEXT_APPROVED'
                         with conn:
                             conn.execute("UPDATE posts SET subcategory=?, title=?, body=?, tags_json=?, "
-                                         "sources_json=?, quality_score=?, status=?, fingerprint=? WHERE id=?",
+                                         "sources_json=?, quality_score=?, status=?, fingerprint=?, provenance_json=? WHERE id=?",
                                          (post.subcategory, post.title, post.body, json.dumps(post.tags),
                                           json.dumps(post.source_urls), score, post.status,
-                                          post.fingerprint, row['id']))
+                                          post.fingerprint, json.dumps(post.provenance), row['id']))
                         atomic_json(stem.with_suffix('.json'),
                                     {'post': asdict(post), 'input': asdict(request), 'review': review,
                                      'repair_attempted': True})
@@ -238,7 +239,14 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                 if context_path.exists():
                     existing += json.loads(context_path.read_text()).get('published_titles', [])
                 stage = "writer"
-                post = llm.create_draft(request, info, existing)
+                if is_retry:
+                    from .recovery import rejected_checkpoint
+                    try:
+                        post = PostDraft(**rejected_checkpoint(settings, request)['post'])
+                    except (FileNotFoundError, KeyError):
+                        post = llm.create_draft(request, info, existing)
+                else:
+                    post = llm.create_draft(request, info, existing)
                 post = normalize_structure(post)
                 validate_post(post, info)
                 rewritten = False

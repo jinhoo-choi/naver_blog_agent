@@ -356,6 +356,39 @@ def test_dart_receipt_numbers_remain_distinct():
                      ['https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260930801115'])
 
 
+def test_source_error_recovery_reuses_completed_writer_without_repurchase(settings, monkeypatch):
+    from blogbot.images import atomic_json
+    from blogbot.recovery import rejected_checkpoint
+    request = ContentRequest('cached-url-error', 'parenting', {'question': '안전 질문'})
+    folder = settings.db_path.parent/'response-cache'
+    folder.mkdir()
+    url = 'https://www.healthychildren.org/English/safety-prevention/at-home/Pages/Make-Babys-Room-Safe.aspx'
+    atomic_json(folder/f'{today_kst()}-completed.json', {
+        'payload': {'title': '검증된 작성 응답', 'subcategory': '육아생활', 'body': '안전 본문',
+                    'tags': ['안전'], 'source_urls': [url]},
+        'response': {'id': 'completed-writer', 'output': [{'status': 'completed', 'action': {
+            'type': 'search', 'sources': [{'url': url+'?form=HealthyChildren'}]}}]}})
+    (settings.db_path.parent/'usage.jsonl').write_text(
+        '{"request_id":"cached-url-error","stage":"writer","response_id":"completed-writer"}\n')
+    with closing(connect_db(settings.db_path)) as conn:
+        reserve_attempt(conn, settings.config, 3, [request])
+        conn.execute("UPDATE attempts SET status='ERROR'")
+        conn.commit()
+    monkeypatch.setattr('blogbot.pipeline.collect_requests', lambda _: ([request], []))
+    monkeypatch.setattr('blogbot.pipeline.prepare_request', lambda _, r: r)
+    monkeypatch.setattr('blogbot.pipeline.validate_structure', lambda *a: None)
+    monkeypatch.setattr('blogbot.pipeline.generate_images', lambda s, r, p: p)
+    class LLM:
+        def __init__(self, *a): pass
+        def create_draft(self, *a): pytest.fail('Writer already completed')
+        def review(self, *a):
+            return {'scores': [5]*6, 'total': 30, 'decision': 'PASS', 'issues': [],
+                    'blocking_issues': [], 'rewrite_instructions': ''}
+    monkeypatch.setattr('blogbot.pipeline.BlogLLM', LLM)
+    assert rejected_checkpoint(settings, request)['review'] == {}
+    assert run_daily(settings, retry_failed=True)[0]['status'] == 'APPROVED'
+
+
 @pytest.mark.parametrize('opened,status,accepted', [
     (False, 'SUPPORTED', False), (True, 'UNVERIFIED', False), (True, 'SUPPORTED', True),
 ])

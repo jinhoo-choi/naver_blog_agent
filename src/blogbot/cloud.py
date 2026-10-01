@@ -175,7 +175,8 @@ def pack(settings, destination: Path) -> None:
         for path in (directory / 'source-evidence').glob('*.json'):
             archive.write(path, path.relative_to(directory))
         for name in ['blog.db', 'bundle-info.json', 'ready.json', 'context.json',
-                     'topic-cache.json', 'topic-selection.json', 'usage.jsonl', 'run-summary.json']:
+                     'topic-cache.json', 'topic-selection.json', 'usage.jsonl', 'run-summary.json',
+                     'auto-recovery.json']:
             path = directory/name
             if path.exists(): archive.write(path, name)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -270,6 +271,20 @@ def main():
         else:
             results = run_daily(settings, count=3, save_to_naver=False,
                                 retry_failed=args.mode == 'recover')
+            # One daily editorial/cache recovery. Never blindly repurchase a timed-out writer.
+            recovery_path = directory / 'auto-recovery.json'
+            recovery = json.loads(recovery_path.read_text()) if recovery_path.exists() else {}
+            recoverable = any(r.get('status') == 'DROP_REVIEW' or (
+                r.get('status') == 'ERROR' and r.get('reason') in {
+                    'unobserved_source_url', 'unobserved_body_url', 'invalid_reference_date',
+                }) for r in results)
+            if (args.mode == 'prepare' and recoverable
+                    and recovery.get('date') != str(today_kst())
+                    and getattr(settings, 'config', {}).get('categories')):
+                atomic_json(recovery_path, {'date': str(today_kst()), 'attempted': True})
+                retried = run_daily(settings, count=3, save_to_naver=False, retry_failed=True)
+                resolved = {r.get('request_id') for r in retried if r.get('status') == 'APPROVED'}
+                results = [r for r in results if r.get('request_id') not in resolved] + retried
         if args.mode != 'probe':
             with closing(connect_db(settings.db_path)) as conn:
                 unresolved = conn.execute(

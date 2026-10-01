@@ -267,7 +267,7 @@ blogbot resolve --id 12 --outcome discard
 | 본문 | `{"ref":"main","inputs":{"mode":"prepare"}}` |
 | 헤더 | Accept: application/vnd.github+json, Content-Type: application/json, X-GitHub-Api-Version: 2022-11-28 |
 | 인증 | Authorization: Bearer 토큰. 해당 저장소 Actions 쓰기 권한, 소유자 계정. 값은 cron-job.org에서만 관리 |
-| Work | 09:00 준비 확인·완료분 저장, 10:00 미완료분 검토·저장. 하루 합산 3건 |
+| Work | 09:15 승인 원고 임시저장, 10:15 누락 점검과 완료된 준비물 저장 재개. 하루 합산 3건 |
 
 HTTP 204는 실행 요청 접수이며 원고/이미지/임시저장 성공이 아닙니다. Actions 결과와 암호화 ready.json, 실제 네이버 저장을 각각 확인합니다. 외부 호출 실패를 이유로 유료 생성을 반복 호출하지 않습니다. 원고 생성과 무관한 점검은 GET workflow 조회로 인증을 확인할 수 있고, 생성 POST의 최초 실제 성공은 첫 예약 실행에서 확인합니다.
 

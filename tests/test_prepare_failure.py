@@ -100,6 +100,14 @@ def test_separators_at_major_sections_and_references_only():
     assert '&lt;script&gt;' in markdown_html('<script>alert(1)</script>')
 
 
+def test_tables_without_outer_pipes_render_as_tables_and_escape_cells():
+    rendered = markdown_html('항목 | 값\n-|-\n계약금액 | <script>')
+    assert '<table ' in rendered
+    assert rendered.count('<td ') == 4
+    assert '&lt;script&gt;' in rendered
+    assert '<script>' not in rendered
+
+
 def test_structure_repair_preserves_text_and_existing_titles():
     body = 'Opening\n\n' + '\n\n'.join(f'## Existing {i}\nVerified fact {i}' for i in range(5))
     post = PostDraft('investment', '시장·산업', 'topic', 'title', body, [], [], '2026-09-30')

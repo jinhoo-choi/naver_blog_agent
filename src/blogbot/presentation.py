@@ -30,7 +30,7 @@ def markdown_html(text: str) -> str:
     result = []
     for block in blocks:
         lines = block.splitlines()
-        if len(lines) >= 3 and lines[0].startswith("|") and re.fullmatch(
+        if len(lines) >= 3 and "|" in lines[0] and "|" in lines[1] and re.fullmatch(
             r"[| :\-]+", lines[1]
         ):
             rows = [lines[0], *lines[2:]]

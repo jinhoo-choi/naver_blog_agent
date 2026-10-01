@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 from dataclasses import asdict, replace
 
+from cryptography.fernet import Fernet, InvalidToken
 from openai import OpenAIError
 
 from .core import (
@@ -56,10 +58,13 @@ def rejected_checkpoint(settings, request):
 def editorial_patch(settings, post):
     """Apply an explicit dated operator correction; never confer approval."""
     key = hashlib.sha256(post.request_id.encode()).hexdigest()
-    path = settings.root / 'editorial' / post.as_of_date / f'{key}.json'
+    path = settings.root / 'editorial' / post.as_of_date / f'{key}.enc'
     if not path.exists():
         return post
-    data = json.loads(path.read_text())
+    try:
+        data = json.loads(Fernet(os.environ['BLOG_BUNDLE_KEY']).decrypt(path.read_bytes()))
+    except InvalidToken as exc:
+        raise ValueError('Editorial correction decryption failed') from exc
     if (set(data) - {'request_id', 'as_of_date', 'title', 'body', 'source_urls'}
             or data.get('request_id') != post.request_id
             or data.get('as_of_date') != post.as_of_date):

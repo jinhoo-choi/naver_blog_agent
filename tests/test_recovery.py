@@ -172,19 +172,21 @@ def test_legacy_manifest_starts_cooldown_without_api_call(settings, monkeypatch)
 
 
 
-def test_editorial_correction_preserves_identity_and_needs_new_review(tmp_path):
+def test_editorial_correction_preserves_identity_and_needs_new_review(tmp_path, monkeypatch):
     import hashlib
 
     from blogbot.recovery import editorial_patch
+    key = Fernet.generate_key()
+    monkeypatch.setenv('BLOG_BUNDLE_KEY', key.decode())
     post = replace(draft(), source_urls=['https://official.example/source'])
     root = SimpleNamespace(root=tmp_path)
     target = tmp_path / 'editorial' / post.as_of_date
     target.mkdir(parents=True)
-    path = target / (hashlib.sha256(post.request_id.encode()).hexdigest() + '.json')
+    path = target / (hashlib.sha256(post.request_id.encode()).hexdigest() + '.enc')
     assert editorial_patch(root, post) == post
     data = {'request_id': post.request_id, 'as_of_date': post.as_of_date,
             'body': '검증 지적을 반영한 원고', 'source_urls': post.source_urls}
-    path.write_text(json.dumps(data))
+    path.write_bytes(Fernet(key).encrypt(json.dumps(data).encode()))
     corrected = editorial_patch(root, post)
     assert corrected.body != post.body
     assert corrected.request_id == post.request_id
@@ -193,6 +195,10 @@ def test_editorial_correction_preserves_identity_and_needs_new_review(tmp_path):
     for change in [{'request_id': 'other'}, {'as_of_date': '2000-01-01'},
                    {'source_urls': ['https://unobserved.example/']}, {'status': 'APPROVED'},
                    {'body': ''}]:
-        path.write_text(json.dumps({**data, **change}))
+        path.write_bytes(Fernet(key).encrypt(json.dumps({**data, **change}).encode()))
         with pytest.raises(ValueError):
             editorial_patch(root, post)
+
+    path.write_bytes(Fernet(Fernet.generate_key()).encrypt(json.dumps(data).encode()))
+    with pytest.raises(ValueError, match='decryption'):
+        editorial_patch(root, post)

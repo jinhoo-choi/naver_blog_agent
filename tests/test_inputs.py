@@ -183,7 +183,7 @@ def test_dated_topic_replaces_only_selected_category_and_expires(tmp_path, monke
 @pytest.mark.parametrize('day,quotas,maximum', [
     ('2026-10-02', (1, 1, 1), 5),
     ('2026-10-03', (1, 0, 0), 1),
-    ('2026-10-04', (0, 0, 0), 1),
+    ('2026-10-04', (1, 0, 0), 1),
     ('2026-10-05', (1, 1, 1), 5),
     ('2026-10-10', (1, 0, 0), 1),
 ])
@@ -201,6 +201,7 @@ def test_weekend_feature_quota_and_selected_topic(tmp_path, monkeypatch, day, qu
     assert settings.daily_count == min(3, maximum)
     if today.weekday() >= 5:
         assert settings.config['community']['enabled'] is False
+        assert any('실제 캡처' in rule for rule in settings.config['categories']['parenting']['rules'])
     if day == '2026-10-03':
         monkeypatch.setattr('blogbot.inputs.fetch_community',
                             lambda _: pytest.fail('Weekend must not fetch community'))

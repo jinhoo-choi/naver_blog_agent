@@ -46,39 +46,20 @@ jobs:
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       PYTHONUTF8: '1'
     steps:
-      - name: Check weekly rest day (Asia/Seoul)
-        id: calendar
-        run: |
-          python - <<'PY'
-          import os
-          from datetime import datetime
-          from zoneinfo import ZoneInfo
-
-          today = datetime.now(ZoneInfo("Asia/Seoul")).date()
-          paused = today.weekday() == 6
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write(f"enabled={str(not paused).lower()}\n")
-          if paused:
-              print(f"CONTENT_PAUSED: {today}; Sunday rest after the Saturday feature.")
-          PY
       - uses: actions/checkout@v4
-        if: steps.calendar.outputs.enabled == 'true'
         with:
           persist-credentials: false
       - uses: actions/setup-python@v5
-        if: steps.calendar.outputs.enabled == 'true'
         with:
           python-version: '3.12'
       - name: Install API preparer
-        if: steps.calendar.outputs.enabled == 'true'
         run: python -m pip install -e .
       - name: Prepare or resume
-        if: steps.calendar.outputs.enabled == 'true'
         env:
           PREPARE_MODE: ${{ inputs.mode || 'prepare' }}
         run: python -m blogbot.cloud "$PREPARE_MODE"
       - name: Preserve encrypted checkpoints
-        if: always() && steps.calendar.outputs.enabled == 'true'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: blog-state-${{ github.run_id }}-${{ github.run_attempt }}

@@ -39,11 +39,9 @@ def load_settings() -> Settings:
         config["blog"]["daily_max"] = 1
         config["community"]["enabled"] = False
         for category, info in config["categories"].items():
-            info["max_daily"] = int(weekday == 5 and category == "parenting")
-        config["categories"]["parenting"]["rules"].append(
-            "주말 심화 콘텐츠: 하나의 실제 질문에 집중해 공식 근거·적용 조건·실천 단계·"
-            "흔한 실수 비교·주의 신호를 충실하게 설명한다. 모바일 짧은 문단과 3열 이하 표, "
-            "검증한 내용의 단계별 삽화를 활용하고 분량 채우기나 체험담 창작은 하지 않는다.")
+            info["max_daily"] = int(category == "parenting")
+        config["categories"]["parenting"]["rules"].extend(
+            config.get("editorial", {}).get("weekend", {}).get("rules", []))
 
     data_dir = Path(os.getenv("BLOG_DATA_DIR") or Path.home() / ".naver-blog-agent")
     db_path = Path(os.getenv("BLOG_DB_PATH") or data_dir / "blog.db")

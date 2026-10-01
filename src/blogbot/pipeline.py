@@ -95,8 +95,6 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
     limits = settings.config["blog"]
     if not int(limits["daily_min"]) <= requested <= int(limits["daily_max"]):
         raise ValueError("Daily count must be between 1 and 5")
-    if limits.get("weekend_feature") and today_kst().weekday() == 6:
-        return [{"status": "NO_ELIGIBLE_INPUT_OR_DAILY_LIMIT"}]
     if save_to_naver:
         make_writer(settings)
         with closing(connect_db(settings.db_path)) as conn:
@@ -214,7 +212,7 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
             today = today_kst()
             if settings.config['categories'][post.category]['max_daily'] == 0:
                 continue
-            if limits.get('weekend_feature') and today.weekday() == 5 and post.as_of_date != str(today):
+            if limits.get('weekend_feature') and today.weekday() >= 5 and post.as_of_date != str(today):
                 continue
             if not (today-timedelta(days=3)).isoformat() <= post.as_of_date <= today.isoformat():
                 continue

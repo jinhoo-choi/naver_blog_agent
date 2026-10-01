@@ -50,13 +50,41 @@ def test_quota_survives_connection_restart(settings):
         assert reserve_attempt(conn, settings.config, 2, candidates) is None
 
 
-def test_sunday_rest_before_input_collection(settings, monkeypatch):
+def test_sunday_generates_one_feature(settings, monkeypatch):
     from datetime import date
 
+    monkeypatch.setattr('blogbot.config.today_kst', lambda: date(2026, 10, 4))
+    monkeypatch.setattr('blogbot.core.today_kst', lambda: date(2026, 10, 4))
     monkeypatch.setattr('blogbot.pipeline.today_kst', lambda: date(2026, 10, 4))
+    settings = load_settings()
+    requests = [ContentRequest(f'weekend-{i}', 'parenting', {'question': '수유 자세'})
+                for i in range(2)]
     monkeypatch.setattr('blogbot.pipeline.collect_requests',
-                        lambda _: pytest.fail('Rest day must not collect or generate'))
-    assert run_daily(settings) == [{'status': 'NO_ELIGIBLE_INPUT_OR_DAILY_LIMIT'}]
+                        lambda _: (requests, []))
+    monkeypatch.setattr('blogbot.pipeline.prepare_request', lambda s, r: r)
+    monkeypatch.setattr('blogbot.pipeline.validate_structure', lambda *a: None)
+    monkeypatch.setattr('blogbot.pipeline.complete_media',
+                        lambda *a: {'status': 'APPROVED'})
+    calls = []
+
+    class FakeLLM:
+        def __init__(self, *a):
+            pass
+
+        def create_draft(self, request, info, existing):
+            calls.append(request.id)
+            post = draft()
+            post.category, post.subcategory = request.category, info['subcategories'][0]
+            post.request_id = request.id
+            post.as_of_date = '2026-10-04'
+            return post
+
+        def review(self, *a):
+            return {'scores': [5] * 6, 'total': 30, 'decision': 'PASS'}
+
+    monkeypatch.setattr('blogbot.pipeline.BlogLLM', FakeLLM)
+    assert [r['status'] for r in run_daily(settings)] == ['APPROVED']
+    assert calls == ['weekend-0']
 
 
 def test_review_rejects_inconsistent_or_unsafe_scores():

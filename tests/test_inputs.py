@@ -108,6 +108,13 @@ def test_clear_stock_event_and_sector_policy_are_distinguished():
     assert request.data['stock_name'] == request.data['stock_code'] == ''
 
 
+def test_specific_ir_event_is_not_lost_without_literal_earnings_keyword():
+    record, origin = investment_record()
+    record['facts'] = f'발간: 증권사 / {today_kst()}\n대표이사 IR 간담회, 2030년 별도 OPM 8% 전망'
+    request = community_request(record, origin, {})
+    assert request is not None and request.data['kind'] == 'research'
+
+
 @pytest.mark.parametrize('facts', [
     '발간일: 2020-01-01\n신규 계약 예정일: {today}',
     '날짜 미상\n영업이익 전망 상향',

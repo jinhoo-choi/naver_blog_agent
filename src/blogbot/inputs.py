@@ -194,7 +194,7 @@ def community_request(record: dict, provenance: dict, config: dict) -> ContentRe
         if not re.search(
             r"(계약|수주|기술이전|기술수출|임상|승인|허가|규제|정책|실적|가이던스|"
             r"자사주|배당|합병|분할|유증|무증|M&A|인수|매각|상장|특허|소송|"
-            r"매출|영업이익|순이익|증설|생산능력)",
+            r"매출|영업이익|순이익|증설|생산능력|IR\s*간담회)",
             issue_text,
             re.IGNORECASE,
         ):

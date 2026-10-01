@@ -140,6 +140,7 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                 if review_result(payload['review'])[1] == 'PASS' and not needs_primary_review:
                     continue
                 result = {'id': row['id'], 'category': post.category, 'request_id': post.request_id}
+                print(json.dumps({**result, 'status': 'REPAIR_STARTED'}), flush=True)
                 set_status(conn, row['id'], 'REPAIR_PENDING')
                 try:
                     resume_cached = bool(payload.get('repair_attempted'))
@@ -190,6 +191,7 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                     conn.execute("UPDATE attempts SET status=? WHERE request_id=?",
                                  (result['status'], post.request_id))
                 results.append(result)
+                print(json.dumps(result, ensure_ascii=False), flush=True)
         if retry_failed:
             # Replace the old investment prompt that accidentally contained infant scene instructions.
             for row in conn.execute("SELECT * FROM posts WHERE status='APPROVED' AND category='investment' "
@@ -227,7 +229,13 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                     continue
             category_key = request.category
             result = {"attempt": attempt_id, "category": category_key, "request_id": request.id}
+            if category_key == 'investment':
+                result['source_kind'] = request.data.get('kind')
+                result['eligible_source_kinds'] = {kind: sum(
+                    r.category == 'investment' and r.data.get('kind') == kind for r in candidates)
+                    for kind in ['research', 'policy', 'disclosure']}
             stage = "benchmark"
+            print(json.dumps({**result, 'status': 'PREPARATION_STARTED'}), flush=True)
             try:
                 info = settings.config["categories"][category_key]
                 request = prepare_request(settings, request)
@@ -329,6 +337,7 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
             with conn:
                 conn.execute("UPDATE attempts SET status=? WHERE id=?", (result["status"], attempt_id))
             results.append(result)
+            print(json.dumps(result, ensure_ascii=False), flush=True)
     if save_to_naver:
         results.extend(save_pending(settings))
     return results or [{"status": "NO_ELIGIBLE_INPUT_OR_DAILY_LIMIT"}]

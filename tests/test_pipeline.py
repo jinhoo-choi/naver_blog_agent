@@ -338,3 +338,39 @@ def test_cached_response_dict_preserves_observed_urls():
         {'status': 'failed', 'action': {'type': 'open_page', 'url': 'https://example.com/b'}},
     ]})
     assert result == ['https://example.com/a']
+
+
+@pytest.mark.parametrize('url,suffix', [
+    ('https://www.healthychildren.org/English/safety-prevention/at-home/Pages/Make-Babys-Room-Safe.aspx', '?form=HealthyChildren'),
+    ('https://acsm.org/resistance-training-guidelines-update-2026/', '?nocache=1775184380'),
+])
+def test_official_display_parameters_do_not_reject_completed_drafts(url, suffix):
+    assert _source_urls({'source_urls': [url], 'body': url}, [url + suffix]) == [url]
+    with pytest.raises(ValueError):
+        _source_urls({'source_urls': [url + '?document=2']}, [url + '?document=1' + suffix[1:]])
+
+
+def test_dart_receipt_numbers_remain_distinct():
+    with pytest.raises(ValueError):
+        _source_urls({'source_urls': ['https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260930801114']},
+                     ['https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260930801115'])
+
+
+@pytest.mark.parametrize('opened,status,accepted', [
+    (False, 'SUPPORTED', False), (True, 'UNVERIFIED', False), (True, 'SUPPORTED', True),
+])
+def test_high_score_requires_actual_source_checks(monkeypatch, opened, status, accepted):
+    from blogbot.llm import BlogLLM
+    post = draft()
+    post.category = 'parenting'
+    llm = object.__new__(BlogLLM)
+    llm.reviewer_prompt, llm.review_model, llm.client, llm.journal = '', 'test', None, None
+    payload = {'scores': [5]*6, 'total': 30, 'decision': 'PASS', 'issues': [],
+               'blocking_issues': [], 'rewrite_instructions': '', 'source_checks': [
+                   {'claim': '검증 대상', 'evidence': '원문 근거',
+                    'source_url': post.source_urls[0], 'status': status}]}
+    response = {'output': [{'status': 'completed', 'action': {
+        'type': 'open_page' if opened else 'search', 'url': post.source_urls[0]}}]}
+    monkeypatch.setattr('blogbot.llm.request_json', lambda *a, **kw: (payload, response))
+    result = llm.review(post, {}, ContentRequest('test', post.category, {}))
+    assert (review_result(result)[1] == 'PASS') is accepted

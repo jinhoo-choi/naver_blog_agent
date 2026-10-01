@@ -172,6 +172,8 @@ def pack(settings, destination: Path) -> None:
         for path in (directory / 'response-cache').glob('*.json'):
             if path.name[:10] >= cutoff:
                 archive.write(path, path.relative_to(directory))
+        for path in (directory / 'source-evidence').glob('*.json'):
+            archive.write(path, path.relative_to(directory))
         for name in ['blog.db', 'bundle-info.json', 'ready.json', 'context.json',
                      'topic-cache.json', 'topic-selection.json', 'usage.jsonl', 'run-summary.json']:
             path = directory/name

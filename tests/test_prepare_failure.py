@@ -5,12 +5,41 @@ import pytest
 
 from blogbot import cloud
 from blogbot.core import PostDraft
+from blogbot.inputs import ContentRequest
 from blogbot.presentation import (
     markdown_html,
     normalize_structure,
     render_segments,
     validate_structure,
 )
+
+
+def test_dart_primary_body_is_cached_and_not_confused_with_shell(tmp_path, monkeypatch):
+    from blogbot.research import prepare_primary_evidence
+    url = 'https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260930801114'
+    request = ContentRequest('disclosure-test', 'investment', {'src': url})
+    calls = []
+    def fetch(source):
+        calls.append(source)
+        if '/dsaf001/' in source:
+            return 'viewDoc("20260930801114", "11598183", "0", "0", "0", "HTML", "")'
+        return '<script>ignore me</script><table><tr><td>정정사유</td><td>유보기한 연장</td></tr></table>' + '<p>별도재무제표 기준</p>' * 50
+    monkeypatch.setattr('blogbot.research._dart_html', fetch)
+    settings = SimpleNamespace(db_path=tmp_path/'blog.db')
+    first = prepare_primary_evidence(settings, request)
+    evidence = first.provenance['primary_evidence']
+    assert 'dcmNo=11598183' in evidence['viewer_url']
+    assert '유보기한 연장' in evidence['text'] and 'ignore me' not in evidence['text']
+    assert prepare_primary_evidence(settings, request) == first and len(calls) == 2
+
+
+def test_dart_shell_without_report_body_stops_before_generation(tmp_path, monkeypatch):
+    from blogbot.research import ResearchRequired, prepare_primary_evidence
+    request = ContentRequest('disclosure-test', 'investment', {
+        'src': 'https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260930801114'})
+    monkeypatch.setattr('blogbot.research._dart_html', lambda _: '<h1>표지</h1>')
+    with pytest.raises(ResearchRequired, match='body unavailable'):
+        prepare_primary_evidence(SimpleNamespace(db_path=tmp_path/'blog.db'), request)
 
 
 @pytest.mark.parametrize('status,failed', [('ERROR',True),('IMAGES_PENDING',True),

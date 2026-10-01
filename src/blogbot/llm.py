@@ -55,6 +55,12 @@ def _source_identity(url: str) -> str:
     query = [(key, value) for key, value in parse_qsl(parts.query, keep_blank_values=True)
              if not (key.lower().startswith('utm_') or key.lower() in {'gclid', 'fbclid', 'srsltid'}
                      or (not key and value.startswith('___psv__')))]
+    # Site-specific display/cache switches; never discard arbitrary document parameters.
+    query = [(key, value) for key, value in query if not (
+        (parts.hostname == 'www.healthychildren.org' and key == 'form'
+         and value == 'HealthyChildren')
+        or (parts.hostname == 'acsm.org' and key == 'nocache' and value.isdigit())
+    )]
     # Verified Naver redirect on 2026-09-29; never equate different security codes.
     if (parts.scheme == 'https' and parts.netloc == 'finance.naver.com'
             and parts.path == '/item/main.naver' and len(query) == 1
@@ -115,6 +121,10 @@ class BlogLLM:
 요리는 이 입력의 레시피만 사용한다. 사진은 따로 첨부되므로 캡션 밖의 모습을 추측하지 않는다.
 육아는 입력된 실제 질문에 답한다. 선우의 월령·증상·경험을 추정하지 않는다.
 투자는 기존 봇의 facts/src/body를 시작점으로 삼고 검색으로 근거를 확인한다.
+primary_evidence가 있으면 실제 공시 본문이다. 봇 요약과 충돌하면 원문을 우선한다.
+DART 표지·검색 요약만으로 계약 내용이나 정정 사유를 확정하지 않는다.
+정정 공시는 정정 전/후, 정정사유, 매출 기준의 회사·연도·별도/연결,
+계약 종료일의 변동 조건, 지급 조건을 본문에서 직접 확인하고 핵심 정정 내용을 설명한다.
 원본 기준일과 오늘의 작성일을 구분한다. 오래된 수치를 오늘 시세처럼 쓰지 않는다.
 투자 카테고리에서는 공시·거래소·기업 IR·공공기관 등 1차 자료를 우선한다.
 육아 건강 관련 내용에서는 정부·공공기관·학회·병원 등 신뢰 가능한 자료를 우선한다.
@@ -132,7 +142,9 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
             retry_output_tokens=16000, reasoning={"effort": "low"}, input=prompt,
             **search,
         )
-        urls = _source_urls(payload, _extract_urls(response), required=category_key != "cooking")
+        evidence = request.provenance.get('primary_evidence', {})
+        observed = _extract_urls(response) + [evidence[k] for k in ['url', 'viewer_url'] if k in evidence]
+        urls = _source_urls(payload, observed, required=category_key != "cooking")
         return PostDraft(
             category=category_key,
             subcategory=str(payload["subcategory"]),
@@ -167,11 +179,30 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
             "tools": [{"type": "web_search"}], "tool_choice": "required",
             "max_tool_calls": 3,
         }
-        payload, _ = request_json(
+        payload, response = request_json(
             self.client, model=self.review_model, stage="reviewer", request_id=request.id,
             schema=REVIEW_SCHEMA, journal=self.journal, max_output_tokens=6000,
             retry_output_tokens=10000, reasoning={"effort": "low"}, input=prompt, **search,
+            include=["web_search_call.action.sources"] if search else [],
         )
+        if post.category != 'cooking':
+            checks = payload.get('source_checks', [])
+            evidence = request.provenance.get('primary_evidence', {})
+            opened = [_get(_get(item, 'action'), 'url')
+                      for item in _get(response, 'output', []) or []
+                      if _get(item, 'status') == 'completed'
+                      and _get(_get(item, 'action'), 'type') == 'open_page']
+            verified = {_source_identity(u) for u in opened if u}
+            if evidence:
+                verified.update(_source_identity(evidence[k]) for k in ['url', 'viewer_url'])
+            if (not checks or any(check.get('status') != 'SUPPORTED'
+                    or not check.get('evidence', '').strip()
+                    or _source_identity(check.get('source_url', '')) not in verified
+                    for check in checks)):
+                payload['decision'] = 'REWRITE'
+                payload['blocking_issues'] = payload.get('blocking_issues', []) + [
+                    '핵심 주장별 원문 열람·근거 대조가 완료되지 않았습니다.']
+                payload['rewrite_instructions'] = '실제 원문으로 확인한 핵심 주장만 남기세요.'
         return payload
 
     def rewrite(

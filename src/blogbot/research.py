@@ -1,9 +1,13 @@
 """Read-only Naver structure/style benchmark; no competitor prose is retained."""
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from dataclasses import replace
-from urllib.parse import urlencode, urlsplit
+from html.parser import HTMLParser
+from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.request import Request, urlopen
 
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
@@ -112,6 +116,7 @@ def collect_benchmark(query: str, profile_dir: str, target: int = 7) -> dict:
 
 
 def prepare_request(settings, request):
+    request = prepare_primary_evidence(settings, request)
     if not settings.config.get("editorial", {}).get("enabled", True):
         return request
     query = public_query(request)
@@ -143,4 +148,80 @@ def prepare_request(settings, request):
         return replace(request, provenance={**request.provenance, "benchmark": benchmark})
     benchmark = collect_benchmark(query, settings.naver_profile_dir)
     return replace(request, provenance={**request.provenance, "benchmark": benchmark})
+
+
+class _DisclosureText(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.parts = []
+        self.hidden = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in {'script', 'style'}:
+            self.hidden += 1
+        if tag in {'tr', 'p', 'br', 'div'}:
+            self.parts.append('\n')
+        elif tag in {'td', 'th'}:
+            self.parts.append(' | ')
+
+    def handle_endtag(self, tag):
+        if tag in {'script', 'style'}:
+            self.hidden = max(0, self.hidden - 1)
+
+    def handle_data(self, data):
+        if not self.hidden:
+            self.parts.append(data)
+
+
+def _dart_html(url):
+    with urlopen(Request(url, headers={'User-Agent': 'naver-blog-agent/0.5'}), timeout=30) as response:
+        if urlsplit(response.url).hostname != 'dart.fss.or.kr':
+            raise ResearchRequired('Unexpected disclosure redirect')
+        data = response.read(2_000_001)
+    if len(data) > 2_000_000:
+        raise ResearchRequired('Disclosure size limit exceeded')
+    # DART uses UTF-8 for the shell and EUC-KR for older HTML report viewers.
+    try:
+        return data.decode('utf-8')
+    except UnicodeDecodeError:
+        return data.decode('cp949')
+
+
+def prepare_primary_evidence(settings, request):
+    url = request.data.get('src', '')
+    parts = urlsplit(url)
+    if request.category != 'investment' or parts.hostname != 'dart.fss.or.kr':
+        return request
+    numbers = parse_qs(parts.query).get('rcpNo', [])
+    if (parts.scheme != 'https' or parts.path != '/dsaf001/main.do'
+            or len(numbers) != 1 or not re.fullmatch(r'\d{14}', numbers[0])):
+        raise ResearchRequired('Invalid disclosure identity')
+    number = numbers[0]
+    folder = settings.db_path.parent / 'source-evidence'
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / (hashlib.sha256(url.encode()).hexdigest() + '.json')
+    if path.exists():
+        evidence = json.loads(path.read_text())
+    else:
+        shell = _dart_html(url)
+        match = re.search(r'viewDoc\(\s*["\']' + number
+                          + r'["\']\s*,\s*["\'](\d+)["\']\s*,\s*["\']0["\']', shell)
+        if not match:
+            raise ResearchRequired('Disclosure report body unavailable')
+        viewer = 'https://dart.fss.or.kr/report/viewer.do?' + urlencode({
+            'rcpNo': number, 'dcmNo': match[1], 'eleId': '0', 'offset': '0',
+            'length': '0', 'dtd': 'HTML',
+        })
+        parser = _DisclosureText()
+        parser.feed(_dart_html(viewer))
+        text = '\n'.join(' '.join(line.split()) for line in ''.join(parser.parts).splitlines()
+                         if line.strip())
+        if not 300 <= len(text) <= 30000:
+            raise ResearchRequired('Disclosure report text incomplete')
+        evidence = {'url': url, 'viewer_url': viewer, 'text': text,
+                    'sha256': hashlib.sha256(text.encode()).hexdigest(),
+                    'retrieved_date': str(today_kst())}
+        from .images import atomic_json
+        atomic_json(path, evidence)
+    return replace(request, provenance={**request.provenance, 'primary_evidence': evidence})
 

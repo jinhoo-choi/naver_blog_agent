@@ -29,7 +29,7 @@ from .inputs import ContentRequest, collect_requests
 from .llm import BlogLLM
 from .naver import NaverDraftWriter
 from .presentation import normalize_structure, validate_structure
-from .research import ResearchRequired, prepare_request
+from .research import ResearchRequired, prepare_primary_evidence, prepare_request
 from .topics import rank_candidates
 
 
@@ -133,7 +133,10 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                 post = load_post(row)
                 stem = settings.artifact_dir / f"{post.as_of_date}-{row['id']:05d}"
                 payload = json.loads(stem.with_suffix('.json').read_text())
-                if review_result(payload['review'])[1] == 'PASS':
+                needs_primary_review = (post.category == 'investment'
+                    and any('://dart.fss.or.kr/dsaf001/main.do?' in u for u in post.source_urls)
+                    and not payload['input'].get('provenance', {}).get('primary_evidence'))
+                if review_result(payload['review'])[1] == 'PASS' and not needs_primary_review:
                     continue
                 result = {'id': row['id'], 'category': post.category, 'request_id': post.request_id}
                 set_status(conn, row['id'], 'REPAIR_PENDING')
@@ -142,12 +145,22 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                     if resume_cached:
                         # Operational status changed after the original request was cached.
                         post.status = payload['post']['status']
-                    atomic_json(stem.with_suffix('.json'), {**payload, 'repair_attempted': True})
                     request = ContentRequest(**payload['input'])
+                    request = prepare_primary_evidence(settings, request)
                     info = settings.config['categories'][post.category]
                     if llm is None:
                         llm = BlogLLM(settings.openai_api_key, settings.openai_model, settings.root,
                                       settings.review_model, settings.db_path.parent / 'usage.jsonl')
+                    if needs_primary_review and not resume_cached:
+                        payload['review'] = llm.review(post, info, request)
+                        # Even a high score must address a legacy draft's missing original report.
+                        payload['review']['decision'] = 'REWRITE'
+                        payload['review']['rewrite_instructions'] += (
+                            '\n직접 확보한 공시 본문을 기준으로 정정사유·전후, '
+                            '매출 기준·계약조건을 반영해 원고 전체를 다시 작성하세요.')
+                    post.provenance = request.provenance
+                    payload['post'], payload['input'] = asdict(post), asdict(request)
+                    atomic_json(stem.with_suffix('.json'), {**payload, 'repair_attempted': True})
                     post = llm.rewrite(post, info, payload['review'], request,
                                        **({'cache_only': True} if resume_cached else {}))
                     post = normalize_structure(post)

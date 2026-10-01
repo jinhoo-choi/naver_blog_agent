@@ -31,6 +31,10 @@ REVIEW_SCHEMA = object_schema({
                'minItems': 6, 'maxItems': 6},
     'total': {'type': 'integer'}, 'decision': {'type': 'string', 'enum': ['PASS', 'REWRITE', 'DROP']},
     'issues': STRINGS, 'blocking_issues': STRINGS, 'rewrite_instructions': STRING,
+    'source_checks': {'type': 'array', 'items': object_schema({
+        'claim': STRING, 'source_url': STRING, 'evidence': STRING,
+        'status': {'type': 'string', 'enum': ['SUPPORTED', 'CONTRADICTED', 'UNVERIFIED']},
+    })},
 })
 BENCHMARK_SCHEMA = object_schema({
     'records': {'type': 'array', 'items': object_schema({'url': STRING, 'observations': STRINGS})},

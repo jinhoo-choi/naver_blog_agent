@@ -169,3 +169,30 @@ def test_legacy_manifest_starts_cooldown_without_api_call(settings, monkeypatch)
         generate_images(settings, request, post)
     assert json.loads(manifest.read_text())['updated_at'] == 100_000.0
     assert len(calls) == 1
+
+
+
+def test_editorial_correction_preserves_identity_and_needs_new_review(tmp_path):
+    import hashlib
+
+    from blogbot.recovery import editorial_patch
+    post = replace(draft(), source_urls=['https://official.example/source'])
+    root = SimpleNamespace(root=tmp_path)
+    target = tmp_path / 'editorial' / post.as_of_date
+    target.mkdir(parents=True)
+    path = target / (hashlib.sha256(post.request_id.encode()).hexdigest() + '.json')
+    assert editorial_patch(root, post) == post
+    data = {'request_id': post.request_id, 'as_of_date': post.as_of_date,
+            'body': '검증 지적을 반영한 원고', 'source_urls': post.source_urls}
+    path.write_text(json.dumps(data))
+    corrected = editorial_patch(root, post)
+    assert corrected.body != post.body
+    assert corrected.request_id == post.request_id
+    assert corrected.status == post.status  # Applying a patch does not change approval status.
+    assert corrected.provenance == post.provenance
+    for change in [{'request_id': 'other'}, {'as_of_date': '2000-01-01'},
+                   {'source_urls': ['https://unobserved.example/']}, {'status': 'APPROVED'},
+                   {'body': ''}]:
+        path.write_text(json.dumps({**data, **change}))
+        with pytest.raises(ValueError):
+            editorial_patch(root, post)

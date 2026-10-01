@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 from openai import OpenAIError
 
@@ -53,6 +53,28 @@ def rejected_checkpoint(settings, request):
             if reviewed_latest else {}}
 
 
+def editorial_patch(settings, post):
+    """Apply an explicit dated operator correction; never confer approval."""
+    key = hashlib.sha256(post.request_id.encode()).hexdigest()
+    path = settings.root / 'editorial' / post.as_of_date / f'{key}.json'
+    if not path.exists():
+        return post
+    data = json.loads(path.read_text())
+    if (set(data) - {'request_id', 'as_of_date', 'title', 'body', 'source_urls'}
+            or data.get('request_id') != post.request_id
+            or data.get('as_of_date') != post.as_of_date):
+        raise ValueError('Editorial correction identity mismatch')
+    for name in ('title', 'body'):
+        if name in data and (not isinstance(data[name], str) or not data[name].strip()):
+            raise ValueError('Editorial correction must contain nonempty text')
+    sources = data.get('source_urls', post.source_urls)
+    if (not isinstance(sources, list) or not sources
+            or any(url not in post.source_urls for url in sources)):
+        raise ValueError('Editorial correction cannot add unobserved sources')
+    return replace(post, title=data.get('title', post.title), body=data.get('body', post.body),
+                   source_urls=sources)
+
+
 def recover_rejected(settings, conn, candidates):
     from .pipeline import complete_media
     results, handled = [], set()
@@ -85,6 +107,17 @@ def recover_rejected(settings, conn, candidates):
             info = settings.config['categories'][category]
             validate_post(post, info)
             review = payload['review']
+            corrected = editorial_patch(settings, post)
+            if corrected != post:
+                validate_post(corrected, info)
+                validate_structure(corrected, settings.config.get('editorial', {}).get('require_structure', True))
+                llm = BlogLLM(settings.openai_api_key, settings.openai_model, settings.root,
+                              settings.review_model, settings.db_path.parent / 'usage.jsonl')
+                review = llm.review(corrected, info, request)
+                post = corrected
+                payload = {'post': asdict(post), 'input': asdict(request), 'review': review,
+                           'revision_count': payload.get('revision_count', 0)}
+                atomic_json(path, payload)
             if review_result(review)[1] != 'PASS':
                 resumed = bool(payload.get('revision_attempted'))
                 if not resumed and payload.get('revision_count', 0) >= 2:

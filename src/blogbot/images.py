@@ -35,7 +35,8 @@ def image_prompt(post: PostDraft, section: str, *, thumbnail: bool = False) -> s
         scene = '''For parenting about an infant: show one plainly recognizable awake baby with round baby
 proportions, short limbs and a plain onesie, or a relevant simple object. Never substitute an
 adult, a screen/tablet, office work or a generic checking scene for an infant topic.
-No toys, pillows, blankets, cords or loose objects in or near an infant sleep space.'''
+No toys, pillows, blankets, cords or loose objects in or near an infant sleep space.
+If an infant sleep scene is relevant, show the infant on their back in fitted pajamas on a firm flat mattress with only a fitted sheet. Never draw blankets, pillows, toys or loose bedding in the crib, including curved blanket-like covers. Do not imply a toy becomes automatically safe after a birthday.'''
     elif post.category == 'investment':
         figures = ''
         scene = '''Objects only: no people, children, infants, baby-care props or medical crosses.
@@ -190,3 +191,4 @@ def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostD
         if errors:
             raise ImagePending('Some images are pending; completed files retained') from errors[0]
     return replace(post, photos=photos)
+

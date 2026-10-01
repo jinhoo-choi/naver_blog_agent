@@ -17,6 +17,8 @@ class Segment:
 
 def paragraph(text: str, size: int = 16, bold: bool = False) -> str:
     content = html.escape(text).replace("\n", "<br>")
+    content = re.sub(r"\*\*([^*\n]+)\*\*", r"<b>\1</b>", content)
+    content = re.sub(r"__([^_\n]+)__", r"<u>\1</u>", content)
     if bold:
         content = f"<b>{content}</b>"
     color = "#28564f" if bold else "#777777" if size == 12 else "#222222"
@@ -25,7 +27,7 @@ def paragraph(text: str, size: int = 16, bold: bool = False) -> str:
 
 
 def markdown_html(text: str) -> str:
-    """Only headings, paragraphs, lists and pipe tables. Never execute source HTML."""
+    """Escaped headings, emphasis, callouts, lists and tables; never execute source HTML."""
     blocks = re.split(r"\n\s*\n", text.strip())
     result = []
     for block in blocks:
@@ -47,10 +49,14 @@ def markdown_html(text: str) -> str:
             pending = []
             for line in lines:
                 heading = re.match(r"^(#{2,3})\s+(.+)$", line)
-                if heading:
+                callout = re.match(r"^>\s+(.+)$", line)
+                if heading or callout:
                     if pending:
                         result.append(paragraph("\n".join(pending)))
                         pending = []
+                    if callout:
+                        result.append(paragraph(callout[1], 20, True))
+                        continue
                     if len(heading[1]) == 2:
                         result.append("<hr>")
                     result.append(paragraph(heading[2], 24 if len(heading[1]) == 2 else 19, True))

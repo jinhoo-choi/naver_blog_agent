@@ -65,6 +65,10 @@ def normalize_structure(post: PostDraft) -> PostDraft:
     """Fix presentation only, preserving factual text and existing section titles."""
     body = re.sub(r'^\[(?:도해|삽화)(?:\s*계획)?\][^\n]*\n?', '', post.body, flags=re.MULTILINE)
     heads = list(re.finditer(r'^## .+$', body, re.MULTILINE))
+    if len(heads) > 6:
+        for heading in reversed(heads[6:]):
+            body = body[:heading.start()] + '#' + body[heading.start():]
+        heads = heads[:6]
     if len(heads) >= 5 and not re.search(r'^### .+', body, re.MULTILINE):
         last = heads[-1].start()
         body = body[:last] + '#' + body[last:]

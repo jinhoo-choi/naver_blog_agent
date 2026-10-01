@@ -108,6 +108,55 @@ def test_tables_without_outer_pipes_render_as_tables_and_escape_cells():
     assert '<script>' not in rendered
 
 
+def test_official_reference_body_is_cached_and_unknown_hosts_are_skipped(tmp_path, monkeypatch):
+    from blogbot.inputs import ContentRequest
+    from blogbot.research import prepare_reference_evidence
+    url = 'https://www.cdc.gov/article.html'
+    calls = []
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def read(self, n): return ('<main>' + 'Original evidence. '*30 + '</main><script>unsafe</script>').encode()
+    def fetch(req, **kw):
+        calls.append(req.full_url)
+        response = Response()
+        response.url = req.full_url
+        return response
+    monkeypatch.setattr('blogbot.research.urlopen', fetch)
+    request = ContentRequest('reference', 'exercise', {})
+    first = prepare_reference_evidence(tmp_path, request, [url, 'https://untrusted.example/article'])
+    assert len(first.provenance['reference_evidence']) == 1
+    assert 'unsafe' not in first.provenance['reference_evidence'][0]['text']
+    assert prepare_reference_evidence(tmp_path, request, [url]) == first
+    assert calls == [url]
+
+
+def test_failed_reference_fetch_is_not_evidence_and_is_not_retried_today(tmp_path, monkeypatch):
+    from blogbot.inputs import ContentRequest
+    from blogbot.research import prepare_reference_evidence
+    calls = []
+    def fetch(*a, **kw):
+        calls.append(1)
+        raise OSError('unavailable')
+    monkeypatch.setattr('blogbot.research.urlopen', fetch)
+    request = ContentRequest('reference', 'exercise', {})
+    urls = ['https://www.nasm.org/article']
+    for _ in range(2):
+        result = prepare_reference_evidence(tmp_path, request, urls)
+        assert result.provenance['reference_evidence'] == []
+    assert len(calls) == 1
+
+
+def test_extra_major_sections_are_demoted_without_changing_facts():
+    from blogbot.presentation import normalize_structure
+    body = '요약\n\n' + '\n\n'.join(f'## 구역{i}\n내용{i}' for i in range(8))
+    post = PostDraft('exercise', '등', '주제', '제목', body, [], [], '2026-10-01')
+    normalized = normalize_structure(post)
+    assert sum(line.startswith('## ') for line in normalized.body.splitlines()) == 6
+    assert '### 구역6\n내용6' in normalized.body and '### 구역7\n내용7' in normalized.body
+    assert normalized.body.replace('### ', '## ') == body
+
+
 def test_structure_repair_preserves_text_and_existing_titles():
     body = 'Opening\n\n' + '\n\n'.join(f'## Existing {i}\nVerified fact {i}' for i in range(5))
     post = PostDraft('investment', '시장·산업', 'topic', 'title', body, [], [], '2026-09-30')

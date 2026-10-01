@@ -102,6 +102,8 @@ def _checked_review(payload, response, request):
     verified = {_source_identity(u) for u in read_urls if u}
     if evidence:
         verified.update(_source_identity(evidence[k]) for k in ['url', 'viewer_url'])
+    verified.update(_source_identity(e['url'])
+                    for e in request.provenance.get('reference_evidence', []) if e.get('text'))
     if (not checks or any(check.get('status') != 'SUPPORTED'
             or not check.get('evidence', '').strip()
             or _source_identity(check.get('source_url', '')) not in verified for check in checks)):
@@ -212,6 +214,9 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
         return {k: v for k, v in post.__dict__.items() if k != "photos"}
 
     def review(self, post: PostDraft, category_info: dict, request: ContentRequest) -> dict:
+        from .research import prepare_reference_evidence
+        request = prepare_reference_evidence(
+            self.journal.parent if self.journal else None, request, post.source_urls)
         rules = "\n".join(f"- {r}" for r in category_info.get("rules", []))
         prompt = f"""
 {self.reviewer_prompt}
@@ -239,6 +244,10 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
         self, post: PostDraft, category_info: dict, review: dict, request: ContentRequest,
         *, cache_only: bool = False,
     ) -> PostDraft:
+        if not cache_only:
+            from .research import prepare_reference_evidence
+            request = prepare_reference_evidence(
+                self.journal.parent if self.journal else None, request, post.source_urls)
         rules = "\n".join(f"- {r}" for r in category_info.get("rules", []))
         prompt = f"""
 {self.writer_prompt}

@@ -20,7 +20,7 @@ from .images import atomic_json
 from .inputs import ContentRequest
 from .llm import BlogLLM, _checked_review, _historical_source_urls, _source_urls
 from .presentation import normalize_structure, validate_structure
-from .research import prepare_request
+from .research import prepare_reference_evidence, prepare_request
 
 
 def rejected_checkpoint(settings, request):
@@ -42,6 +42,7 @@ def rejected_checkpoint(settings, request):
     data = latest['payload']
     reviewer = cached.get('reviewer', {})
     sources = _source_urls(data, _historical_source_urls(directory / 'usage.jsonl', request.id))
+    request = prepare_reference_evidence(directory, request, sources)
     post = PostDraft(request.category, data['subcategory'], original['payload']['title'],
                      data['title'], data['body'], data['tags'], sources, str(today_kst()),
                      request_id=request.id, photos=request.photos, provenance=request.provenance)
@@ -68,9 +69,14 @@ def recover_rejected(settings, conn, candidates):
         result = {'attempt': row['id'], 'category': category, 'request_id': row['request_id']}
         key = hashlib.sha256(row['request_id'].encode()).hexdigest()
         path = settings.db_path.parent / 'response-cache' / f'{today_kst()}-recovery-{key}.json'
+        path.parent.mkdir(parents=True, exist_ok=True)
         try:
             if path.exists():
                 payload = json.loads(path.read_text())
+                latest = rejected_checkpoint(settings, ContentRequest(**payload['input']))
+                if (latest['review'] and latest['post']['body'] != payload['post']['body']
+                        and payload.get('revision_attempted')):
+                    payload = {**latest, 'revision_count': payload.get('revision_count', 0) + 1}
             else:
                 request = prepare_request(settings, by_id[row['request_id']])
                 payload = rejected_checkpoint(settings, request)
@@ -81,6 +87,9 @@ def recover_rejected(settings, conn, candidates):
             review = payload['review']
             if review_result(review)[1] != 'PASS':
                 resumed = bool(payload.get('revision_attempted'))
+                if not resumed and payload.get('revision_count', 0) >= 2:
+                    results.append({**result, 'status': 'DROP_REVIEW', 'reason': 'editorial_revision_limit'})
+                    continue
                 atomic_json(path, {**payload, 'revision_attempted': True})
                 llm = BlogLLM(settings.openai_api_key, settings.openai_model, settings.root,
                               settings.review_model, settings.db_path.parent / 'usage.jsonl')
@@ -88,6 +97,9 @@ def recover_rejected(settings, conn, candidates):
                 post = normalize_structure(post)
                 validate_post(post, info)
                 review = llm.review(post, info, request)
+                atomic_json(path, {'post': asdict(post), 'input': asdict(request), 'review': review,
+                                   'revision_count': payload.get('revision_count', 0) + 1})
+            post = normalize_structure(post)
             validate_structure(post, settings.config.get('editorial', {}).get('require_structure', True))
             score, decision = review_result(review)
             other_titles = [r[0] for r in conn.execute(

@@ -18,6 +18,8 @@ from blogbot.pipeline import run_daily, save_pending
 
 @pytest.fixture
 def settings(tmp_path, monkeypatch):
+    monkeypatch.setattr('blogbot.research.prepare_reference_evidence', lambda d, r, u: r)
+    monkeypatch.setattr('blogbot.recovery.prepare_reference_evidence', lambda d, r, u: r)
     monkeypatch.setenv("BLOG_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("NAVER_PROFILE_DIR", str(tmp_path / "profile"))
     monkeypatch.setenv("NAVER_BLOG_ID", "example")
@@ -480,3 +482,35 @@ def test_recovery_preserves_sources_observed_in_earlier_revisions(tmp_path):
             json.dumps({'response': response}))
     assert set(_historical_source_urls(journal, 'same')) == {
         'https://example.com/older', 'https://example.com/latest'}
+
+
+def test_editorial_recovery_updates_checkpoint_and_caps_new_revisions(settings, monkeypatch):
+    from dataclasses import asdict
+
+    from blogbot.recovery import recover_rejected
+    post = draft()
+    post.category, post.subcategory, post.request_id = 'parenting', '육아생활', 'revision-limit'
+    request = ContentRequest(post.request_id, post.category, {})
+    monkeypatch.setattr('blogbot.recovery.prepare_request', lambda s, r: r)
+    monkeypatch.setattr('blogbot.recovery.rejected_checkpoint', lambda *a: {
+        'post': asdict(post), 'input': asdict(request), 'review': {'decision': 'REWRITE'}})
+    monkeypatch.setattr('blogbot.recovery.validate_structure', lambda *a: None)
+    calls = []
+    class LLM:
+        def __init__(self, *a): pass
+        def rewrite(self, p, *a, cache_only=False):
+            calls.append((p.body, cache_only))
+            p.body += ' 수정'
+            return p
+        def review(self, *a):
+            return {'scores': [4,5,5,4,5,5], 'total': 28, 'decision': 'REWRITE',
+                    'issues': ['공식 근거로 수정 필요'], 'rewrite_instructions': '수정'}
+    monkeypatch.setattr('blogbot.recovery.BlogLLM', LLM)
+    with closing(connect_db(settings.db_path)) as conn, conn:
+        conn.execute('INSERT INTO attempts(day,category,request_id,status) VALUES(?,?,?,?)',
+                     (str(today_kst()), post.category, post.request_id, 'DROP_REVIEW'))
+        assert recover_rejected(settings, conn, [request])[0]['status'] == 'DROP_REVIEW'
+        assert recover_rejected(settings, conn, [request])[0]['status'] == 'DROP_REVIEW'
+        assert recover_rejected(settings, conn, [request])[0]['reason'] == 'editorial_revision_limit'
+    assert len(calls) == 2 and calls[1][0] == calls[0][0] + ' 수정'
+    assert all(not cached for _, cached in calls)

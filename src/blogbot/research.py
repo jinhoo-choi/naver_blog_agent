@@ -225,3 +225,45 @@ def prepare_primary_evidence(settings, request):
         atomic_json(path, evidence)
     return replace(request, provenance={**request.provenance, 'primary_evidence': evidence})
 
+
+def prepare_reference_evidence(directory, request, urls):
+    """Read bounded official HTML references, caching failures as well as successful reads."""
+    if request.category not in {'parenting', 'exercise'} or directory is None:
+        return request
+    allowed = {'www.nasm.org', 'www.cdc.gov', 'www.healthychildren.org',
+               'www.heart.org', 'www.lullabytrust.org.uk', 'www.acefitness.org'}
+    folder = directory / 'source-evidence'
+    folder.mkdir(parents=True, exist_ok=True)
+    references = []
+    from .images import atomic_json
+    candidates = [u for u in dict.fromkeys(urls) if urlsplit(u).scheme == 'https'
+                  and urlsplit(u).hostname in allowed and not urlsplit(u).path.endswith('.pdf')]
+    for url in candidates[:3]:
+        parts = urlsplit(url)
+        if parts.scheme != 'https' or parts.hostname not in allowed or parts.path.endswith('.pdf'):
+            continue
+        path = folder / ('reference-' + hashlib.sha256(url.encode()).hexdigest() + '.json')
+        evidence = json.loads(path.read_text()) if path.exists() else {}
+        if evidence.get('retrieved_date') != str(today_kst()):
+            evidence = {'url': url, 'retrieved_date': str(today_kst()), 'text': ''}
+            try:
+                with urlopen(Request(url, headers={'User-Agent': 'naver-blog-agent/0.5'}), timeout=25) as response:
+                    if urlsplit(response.url).hostname != parts.hostname:
+                        raise ResearchRequired('Unexpected reference redirect')
+                    raw = response.read(2_000_001)
+                if len(raw) > 2_000_000:
+                    raise ResearchRequired('Reference size limit exceeded')
+                parser = _DisclosureText()
+                parser.feed(raw.decode('utf-8'))
+                text = ' '.join(' '.join(parser.parts).split())
+                if not 300 <= len(text) <= 30000:
+                    raise ResearchRequired('Reference text incomplete')
+                evidence.update(text=text, sha256=hashlib.sha256(text.encode()).hexdigest())
+            except (OSError, UnicodeError, ResearchRequired) as exc:
+                evidence['error'] = type(exc).__name__
+            atomic_json(path, evidence)
+        if evidence.get('text'):
+            references.append(evidence)
+        if len(references) == 3:
+            break
+    return replace(request, provenance={**request.provenance, 'reference_evidence': references})

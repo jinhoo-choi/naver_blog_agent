@@ -356,6 +356,25 @@ def test_dart_receipt_numbers_remain_distinct():
                      ['https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260930801115'])
 
 
+@pytest.mark.parametrize('url,suffix', [
+    ('https://www.healthychildren.org/english/ages-stages/baby/sleep/pages/a-parents-guide-to-safe-sleep.aspx', '?keyword=joint'),
+    ('https://publications.aap.org/pediatrics/article/doi/10.1542/peds.2022-057990/188304/Sleep-Related-Infant-Deaths-Updated-2022', '?autologincheck=redirected'),
+    ('https://www.mayoclinic.org/healthy-lifestyle/fitness/in-depth/weight-training/art-20045842', '?p=1&pg=1'),
+])
+def test_recovered_official_article_variants_preserve_document_identity(url, suffix):
+    assert _source_urls({'source_urls': [url]}, [url + suffix]) == [url]
+    with pytest.raises(ValueError):
+        _source_urls({'source_urls': [url]}, [url + '?document=2'])
+
+
+def test_aap_doi_and_volume_routes_keep_article_id():
+    doi = 'https://publications.aap.org/pediatrics/article/doi/10.1542/peds.2022-057990/188304/Sleep-Related-Infant-Deaths-Updated-2022'
+    volume = 'https://publications.aap.org/pediatrics/article/150/1/e2022057990/188304/Sleep-Related-Infant-Deaths-Updated-2022-Recommendations'
+    assert _source_urls({'source_urls': [doi]}, [volume]) == [doi]
+    with pytest.raises(ValueError):
+        _source_urls({'source_urls': [doi]}, [volume.replace('188304', '188305')])
+
+
 def test_source_error_recovery_reuses_completed_writer_without_repurchase(settings, monkeypatch):
     from blogbot.images import atomic_json
     from blogbot.recovery import rejected_checkpoint
@@ -387,6 +406,27 @@ def test_source_error_recovery_reuses_completed_writer_without_repurchase(settin
     monkeypatch.setattr('blogbot.pipeline.BlogLLM', LLM)
     assert rejected_checkpoint(settings, request)['review'] == {}
     assert run_daily(settings, retry_failed=True)[0]['status'] == 'APPROVED'
+
+
+def test_recovery_skips_failed_replacement_after_category_is_approved(settings, monkeypatch):
+    request = ContentRequest('replacement-exercise', 'exercise', {'question': '자세'})
+    with closing(connect_db(settings.db_path)) as conn, conn:
+        conn.execute('INSERT INTO attempts(day,category,request_id,status) VALUES(?,?,?,?)',
+                     (str(today_kst()), 'exercise', request.id, 'ERROR'))
+    monkeypatch.setattr('blogbot.pipeline.collect_requests', lambda _: ([request], []))
+    monkeypatch.setattr('blogbot.pipeline.rank_candidates', lambda *a: [request])
+    def repaired(s, conn, candidates):
+        post = draft()
+        post.category, post.request_id = 'exercise', 'original-exercise'
+        save_post(conn, post)
+        return [{'status': 'APPROVED', 'category': 'exercise'}]
+    monkeypatch.setattr('blogbot.recovery.recover_rejected', repaired)
+    monkeypatch.setattr('blogbot.pipeline.prepare_request',
+                        lambda *a: pytest.fail('Approved category must not purchase another draft'))
+    results = run_daily(settings, retry_failed=True)
+    assert results[1]['status'] == 'RECOVERY_SUPERSEDED'
+    with closing(connect_db(settings.db_path)) as conn:
+        assert conn.execute('SELECT status FROM attempts').fetchone()[0] == 'SUPERSEDED'
 
 
 @pytest.mark.parametrize('opened,status,accepted', [

@@ -59,8 +59,16 @@ def _source_identity(url: str) -> str:
     query = [(key, value) for key, value in query if not (
         (parts.hostname == 'www.healthychildren.org' and key == 'form'
          and value == 'HealthyChildren')
+        or (parts.hostname == 'www.healthychildren.org' and key == 'keyword')
         or (parts.hostname == 'acsm.org' and key == 'nocache' and value.isdigit())
+        or (parts.hostname == 'publications.aap.org' and key == 'autologincheck'
+            and value.startswith('redirected'))
+        or (parts.hostname == 'www.mayoclinic.org' and key in {'p', 'pg'} and value == '1')
     )]
+    # AAP article IDs survive DOI/volume routes and title-slug redirects.
+    article = re.fullmatch(r'/pediatrics/article/(?:doi/10\.1542/[^/]+|\d+/\d+/[^/]+)/(\d+)/[^/]+/?', path)
+    if parts.hostname == 'publications.aap.org' and article:
+        path = '/pediatrics/article/id/' + article[1]
     # Verified Naver redirect on 2026-09-29; never equate different security codes.
     if (parts.scheme == 'https' and parts.netloc == 'finance.naver.com'
             and parts.path == '/item/main.naver' and len(query) == 1
@@ -215,6 +223,9 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
 
 오늘 한국시간 기준일: {today_kst().isoformat()}
 기존 초안을 심사 지적사항에 맞게 수정한다. 주제와 핵심 출처는 유지하되 오류·과장·중복을 제거한다.
+검증되지 않은 세부 권고·고정 숫자·규칙은 삭제한다. 분량을 채우려고 새 권고를 만들지 않는다.
+핵심 주장들은 최대 3개 공식 원문으로 직접 확인할 수 있도록 단순화한다.
+수정 전 출처를 유지할 수 있으면 새 URL을 추정해서 추가하지 않는다.
 심사자의 날짜·의학 주장도 검증 대상이다. 잘못된 지적을 그대로 복사하지 않는다.
 원고 기준일은 오늘 한국시간을 유지한다. 벤치마크 접근 한계·read_count 등 운영 정보는 본문에 넣지 않는다.
 카테고리 규칙:\n{rules}

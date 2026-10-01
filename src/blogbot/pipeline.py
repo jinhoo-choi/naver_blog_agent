@@ -222,6 +222,18 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                 break
             attempt_id, request = reservation
             if is_retry:
+                ready = conn.execute(
+                    "SELECT 1 FROM posts WHERE as_of_date=? AND category=? AND status IN "
+                    "('APPROVED','TEXT_APPROVED','IMAGES_PENDING','SAVED_NAVER') LIMIT 1",
+                    (str(today_kst()), request.category),
+                ).fetchone()
+                if ready:
+                    with conn:
+                        conn.execute("UPDATE attempts SET status='SUPERSEDED' WHERE id=?",
+                                     (attempt_id,))
+                    results.append({'attempt': attempt_id, 'category': request.category,
+                                    'request_id': request.id, 'status': 'RECOVERY_SUPERSEDED'})
+                    continue
                 with conn:
                     claimed = conn.execute("UPDATE attempts SET status='STARTED' WHERE id=? "
                                            "AND status='ERROR'", (attempt_id,)).rowcount

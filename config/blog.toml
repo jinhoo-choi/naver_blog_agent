@@ -16,6 +16,7 @@ max_age_days = 1
 allowed_kinds = ["research", "policy", "disclosure"]
 require_clear_issue_for_stocks = true
 require_today_snapshot = true
+search_interest_keywords = ["아톤"]
 
 [categories.parenting]
 naver_category_no = 1

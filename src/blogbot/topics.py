@@ -99,13 +99,24 @@ def _fetch(keywords: list[str], end: date, client_id: str, secret: str) -> dict:
 
 def rank_candidates(settings, conn, candidates: list, daily_target: int) -> list:
     """Keep quotas/order slots intact; only reorder fully measured shortlists."""
-    if not settings.config.get("topics", {}).get("enabled", False):
-        return candidates
-    try:
-        return _rank(settings, conn, candidates, daily_target)
-    except (OSError, HTTPException, ValueError, TypeError, KeyError, AttributeError, OverflowError):
-        # Optional research must not prevent the existing generation pipeline.
-        return candidates
+    output = candidates
+    if settings.config.get("topics", {}).get("enabled", False):
+        try:
+            output = _rank(settings, conn, candidates, daily_target)
+        except (OSError, HTTPException, ValueError, TypeError, KeyError, AttributeError, OverflowError):
+            pass  # Optional research must not prevent the existing generation pipeline.
+    interests = settings.config.get("community", {}).get("search_interest_keywords", [])
+    if interests:
+        output = list(output)
+        slots = [i for i, r in enumerate(output) if r.category == "investment"]
+        # Owner-reported interest is a demand clue, never proof of low competition.
+        ordered = sorted((output[i] for i in slots), key=lambda r: (
+            r.data.get("kind") not in {"research", "policy"},
+            r.data.get("stock_name") not in interests,
+        ))
+        for slot, request in zip(slots, ordered):
+            output[slot] = request
+    return output
 
 
 def _rank(settings, conn, candidates: list, daily_target: int) -> list:

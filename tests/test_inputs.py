@@ -178,3 +178,38 @@ def test_dated_topic_replaces_only_selected_category_and_expires(tmp_path, monke
     monkeypatch.setattr('blogbot.inputs.today_kst', lambda: date(2026, 10, 3))
     assert {r.id for r in collect_requests(settings)[0]} == {
         'queued-parenting', 'queued-exercise'}
+
+
+def test_interest_prefers_eligible_stock_without_overriding_report_priority(monkeypatch):
+    from types import SimpleNamespace
+
+    from blogbot.inputs import ContentRequest
+    from blogbot.topics import rank_candidates
+
+    settings = SimpleNamespace(config={'topics': {'enabled': False},
+                                      'community': {'search_interest_keywords': ['아톤']}})
+    candidates = [ContentRequest('other-disclosure', 'investment',
+                                 {'stock_name': '다른기업', 'kind': 'disclosure'}),
+                  ContentRequest('parent', 'parenting', {'question': '육아 질문'}),
+                  ContentRequest('aton-disclosure', 'investment',
+                                 {'stock_name': '아톤', 'kind': 'disclosure'}),
+                  ContentRequest('other-report', 'investment',
+                                 {'stock_name': '다른기업', 'kind': 'research'}),
+                  ContentRequest('aton-report', 'investment',
+                                 {'stock_name': '아톤', 'kind': 'research'})]
+    assert [r.id for r in rank_candidates(settings, None, candidates, 3)] == [
+        'aton-report', 'parent', 'other-report', 'aton-disclosure', 'other-disclosure']
+    settings.config['topics']['enabled'] = True
+    monkeypatch.setattr('blogbot.topics._rank', lambda *args: list(reversed(candidates)))
+    result = rank_candidates(settings, None, candidates, 3)
+    assert [r.id for r in result if r.category == 'investment'] == [
+        'aton-report', 'other-report', 'aton-disclosure', 'other-disclosure']
+    assert len(result) == len(candidates)
+
+
+def test_investment_benchmark_uses_actual_stock():
+    from blogbot.inputs import ContentRequest
+    from blogbot.research import public_query
+
+    assert public_query(ContentRequest('aton', 'investment',
+                        {'stock_name': '아톤', 'kind': 'disclosure'})) == '아톤 공시 분석'

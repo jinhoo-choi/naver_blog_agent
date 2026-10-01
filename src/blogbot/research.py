@@ -31,7 +31,10 @@ def public_query(request) -> str:
     query = request.data.get("benchmark_query", "")
     if not query:
         if request.category == "investment":
-            query = "주식 거래량 증가 주가 하락" if request.data.get("kind") == "flow" else "주식 공시 분석"
+            stock = request.data.get("stock_name", "")
+            kind = {"research": "리포트", "disclosure": "공시", "policy": "정책"}.get(
+                request.data.get("kind"), "이슈")
+            query = f"{stock} {kind} 분석" if stock else "주식 공시 분석"
         elif request.category == "cooking":
             query = str(request.data["name"]) + " 레시피"
         else:

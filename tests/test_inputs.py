@@ -153,3 +153,28 @@ def test_snapshot_date_is_korean_date_not_utc(monkeypatch):
     _, origin = fetch_community({'repository': 'owner/source'})
     assert origin['snapshot_date'] == '2026-09-29'
     assert origin['snapshot_at'] == '2026-09-29T08:35:00+09:00'
+
+
+def test_dated_topic_replaces_only_selected_category_and_expires(tmp_path, monkeypatch):
+    from datetime import date
+
+    monkeypatch.setenv('BLOG_DATA_DIR', str(tmp_path))
+    settings = load_settings()
+    settings.config['community']['enabled'] = False
+    for category in ['parenting', 'exercise']:
+        source = tmp_path / f'{category}.json'
+        source.write_text(json.dumps({'id': f'queued-{category}', 'category': category,
+                                      'question': '기존 질문입니다'}))
+        enqueue_file(settings, source)
+    selected = {'id': 'selected-topic', 'category': 'parenting',
+                'data': {'question': '선택한 질문입니다'}}
+    settings.config['topics']['scheduled'] = {'2026-10-02': selected}
+    monkeypatch.setattr('blogbot.inputs.today_kst', lambda: date(2026, 10, 1))
+    assert {r.id for r in collect_requests(settings)[0]} == {
+        'queued-parenting', 'queued-exercise'}
+    monkeypatch.setattr('blogbot.inputs.today_kst', lambda: date(2026, 10, 2))
+    assert [r.id for r in collect_requests(settings)[0]] == ['selected-topic', 'queued-exercise']
+    assert [r.id for r in collect_requests(settings)[0]].count('selected-topic') == 1
+    monkeypatch.setattr('blogbot.inputs.today_kst', lambda: date(2026, 10, 3))
+    assert {r.id for r in collect_requests(settings)[0]} == {
+        'queued-parenting', 'queued-exercise'}

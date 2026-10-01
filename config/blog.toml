@@ -87,6 +87,28 @@ benchmark_mode = "api"
 [topics]
 enabled = true
 
+# Public editorial brief only; no personal input, account details or traffic metrics.
+[topics.scheduled."2026-10-02"]
+id = "owner-20261002-benefits-gift-refresh"
+category = "parenting"
+
+[topics.scheduled."2026-10-02".data]
+question = "부모급여와 아동수당은 미성년자 증여공제 2천만원에 포함되나요?"
+benchmark_query = "부모급여 증여한도 아동수당 미성년자 증여 2천만원"
+context = """
+기존 미성년자 증여 글의 개선판을 새 초안으로 작성한다. 제목 후보는 '부모급여 증여한도, 아동수당도 2천만원에 포함될까요?'를 참고한다.
+첫 문단에서 정부 지급 수당의 비과세와 부모·조부모가 주는 재산의 증여공제를 구분한다. 거주자인 미성년자의 직계존속 증여재산공제는 10년 합계 2천만원이며 부모·조부모별로 각각 2천만원이라고 쓰지 않는다.
+부모급여는 사전-2024-법규재산-0146(2024.03.21)의 국가·지자체에서 수급아동 계좌로 직접 지급한 사실관계와 상증법 제46조제1호를 확인한다. 아동수당은 사전-2020-법령해석재산-0172와 사전-2021-법령해석재산-0001을 확인한다. 비과세 수당은 직계존속 증여공제 2천만원을 소진하는 부모의 증여와 별개임을 설명한다.
+부모 계좌를 거쳐 아이 계좌로 옮긴 부모급여의 처리는 직접 지급 예규만으로 동일하다고 단정하거나 반대로 무조건 과세라고 단정하지 않는다. 정부 수당과 부모의 추가 입금, 부모가 준 생활비를 저축·투자하는 경우를 구분한다. 생활비 비과세와 국가 지급 수당 비과세를 혼동하지 않는다.
+3열 이하 비교표(자금 종류·2천만원 공제 관계·확인할 사항), 가정임이 명확한 '부모 증여 2천만원 + 비과세 수당' 예시, 수당 결정·입금 내역과 부모 송금 내역 분리 보관을 넣는다. 지원금 누적 총액·투자수익·신고 의무는 공식 근거 없이 계산하거나 단정하지 않는다.
+국세청 증여세 세액계산 흐름도 https://www.nts.go.kr/nts/cm/cntnts/cntntsView.do?cntntsId=7728&mi=2340 및 국세법령정보시스템 https://taxlaw.nts.go.kr/qt/USEQTA002P.do?ntstDcmId=200000000000003473 와 https://taxlaw.nts.go.kr/qt/USEQTA002P.do?ntstDcmId=010000000000455298 에서 실제 본문을 확인한다. 예규의 과거 지급액·대상 나이를 현재 제도로 그대로 복사하지 않는다.
+모바일 짧은 문단·핵심 강조·이미지5장(요약 썸네일1·본문4)의 최신 기준을 적용한다. 콘텐츠 개선판 작성이며 기존 글을 자동 삭제·편집·발행하지 않는다.
+"""
+
+[topics.scheduled."2026-10-02".provenance]
+source = "owner_input"
+editorial_intent = "refresh_benefit_exemption_vs_gift_deduction"
+
 [images]
 mode = "generate"
 model = "gpt-image-2.5-flare"

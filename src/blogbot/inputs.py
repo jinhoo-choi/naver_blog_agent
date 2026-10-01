@@ -244,6 +244,15 @@ def collect_requests(settings: Settings) -> tuple[list[ContentRequest], list[dic
             requests.append(request)
         except (OSError, ValueError, TypeError, KeyError):
             notices.append({"status": "INPUT_REJECTED"})
+    # A dated, explicitly selected public topic replaces that category's daily queue.
+    scheduled = settings.config.get("topics", {}).get("scheduled", {}).get(str(today_kst()))
+    if scheduled:
+        request = ContentRequest(**scheduled)
+        if (request.category not in {"parenting", "exercise"}
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", request.id)
+                or not request.data.get("question")):
+            raise ValueError("Invalid scheduled topic")
+        requests = [request, *[r for r in requests if r.category != request.category]]
     context_path = settings.db_path.parent / "context.json"
     context = json.loads(context_path.read_text()) if context_path.exists() else {}
     config = settings.config.get("community", {})

@@ -14,6 +14,31 @@ from blogbot.presentation import (
 )
 
 
+def test_saturday_feature_does_not_require_exercise_or_investment(tmp_path, monkeypatch):
+    from blogbot.config import load_settings
+    from blogbot.core import connect_db, save_post, today_kst
+
+    monkeypatch.setenv('BLOG_DATA_DIR', str(tmp_path))
+    settings = load_settings()
+    settings.config['blog']['daily_max'] = 1
+    for category in ['exercise', 'investment']:
+        settings.config['categories'][category]['max_daily'] = 0
+    with connect_db(settings.db_path) as conn:
+        save_post(conn, PostDraft('parenting', '정보', '질문', '제목', '본문', [], [],
+                  str(today_kst()), status='APPROVED', request_id='weekend-topic'))
+    monkeypatch.setattr('sys.argv', ['cloud', 'prepare'])
+    monkeypatch.setattr(cloud, 'load_settings', lambda: settings)
+    monkeypatch.setattr(cloud, 'restore', lambda _: None)
+    monkeypatch.setattr(cloud, 'seed_inputs', lambda _: None)
+    monkeypatch.setattr(cloud, 'pack', lambda *a: None)
+    calls = []
+    monkeypatch.setattr(cloud, 'run_daily',
+                        lambda *a, **k: calls.append(k['count']) or [{'status': 'APPROVED'}])
+    cloud.main()
+    assert calls == [1]
+    assert json.loads((tmp_path / 'run-summary.json').read_text())['failed'] is False
+
+
 def test_dart_primary_body_is_cached_and_not_confused_with_shell(tmp_path, monkeypatch):
     from blogbot.research import prepare_primary_evidence
     url = 'https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260930801114'

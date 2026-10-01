@@ -46,7 +46,7 @@ jobs:
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       PYTHONUTF8: '1'
     steps:
-      - name: Check one-time content pause (Asia/Seoul)
+      - name: Check weekly rest day (Asia/Seoul)
         id: calendar
         run: |
           python - <<'PY'
@@ -54,12 +54,12 @@ jobs:
           from datetime import datetime
           from zoneinfo import ZoneInfo
 
-          today = datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
-          paused = today in {"2026-10-03", "2026-10-04"}
+          today = datetime.now(ZoneInfo("Asia/Seoul")).date()
+          paused = today.weekday() == 6
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"enabled={str(not paused).lower()}\n")
           if paused:
-              print(f"CONTENT_PAUSED: {today}; preparation resumes 2026-10-05 KST.")
+              print(f"CONTENT_PAUSED: {today}; Sunday rest after the Saturday feature.")
           PY
       - uses: actions/checkout@v4
         if: steps.calendar.outputs.enabled == 'true'

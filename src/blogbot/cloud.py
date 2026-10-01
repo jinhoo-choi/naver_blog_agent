@@ -269,7 +269,8 @@ def main():
             results = [{'status':'PROBE_PASSED', 'response_status':_get(response, 'status'),
                         'records':len(payload['records'])}]
         else:
-            results = run_daily(settings, count=3, save_to_naver=False,
+            daily_target = min(3, getattr(settings, 'config', {}).get('blog', {}).get('daily_max', 3))
+            results = run_daily(settings, count=daily_target, save_to_naver=False,
                                 retry_failed=args.mode == 'recover')
             # One daily editorial/cache recovery. Never blindly repurchase a timed-out writer.
             recovery_path = directory / 'auto-recovery.json'
@@ -282,7 +283,7 @@ def main():
                     and recovery.get('date') != str(today_kst())
                     and getattr(settings, 'config', {}).get('categories')):
                 atomic_json(recovery_path, {'date': str(today_kst()), 'attempted': True})
-                retried = run_daily(settings, count=3, save_to_naver=False, retry_failed=True)
+                retried = run_daily(settings, count=daily_target, save_to_naver=False, retry_failed=True)
                 resolved = {r.get('request_id') for r in retried if r.get('status') == 'APPROVED'}
                 results = [r for r in results if r.get('request_id') not in resolved] + retried
         if args.mode != 'probe':
@@ -311,7 +312,9 @@ def main():
                 ready_categories.update(row[0] for row in conn.execute(
                     "SELECT category FROM attempts WHERE day=? AND status='SAVED_NAVER'",
                     (today_kst().isoformat(),)))
-            missing = sorted(set(categories) - {'cooking'} - ready_categories)
+            expected = {key for key, info in categories.items()
+                        if key != 'cooking' and info.get('max_daily', 1) > 0}
+            missing = sorted(expected - ready_categories)
             if missing:
                 results.append({'status': 'PREPARATION_PARTIAL', 'missing_categories': missing})
                 failed = True

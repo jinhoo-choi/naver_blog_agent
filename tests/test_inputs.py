@@ -175,9 +175,38 @@ def test_dated_topic_replaces_only_selected_category_and_expires(tmp_path, monke
     monkeypatch.setattr('blogbot.inputs.today_kst', lambda: date(2026, 10, 2))
     assert [r.id for r in collect_requests(settings)[0]] == ['selected-topic', 'queued-exercise']
     assert [r.id for r in collect_requests(settings)[0]].count('selected-topic') == 1
-    monkeypatch.setattr('blogbot.inputs.today_kst', lambda: date(2026, 10, 3))
+    monkeypatch.setattr('blogbot.inputs.today_kst', lambda: date(2026, 10, 5))
     assert {r.id for r in collect_requests(settings)[0]} == {
         'queued-parenting', 'queued-exercise'}
+
+
+@pytest.mark.parametrize('day,quotas,maximum', [
+    ('2026-10-02', (1, 1, 1), 5),
+    ('2026-10-03', (1, 0, 0), 1),
+    ('2026-10-04', (0, 0, 0), 1),
+    ('2026-10-05', (1, 1, 1), 5),
+    ('2026-10-10', (1, 0, 0), 1),
+])
+def test_weekend_feature_quota_and_selected_topic(tmp_path, monkeypatch, day, quotas, maximum):
+    from datetime import date
+
+    today = date.fromisoformat(day)
+    monkeypatch.setattr('blogbot.config.today_kst', lambda: today)
+    monkeypatch.setattr('blogbot.inputs.today_kst', lambda: today)
+    monkeypatch.setenv('BLOG_DATA_DIR', str(tmp_path))
+    settings = load_settings()
+    assert tuple(settings.config['categories'][c]['max_daily']
+                 for c in ['parenting', 'exercise', 'investment']) == quotas
+    assert settings.config['blog']['daily_max'] == maximum
+    assert settings.daily_count == min(3, maximum)
+    if today.weekday() >= 5:
+        assert settings.config['community']['enabled'] is False
+    if day == '2026-10-03':
+        monkeypatch.setattr('blogbot.inputs.fetch_community',
+                            lambda _: pytest.fail('Weekend must not fetch community'))
+        requests, notices = collect_requests(settings)
+        assert [r.id for r in requests] == ['owner-20261003-esl-feeding-feature']
+        assert not notices
 
 
 def test_interest_prefers_eligible_stock_without_overriding_report_priority(monkeypatch):

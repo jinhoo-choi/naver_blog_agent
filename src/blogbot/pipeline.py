@@ -95,6 +95,8 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
     limits = settings.config["blog"]
     if not int(limits["daily_min"]) <= requested <= int(limits["daily_max"]):
         raise ValueError("Daily count must be between 1 and 5")
+    if limits.get("weekend_feature") and today_kst().weekday() == 6:
+        return [{"status": "NO_ELIGIBLE_INPUT_OR_DAILY_LIMIT"}]
     if save_to_naver:
         make_writer(settings)
         with closing(connect_db(settings.db_path)) as conn:
@@ -104,6 +106,7 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
             if uncertain:
                 return [{"id": uncertain[0], "status": "MANUAL_CHECK_REQUIRED"}]
     candidates, notices = collect_requests(settings)
+    candidates = [r for r in candidates if settings.config['categories'][r.category]['max_daily'] > 0]
     llm = None
     settings.artifact_dir.mkdir(parents=True, exist_ok=True)
     results: list[dict] = list(notices)
@@ -124,6 +127,8 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                 "AND NOT EXISTS (SELECT 1 FROM posts WHERE posts.request_id=attempts.request_id) "
                 "ORDER BY id", (today_kst().isoformat(),),
             ).fetchall():
+                if settings.config['categories'][row['category']]['max_daily'] == 0:
+                    continue
                 if row['request_id'] in by_id:
                     retries.append((row['id'], by_id[row['request_id']]))
                 else:
@@ -132,6 +137,8 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
             for row in conn.execute("SELECT * FROM posts WHERE status IN ('APPROVED', 'REPAIR_PENDING') AND as_of_date=?",
                                     (today_kst().isoformat(),)).fetchall():
                 post = load_post(row)
+                if settings.config['categories'][post.category]['max_daily'] == 0:
+                    continue
                 stem = settings.artifact_dir / f"{post.as_of_date}-{row['id']:05d}"
                 payload = json.loads(stem.with_suffix('.json').read_text())
                 needs_primary_review = (post.category == 'investment'
@@ -205,6 +212,10 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
         for row in pending:
             post = load_post(row)
             today = today_kst()
+            if settings.config['categories'][post.category]['max_daily'] == 0:
+                continue
+            if limits.get('weekend_feature') and today.weekday() == 5 and post.as_of_date != str(today):
+                continue
             if not (today-timedelta(days=3)).isoformat() <= post.as_of_date <= today.isoformat():
                 continue
             stem = settings.artifact_dir / f"{post.as_of_date}-{row['id']:05d}"

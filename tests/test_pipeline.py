@@ -50,6 +50,15 @@ def test_quota_survives_connection_restart(settings):
         assert reserve_attempt(conn, settings.config, 2, candidates) is None
 
 
+def test_sunday_rest_before_input_collection(settings, monkeypatch):
+    from datetime import date
+
+    monkeypatch.setattr('blogbot.pipeline.today_kst', lambda: date(2026, 10, 4))
+    monkeypatch.setattr('blogbot.pipeline.collect_requests',
+                        lambda _: pytest.fail('Rest day must not collect or generate'))
+    assert run_daily(settings) == [{'status': 'NO_ELIGIBLE_INPUT_OR_DAILY_LIMIT'}]
+
+
 def test_review_rejects_inconsistent_or_unsafe_scores():
     assert review_result({"scores": [5] * 6, "total": 29, "decision": "PASS"})[1] == "DROP"
     assert review_result({

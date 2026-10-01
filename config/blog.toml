@@ -3,6 +3,7 @@ name = "써누애비"
 tagline = "선우와 함께 자라는 아빠의 육아·집밥·투자 공부"
 daily_min = 1
 daily_max = 5
+weekend_feature = true
 review_pass_score = 24
 rewrite_score = 20
 max_similarity = 0.82
@@ -113,6 +114,27 @@ context = """
 [topics.scheduled."2026-10-02".provenance]
 source = "owner_input"
 editorial_intent = "refresh_benefit_exemption_vs_gift_deduction"
+
+[topics.scheduled."2026-10-03"]
+id = "owner-20261003-esl-feeding-feature"
+category = "parenting"
+
+[topics.scheduled."2026-10-03".data]
+question = "ESL 수유자세란 무엇이고, 배앓이가 걱정되는 아기에게 적용할 때 무엇을 확인해야 하나요?"
+benchmark_query = "ESL 수유자세 배앓이 옆으로 수유"
+context = """
+토요일 주말 심화 콘텐츠 1편이다. 제목 후보는 'ESL 수유자세, 배앓이 때문에 알아봤다면 먼저 확인할 것'을 참고하되 실제 내용이 뒷받침하는 제목을 선택한다.
+ESL은 elevated side-lying의 정확한 의미와 젖병 수유 맥락을 확인한다. 일반 눕수·모유수유 옆으로 누운 자세·옆으로 재우는 수면 자세와 구분한다.
+Royal United Hospitals Bath NHS 안내 https://www.ruh.nhs.uk/patients/patient_information/NIC034_Elevated_Side_Lying_feeding.pdf 를 직접 열어 자세·등과 머리 정렬·머리가 엉덩이보다 높은 조건·몸 지지·손 위치를 확인한다. 자세 변경의 위험을 그림과 본문 모두 대조한다.
+https://pubmed.ncbi.nlm.nih.gov/39721201/ 의 연구 대상·재태주수·평가 지표를 실제 원문 또는 초록으로 확인한다. 미숙아의 삼킴·호흡 협응 관찰 결과를 만삭아 전체의 효과 또는 배앓이 치료 효과로 확대하지 않는다. 접근 실패 시 해당 연구의 구체적 결과를 인용하지 않는다.
+NHS 공식 배앓이 및 반응적 젖병 수유 자료도 대조한다. ESL이 배앓이·가스·역류·사레를 반드시 해결한다거나 질식을 예방한다고 단정하지 않는다. 무리한 고정·강제 수유·젖병 받쳐두기·수유 상태로 재우는 그림은 사용하지 않는다.
+핵심 답변 → 의미와 적용 조건 → 공식 자료 기반 준비·순서 → 올바른 조건과 흔한 실수 비교표(3열 이하) → 배앓이 근거의 한계와 중단·진료 신호 → 확인한 출처 순서로 작성한다. 적용 대상이 불명확하면 의료진에게 개별 수유 평가를 받을 조건을 설명한다.
+모바일 짧은 문단·미리보기 요약·구분선·핵심 강조를 유지한다. 이미지5장은 요약 썸네일1·준비/자세/실수/체크리스트 본문4로 구성하되 정확한 의료 자세를 확인할 수 없는 이미지는 보류한다. 실제 경험이나 개선 효과를 창작하지 않는다.
+"""
+
+[topics.scheduled."2026-10-03".provenance]
+source = "owner_input"
+editorial_intent = "weekend_feature_esl_feeding"
 
 [images]
 mode = "generate"

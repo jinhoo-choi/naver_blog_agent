@@ -90,6 +90,8 @@ def recover_rejected(settings, conn, candidates):
     for row in conn.execute("SELECT * FROM attempts WHERE day=? AND status='DROP_REVIEW' ORDER BY id",
                             (str(today_kst()),)).fetchall():
         category = row['category']
+        if settings.config['categories'][category]['max_daily'] == 0:
+            continue
         if category in ready or category in handled:
             continue
         handled.add(category)  # At most one existing manuscript per missing category.

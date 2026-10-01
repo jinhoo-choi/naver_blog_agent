@@ -31,7 +31,7 @@ def _extract_urls(response) -> list[str]:
     found: list[str] = []
     for item in _get(response, 'output', []) or []:
         action = _get(item, "action")
-        if (_get(item, "status") == "completed" and _get(action, "type") == "open_page"
+        if (_get(item, "status") == "completed" and _get(action, "type") in {'open_page', 'find_in_page'}
                 and _get(action, "url")):
             found.append(_get(action, "url"))
         for source in _get(action, "sources", []) or []:
@@ -88,6 +88,46 @@ def _source_urls(payload: dict, observed: list[str], required: bool = True) -> l
     if any(_source_identity(url.rstrip('.,')) not in observed_ids for url in body_urls):
         raise ValueError("Body contains an unverified URL")
     return list(dict.fromkeys(claimed))[:10]
+
+
+def _checked_review(payload, response, request):
+    if request.category == 'cooking' or not payload:
+        return payload
+    checks = payload.get('source_checks', [])
+    evidence = request.provenance.get('primary_evidence', {})
+    read_urls = [_get(_get(item, 'action'), 'url')
+                 for item in _get(response, 'output', []) or []
+                 if _get(item, 'status') == 'completed'
+                 and _get(_get(item, 'action'), 'type') in {'open_page', 'find_in_page'}]
+    verified = {_source_identity(u) for u in read_urls if u}
+    if evidence:
+        verified.update(_source_identity(evidence[k]) for k in ['url', 'viewer_url'])
+    if (not checks or any(check.get('status') != 'SUPPORTED'
+            or not check.get('evidence', '').strip()
+            or _source_identity(check.get('source_url', '')) not in verified for check in checks)):
+        payload['decision'] = 'REWRITE'
+        payload['blocking_issues'] = payload.get('blocking_issues', []) + [
+            '핵심 주장별 원문 열람·근거 대조가 완료되지 않았습니다.']
+        payload['rewrite_instructions'] = (payload.get('rewrite_instructions', '')
+                                           + '\n실제 원문으로 확인한 핵심 주장만 남기세요.')
+    return payload
+
+
+def _historical_source_urls(journal, request_id):
+    if journal is None or not journal.exists():
+        return []
+    response_ids = set()
+    for line in journal.read_text().splitlines():
+        entry = json.loads(line)
+        if (entry.get('request_id') == request_id and entry.get('stage') in {'writer', 'rewrite', 'reviewer'}
+                and not entry.get('error') and entry.get('response_id')):
+            response_ids.add(entry['response_id'])
+    urls = []
+    for path in (journal.parent / 'response-cache').glob(f'{today_kst()}-*.json'):
+        item = json.loads(path.read_text())
+        if item.get('response', {}).get('id') in response_ids:
+            urls.extend(_extract_urls(item['response']))
+    return list(dict.fromkeys(urls))
 
 
 class BlogLLM:
@@ -193,25 +233,7 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
             retry_output_tokens=10000, reasoning={"effort": "low"}, input=prompt, **search,
             include=["web_search_call.action.sources"] if search else [],
         )
-        if post.category != 'cooking':
-            checks = payload.get('source_checks', [])
-            evidence = request.provenance.get('primary_evidence', {})
-            opened = [_get(_get(item, 'action'), 'url')
-                      for item in _get(response, 'output', []) or []
-                      if _get(item, 'status') == 'completed'
-                      and _get(_get(item, 'action'), 'type') == 'open_page']
-            verified = {_source_identity(u) for u in opened if u}
-            if evidence:
-                verified.update(_source_identity(evidence[k]) for k in ['url', 'viewer_url'])
-            if (not checks or any(check.get('status') != 'SUPPORTED'
-                    or not check.get('evidence', '').strip()
-                    or _source_identity(check.get('source_url', '')) not in verified
-                    for check in checks)):
-                payload['decision'] = 'REWRITE'
-                payload['blocking_issues'] = payload.get('blocking_issues', []) + [
-                    '핵심 주장별 원문 열람·근거 대조가 완료되지 않았습니다.']
-                payload['rewrite_instructions'] = '실제 원문으로 확인한 핵심 주장만 남기세요.'
-        return payload
+        return _checked_review(payload, response, request)
 
     def rewrite(
         self, post: PostDraft, category_info: dict, review: dict, request: ContentRequest,
@@ -250,7 +272,8 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
             title=str(payload.get("title", post.title)).strip(),
             body=str(payload.get("body", post.body)).strip(),
             tags=[str(x).lstrip("#") for x in payload.get("tags", post.tags)][:8],
-            source_urls=_source_urls(payload, post.source_urls + _extract_urls(response),
+            source_urls=_source_urls(payload, post.source_urls + _extract_urls(response)
+                                    + _historical_source_urls(self.journal, request.id),
                                     required=post.category != "cooking"),
             as_of_date=post.as_of_date,
         )

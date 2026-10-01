@@ -447,3 +447,36 @@ def test_high_score_requires_actual_source_checks(monkeypatch, opened, status, a
     monkeypatch.setattr('blogbot.llm.request_json', lambda *a, **kw: (payload, response))
     result = llm.review(post, {}, ContentRequest('test', post.category, {}))
     assert (review_result(result)[1] == 'PASS') is accepted
+
+
+@pytest.mark.parametrize('status,accepted', [('completed', True), ('searching', False)])
+def test_completed_find_in_original_is_read_evidence(status, accepted):
+    from blogbot.llm import _checked_review
+    url = 'https://www.cdc.gov/reproductive-health/features/babies-sleep.html'
+    payload = {'scores': [5]*6, 'total': 30, 'decision': 'PASS', 'issues': [],
+               'blocking_issues': [], 'rewrite_instructions': '', 'source_checks': [
+                   {'claim': '핵심 주장', 'source_url': url, 'evidence': '원문 일치',
+                    'status': 'SUPPORTED'}]}
+    response = {'output': [{'status': status, 'action': {
+        'type': 'find_in_page', 'url': url, 'pattern': 'sleep'}}]}
+    assert (review_result(_checked_review(payload, response,
+        ContentRequest('test', 'parenting', {})))[1] == 'PASS') is accepted
+
+
+def test_recovery_preserves_sources_observed_in_earlier_revisions(tmp_path):
+    import json
+
+    from blogbot.llm import _historical_source_urls
+    cache = tmp_path / 'response-cache'
+    cache.mkdir()
+    journal = tmp_path / 'usage.jsonl'
+    entries = [{'request_id': rid, 'stage': 'rewrite', 'response_id': ident}
+               for rid, ident in [('same', 'older'), ('same', 'latest'), ('other', 'unrelated')]]
+    journal.write_text('\n'.join(json.dumps(e) for e in entries))
+    for e in entries:
+        response = {'id': e['response_id'], 'output': [{'status': 'completed', 'action': {
+            'type': 'open_page', 'url': 'https://example.com/' + e['response_id']}}]}
+        (cache / f"{today_kst()}-{e['response_id']}.json").write_text(
+            json.dumps({'response': response}))
+    assert set(_historical_source_urls(journal, 'same')) == {
+        'https://example.com/older', 'https://example.com/latest'}

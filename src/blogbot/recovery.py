@@ -18,18 +18,19 @@ from .core import (
 )
 from .images import atomic_json
 from .inputs import ContentRequest
-from .llm import BlogLLM, _extract_urls, _source_urls
+from .llm import BlogLLM, _checked_review, _historical_source_urls, _source_urls
 from .presentation import normalize_structure, validate_structure
 from .research import prepare_request
 
 
 def rejected_checkpoint(settings, request):
     directory = settings.db_path.parent
-    ids = {}
-    for line in (directory / 'usage.jsonl').read_text().splitlines():
+    ids, positions = {}, {}
+    for position, line in enumerate((directory / 'usage.jsonl').read_text().splitlines()):
         entry = json.loads(line)
         if entry['request_id'] == request.id and not entry.get('error') and entry.get('response_id'):
             ids[entry['stage']] = entry['response_id']
+            positions[entry['stage']] = position
     cached = {}
     for path in (directory / 'response-cache').glob(f'{today_kst()}-*.json'):
         item = json.loads(path.read_text())
@@ -39,12 +40,16 @@ def rejected_checkpoint(settings, request):
     original = cached['writer']
     latest = cached.get('rewrite', original)
     data = latest['payload']
-    sources = _source_urls(data, _extract_urls(original['response']) + _extract_urls(latest['response']))
+    reviewer = cached.get('reviewer', {})
+    sources = _source_urls(data, _historical_source_urls(directory / 'usage.jsonl', request.id))
     post = PostDraft(request.category, data['subcategory'], original['payload']['title'],
                      data['title'], data['body'], data['tags'], sources, str(today_kst()),
                      request_id=request.id, photos=request.photos, provenance=request.provenance)
+    reviewed_latest = positions.get('reviewer', -1) > max(
+        positions.get('writer', -1), positions.get('rewrite', -1))
     return {'post': asdict(post), 'input': asdict(request),
-            'review': cached.get('reviewer', {}).get('payload', {})}
+            'review': _checked_review(reviewer.get('payload', {}), reviewer.get('response', {}), request)
+            if reviewed_latest else {}}
 
 
 def recover_rejected(settings, conn, candidates):
@@ -73,15 +78,17 @@ def recover_rejected(settings, conn, candidates):
             post = PostDraft(**payload['post'])
             info = settings.config['categories'][category]
             validate_post(post, info)
-            resumed = bool(payload.get('revision_attempted'))
-            atomic_json(path, {**payload, 'revision_attempted': True})
-            llm = BlogLLM(settings.openai_api_key, settings.openai_model, settings.root,
-                          settings.review_model, settings.db_path.parent / 'usage.jsonl')
-            post = llm.rewrite(post, info, payload['review'], request, cache_only=resumed)
-            post = normalize_structure(post)
-            validate_post(post, info)
+            review = payload['review']
+            if review_result(review)[1] != 'PASS':
+                resumed = bool(payload.get('revision_attempted'))
+                atomic_json(path, {**payload, 'revision_attempted': True})
+                llm = BlogLLM(settings.openai_api_key, settings.openai_model, settings.root,
+                              settings.review_model, settings.db_path.parent / 'usage.jsonl')
+                post = llm.rewrite(post, info, review, request, cache_only=resumed)
+                post = normalize_structure(post)
+                validate_post(post, info)
+                review = llm.review(post, info, request)
             validate_structure(post, settings.config.get('editorial', {}).get('require_structure', True))
-            review = llm.review(post, info, request)
             score, decision = review_result(review)
             other_titles = [r[0] for r in conn.execute(
                 'SELECT title FROM posts WHERE request_id!=?', (post.request_id,))]

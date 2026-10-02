@@ -10,6 +10,7 @@ from blogbot.inputs import collect_requests, community_request, enqueue_file
 def test_cooking_needs_recipe_and_photo_and_tracks_changes(tmp_path, monkeypatch):
     monkeypatch.setenv("BLOG_DATA_DIR", str(tmp_path / "data"))
     settings = load_settings()
+    settings.config['topics'].pop('scheduled', None)
     settings.config["community"]["enabled"] = False
     source = tmp_path / "recipe.json"
     raw = {"id": "recipe-1", "category": "cooking",
@@ -130,6 +131,7 @@ def test_collect_waits_for_today_morning_export_without_consuming_inputs(tmp_pat
 
     monkeypatch.setenv('BLOG_DATA_DIR', str(tmp_path))
     settings = load_settings()
+    settings.config['topics'].pop('scheduled', None)
     record, origin = investment_record()
     yesterday = today_kst() - timedelta(days=1)
     origin.update(snapshot_date=str(yesterday), snapshot_at=f'{yesterday}T09:00:00+09:00')

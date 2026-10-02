@@ -121,7 +121,7 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
         if retry_failed:
             by_id = {request.id: request for request in candidates}
             for row in conn.execute(
-                "SELECT * FROM attempts WHERE day=? AND status='ERROR' "
+                "SELECT * FROM attempts WHERE day=? AND status IN ('ERROR','RESEARCH_REQUIRED') "
                 "AND NOT EXISTS (SELECT 1 FROM posts WHERE posts.request_id=attempts.request_id) "
                 "ORDER BY id", (today_kst().isoformat(),),
             ).fetchall():
@@ -243,9 +243,20 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                     results.append({'attempt': attempt_id, 'category': request.category,
                                     'request_id': request.id, 'status': 'RECOVERY_SUPERSEDED'})
                     continue
+                journal = settings.db_path.parent / 'usage.jsonl'
+                history = [json.loads(line) for line in journal.read_text().splitlines()
+                           if line.strip()] if journal.exists() else []
+                last = next((entry for entry in reversed(history)
+                             if entry.get('request_id') == request.id), {})
+                if last.get('error') in {'APITimeoutError', 'APIConnectionError', 'TimeoutError',
+                                         'AuthenticationError', 'PermissionDeniedError'}:
+                    results.append({'attempt': attempt_id, 'category': request.category,
+                                    'request_id': request.id, 'status': 'MANUAL_CHECK_REQUIRED',
+                                    'reason': 'api_outcome_or_credentials_require_check'})
+                    continue
                 with conn:
                     claimed = conn.execute("UPDATE attempts SET status='STARTED' WHERE id=? "
-                                           "AND status='ERROR'", (attempt_id,)).rowcount
+                                           "AND status IN ('ERROR','RESEARCH_REQUIRED')", (attempt_id,)).rowcount
                 if not claimed:
                     continue
             category_key = request.category
@@ -285,6 +296,7 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                     if str(exc) not in {
                         'Use at least four major sections and a subsection',
                         'Parenting draft is too short; add supported explanation, not filler',
+                        'Start with a plain-language preview summary, not dates or URLs',
                     }:
                         raise
                     stage = "rewrite"

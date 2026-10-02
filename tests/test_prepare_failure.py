@@ -67,7 +67,7 @@ def test_dart_shell_without_report_body_stops_before_generation(tmp_path, monkey
         prepare_primary_evidence(SimpleNamespace(db_path=tmp_path/'blog.db'), request)
 
 
-def test_prepare_recovers_editorial_failure_only_once_per_day(tmp_path, monkeypatch):
+def test_prepare_stops_retrying_when_category_is_ready(tmp_path, monkeypatch):
     from blogbot.core import connect_db, save_post, today_kst
     settings = SimpleNamespace(db_path=tmp_path/'blog.db', config={
         'categories': {'parenting': {}, 'cooking': {}}})
@@ -90,6 +90,45 @@ def test_prepare_recovers_editorial_failure_only_once_per_day(tmp_path, monkeypa
     cloud.main()
     assert calls == [False, True, False]
     assert json.loads((tmp_path/'auto-recovery.json').read_text())['attempted'] is True
+
+
+@pytest.mark.parametrize('failure', [
+    {'status': 'ERROR', 'reason': 'invalid_preview'},
+    {'status': 'DROP_REVIEW'}, {'status': 'RESEARCH_REQUIRED'},
+    {'status': 'COMMUNITY_SOURCE_PENDING'}, {'status': 'IMAGES_PENDING'},
+])
+def test_prepare_retries_twice_and_preserves_limit_across_runs(tmp_path, monkeypatch, failure):
+    settings = SimpleNamespace(db_path=tmp_path/'blog.db', config={
+        'categories': {'parenting': {'max_daily': 1}}})
+    calls = []
+    monkeypatch.setattr(cloud, 'run_daily', lambda *a, **k: calls.append(k) or [failure])
+    cloud.recover_preparation(settings, [failure], 1)
+    cloud.recover_preparation(settings, [failure], 1)
+    assert len(calls) == 2 and all(c['retry_failed'] for c in calls)
+    assert json.loads((tmp_path/'auto-recovery.json').read_text())['attempts'] == 2
+
+
+def test_prepare_recovery_legacy_budget_and_success_replace_old_failure(tmp_path, monkeypatch):
+    from blogbot.core import today_kst
+    settings = SimpleNamespace(db_path=tmp_path/'blog.db', config={
+        'categories': {'investment': {}}})
+    (tmp_path/'auto-recovery.json').write_text(json.dumps({
+        'date': str(today_kst()), 'attempted': True}))
+    failure = {'request_id': 'q', 'category': 'investment', 'status': 'ERROR', 'reason': 'invalid_preview'}
+    approved = {**failure, 'status': 'APPROVED'}
+    calls = []
+    monkeypatch.setattr(cloud, 'run_daily', lambda *a, **k: calls.append(k) or [approved])
+    assert cloud.recover_preparation(settings, [failure], 1) == [approved]
+    assert len(calls) == 1
+    assert json.loads((tmp_path/'auto-recovery.json').read_text())['attempts'] == 2
+
+
+def test_prepare_does_not_retry_uncertain_api_or_authentication_failure(tmp_path, monkeypatch):
+    settings = SimpleNamespace(db_path=tmp_path/'blog.db', config={'categories': {'parenting': {}}})
+    monkeypatch.setattr(cloud, 'run_daily', lambda *a, **k: pytest.fail('Uncertain call must not be repurchased'))
+    for error in ['APITimeoutError', 'AuthenticationError']:
+        result = [{'status': 'ERROR', 'error': error}]
+        assert cloud.recover_preparation(settings, result, 1) == result
 
 
 @pytest.mark.parametrize('status,failed', [('ERROR',True),('IMAGES_PENDING',True),

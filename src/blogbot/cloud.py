@@ -25,6 +25,44 @@ class PreparationFailed(RuntimeError):
     """A persisted preparation failure whose detailed notification was already attempted."""
 
 
+def recover_preparation(settings, results: list[dict], count: int) -> list[dict]:
+    """Resume missing work with a durable daily budget, including explicit recover runs."""
+    path = settings.db_path.parent / 'auto-recovery.json'
+    state = json.loads(path.read_text()) if path.exists() else {}
+    attempts = (int(state.get('attempts', int(bool(state.get('attempted')))))
+                if state.get('date') == str(today_kst()) else 0)
+    while attempts < 2 and any(
+        r.get('status') in {'DROP_REVIEW', 'RESEARCH_REQUIRED', 'IMAGES_PENDING',
+                            'COMMUNITY_SOURCE_PENDING', 'COMMUNITY_SOURCE_UNAVAILABLE'} or
+        (r.get('status') == 'ERROR' and r.get('reason') in {
+            'unobserved_source_url', 'unobserved_body_url', 'invalid_reference_date',
+            'invalid_preview', 'missing_headings', 'body_too_short',
+            'editorial_recovery_failed', 'cached_response_unavailable',
+        }) for r in results
+    ):
+        categories = settings.config['categories']
+        expected = {key for key, info in categories.items()
+                    if key != 'cooking' and info.get('max_daily', 1) > 0}
+        with closing(connect_db(settings.db_path)) as conn:
+            ready = {row[0] for row in conn.execute(
+                "SELECT category FROM posts WHERE as_of_date=? AND status IN ('APPROVED','SAVED_NAVER') "
+                "UNION SELECT category FROM attempts WHERE day=? AND status='SAVED_NAVER'",
+                (str(today_kst()), str(today_kst())))}
+        if expected <= ready:
+            break
+        attempts += 1
+        # Claim before paid work; workflow reruns and restored checkpoints share this limit.
+        atomic_json(path, {'date': str(today_kst()), 'attempted': True, 'attempts': attempts})
+        print(json.dumps({'status': 'PREPARATION_RETRY', 'attempt': attempts,
+                          'maximum': 2}), flush=True)
+        retried = run_daily(settings, count=count, save_to_naver=False, retry_failed=True)
+        replaced = {r['request_id'] for r in retried if r.get('request_id')}
+        approved = {r.get('category') for r in retried if r.get('status') in {'APPROVED', 'SAVED_NAVER'}}
+        results = [r for r in results if r.get('request_id') not in replaced
+                   and r.get('category') not in approved] + retried
+    return results
+
+
 class SafeRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
@@ -272,20 +310,8 @@ def main():
             daily_target = min(3, getattr(settings, 'config', {}).get('blog', {}).get('daily_max', 3))
             results = run_daily(settings, count=daily_target, save_to_naver=False,
                                 retry_failed=args.mode == 'recover')
-            # One daily editorial/cache recovery. Never blindly repurchase a timed-out writer.
-            recovery_path = directory / 'auto-recovery.json'
-            recovery = json.loads(recovery_path.read_text()) if recovery_path.exists() else {}
-            recoverable = any(r.get('status') == 'DROP_REVIEW' or (
-                r.get('status') == 'ERROR' and r.get('reason') in {
-                    'unobserved_source_url', 'unobserved_body_url', 'invalid_reference_date',
-                }) for r in results)
-            if (args.mode == 'prepare' and recoverable
-                    and recovery.get('date') != str(today_kst())
-                    and getattr(settings, 'config', {}).get('categories')):
-                atomic_json(recovery_path, {'date': str(today_kst()), 'attempted': True})
-                retried = run_daily(settings, count=daily_target, save_to_naver=False, retry_failed=True)
-                resolved = {r.get('request_id') for r in retried if r.get('status') == 'APPROVED'}
-                results = [r for r in results if r.get('request_id') not in resolved] + retried
+            if getattr(settings, 'config', {}).get('categories'):
+                results = recover_preparation(settings, results, daily_target)
         if args.mode != 'probe':
             with closing(connect_db(settings.db_path)) as conn:
                 unresolved = conn.execute(

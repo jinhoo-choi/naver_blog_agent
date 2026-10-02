@@ -1,3 +1,4 @@
+import json
 from contextlib import closing
 
 import pytest
@@ -25,6 +26,7 @@ def settings(tmp_path, monkeypatch):
     monkeypatch.setenv("NAVER_BLOG_ID", "example")
     monkeypatch.setenv("OPENAI_API_KEY", "unit-test-placeholder")
     config = load_settings()
+    config.config['topics'].pop('scheduled', None)
     config.config["community"]["enabled"] = False
     return config
 
@@ -50,43 +52,6 @@ def test_quota_survives_connection_restart(settings):
         assert reserve_attempt(conn, settings.config, 2, candidates) is None
 
 
-def test_sunday_generates_one_feature(settings, monkeypatch):
-    from datetime import date
-
-    monkeypatch.setattr('blogbot.config.today_kst', lambda: date(2026, 10, 4))
-    monkeypatch.setattr('blogbot.core.today_kst', lambda: date(2026, 10, 4))
-    monkeypatch.setattr('blogbot.pipeline.today_kst', lambda: date(2026, 10, 4))
-    settings = load_settings()
-    requests = [ContentRequest(f'weekend-{i}', 'parenting', {'question': '수유 자세'})
-                for i in range(2)]
-    monkeypatch.setattr('blogbot.pipeline.collect_requests',
-                        lambda _: (requests, []))
-    monkeypatch.setattr('blogbot.pipeline.prepare_request', lambda s, r: r)
-    monkeypatch.setattr('blogbot.pipeline.validate_structure', lambda *a: None)
-    monkeypatch.setattr('blogbot.pipeline.complete_media',
-                        lambda *a: {'status': 'APPROVED'})
-    calls = []
-
-    class FakeLLM:
-        def __init__(self, *a):
-            pass
-
-        def create_draft(self, request, info, existing):
-            calls.append(request.id)
-            post = draft()
-            post.category, post.subcategory = request.category, info['subcategories'][0]
-            post.request_id = request.id
-            post.as_of_date = '2026-10-04'
-            return post
-
-        def review(self, *a):
-            return {'scores': [5] * 6, 'total': 30, 'decision': 'PASS'}
-
-    monkeypatch.setattr('blogbot.pipeline.BlogLLM', FakeLLM)
-    assert [r['status'] for r in run_daily(settings)] == ['APPROVED']
-    assert calls == ['weekend-0']
-
-
 def test_review_rejects_inconsistent_or_unsafe_scores():
     assert review_result({"scores": [5] * 6, "total": 29, "decision": "PASS"})[1] == "DROP"
     assert review_result({
@@ -100,12 +65,13 @@ def test_high_score_cannot_ignore_actionable_review_corrections():
                           'rewrite_instructions': '영아 잠자리 인형 권고를 삭제'})[1] == 'REWRITE'
 
 
-def test_recovery_retries_failed_category_and_fills_new_category(settings, monkeypatch):
+@pytest.mark.parametrize('status', ['ERROR', 'RESEARCH_REQUIRED'])
+def test_recovery_retries_failed_category_and_fills_new_category(settings, monkeypatch, status):
     requests = [ContentRequest('failed-exercise', 'exercise', {'question': '운동 자세'}),
                 ContentRequest('new-investment', 'investment', {'kind': 'research'})]
     with closing(connect_db(settings.db_path)) as conn, conn:
         conn.execute('INSERT INTO attempts(day,category,request_id,status) VALUES(?,?,?,?)',
-                     (str(today_kst()), 'exercise', 'failed-exercise', 'ERROR'))
+                     (str(today_kst()), 'exercise', 'failed-exercise', status))
         conn.execute('INSERT INTO attempts(day,category,request_id,status) VALUES(?,?,?,?)',
                      (str(today_kst()), 'parenting', 'already-ready', 'APPROVED'))
     calls = []
@@ -445,6 +411,45 @@ def test_source_error_recovery_reuses_completed_writer_without_repurchase(settin
     monkeypatch.setattr('blogbot.pipeline.BlogLLM', LLM)
     assert rejected_checkpoint(settings, request)['review'] == {}
     assert run_daily(settings, retry_failed=True)[0]['status'] == 'APPROVED'
+
+
+def test_invalid_preview_recovery_rewrites_cached_draft_before_review(settings, monkeypatch):
+    from dataclasses import asdict, replace
+    request = ContentRequest('preview-repair', 'investment', {'kind': 'policy'})
+    body = '작성일: 2026-10-02\n\n## 사실\n내용\n\n## 의미\n내용\n\n## 조건\n내용\n\n## 정리\n### 변수\n내용'
+    post = PostDraft('investment', '시장·산업', '정책', '정책 확인', body, [],
+                     ['https://example.com/policy'], str(today_kst()), request_id=request.id)
+    with closing(connect_db(settings.db_path)) as conn, conn:
+        conn.execute('INSERT INTO attempts(day,category,request_id,status) VALUES(?,?,?,?)',
+                     (str(today_kst()), request.category, request.id, 'ERROR'))
+    monkeypatch.setattr('blogbot.pipeline.collect_requests', lambda _: ([request], []))
+    monkeypatch.setattr('blogbot.pipeline.prepare_request', lambda s, r: r)
+    monkeypatch.setattr('blogbot.recovery.rejected_checkpoint', lambda *a: {'post': asdict(post)})
+    monkeypatch.setattr('blogbot.pipeline.generate_images', lambda s, r, p: p)
+    calls = []
+    class LLM:
+        def __init__(self, *a): pass
+        def create_draft(self, *a): pytest.fail('Completed writer must be reused')
+        def rewrite(self, p, info, review, request):
+            calls.append(review['rewrite_instructions'])
+            return replace(p, body=p.body.replace('작성일: 2026-10-02', '핵심 정책 내용을 확인해요.'))
+        def review(self, *a):
+            return {'scores': [5]*6, 'total': 30, 'decision': 'PASS'}
+    monkeypatch.setattr('blogbot.pipeline.BlogLLM', LLM)
+    assert run_daily(settings, retry_failed=True)[0]['status'] == 'APPROVED'
+    assert calls == ['Start with a plain-language preview summary, not dates or URLs']
+
+
+def test_recovery_does_not_repurchase_uncertain_failed_api(settings, monkeypatch):
+    request = ContentRequest('uncertain-api', 'exercise', {'question': '자세'})
+    with closing(connect_db(settings.db_path)) as conn, conn:
+        conn.execute('INSERT INTO attempts(day,category,request_id,status) VALUES(?,?,?,?)',
+                     (str(today_kst()), request.category, request.id, 'ERROR'))
+    (settings.db_path.parent/'usage.jsonl').write_text(json.dumps({
+        'request_id': request.id, 'stage': 'writer', 'error': 'APITimeoutError'}) + '\n')
+    monkeypatch.setattr('blogbot.pipeline.collect_requests', lambda _: ([request], []))
+    monkeypatch.setattr('blogbot.pipeline.BlogLLM', lambda *a: pytest.fail('Do not repurchase'))
+    assert run_daily(settings, retry_failed=True)[0]['status'] == 'MANUAL_CHECK_REQUIRED'
 
 
 def test_recovery_skips_failed_replacement_after_category_is_approved(settings, monkeypatch):

@@ -201,6 +201,8 @@ def test_weekend_feature_quota_and_selected_topic(tmp_path, monkeypatch, day, qu
                  for c in ['parenting', 'exercise', 'investment']) == quotas
     assert settings.config['blog']['daily_max'] == maximum
     assert settings.daily_count == min(3, maximum)
+    assert tuple(settings.config['images'][c + '_count']
+                 for c in ['parenting', 'exercise', 'investment']) == (5, 5, 3)
     if today.weekday() >= 5:
         assert settings.config['community']['enabled'] is False
         assert any('실제 캡처' in rule for rule in settings.config['categories']['parenting']['rules'])
@@ -210,6 +212,24 @@ def test_weekend_feature_quota_and_selected_topic(tmp_path, monkeypatch, day, qu
         requests, notices = collect_requests(settings)
         assert [r.id for r in requests] == ['owner-20261003-esl-feeding-feature']
         assert not notices
+        context = requests[0].data['context']
+        for detail in ['출생 재태주수가 아니라 평가 당시 월경후연령',
+                       'ESL 자세 비교20명과 별도 paced bottle feeding 비교20명',
+                       '각 조건2분씩', '저희 아이에게는 도움이 됐어요',
+                       '임상 근거와 분리', '반복되는 기침·사레',
+                       '단단하고 평평한 별도 수면 공간', '최종 총5장을 강제하지 않는다']:
+            assert detail in context
+        for url in ['https://pubmed.ncbi.nlm.nih.gov/39721201/',
+                    ('https://www.ruh.nhs.uk/patients/patient_information/'
+                     'NIC034_Elevated_Side_Lying_feeding.pdf'),
+                    ('https://www.cuh.nhs.uk/patient-information/'
+                     'supporting-safe-effective-and-enjoyable-bottle-feeding/'),
+                    'https://safetosleep.nichd.nih.gov/reduce-risk/safe-sleep-environment']:
+            assert url in context
+        rules = '\n'.join(settings.config['categories']['parenting']['rules'])
+        for requirement in ['실제 이미지2장 이상', '공식 직접 링크카드1개 이상',
+                            '재사용 자료1개', '재사용 권한', '보조 삽화는 생략']:
+            assert requirement in rules
 
 
 def test_interest_prefers_eligible_stock_without_overriding_report_priority(monkeypatch):

@@ -1,5 +1,56 @@
-{"verified_date":"2026-09-28","records":[
-  {"request_id":"owner-00-child-gift","category":"parenting","day":"2026-09-28","status":"SAVED_NAVER"},
-  {"request_id":"exercise-00-deadlift","category":"exercise","day":"2026-09-28","status":"SAVED_NAVER"},
-  {"request_id":"community-c939f0b8a7bc581009109bcf","category":"investment","day":"2026-09-28","status":"SAVED_NAVER"}
-]}
+{
+  "verified_date": "2026-10-02",
+  "records": [
+    {
+      "request_id": "owner-00-child-gift",
+      "category": "parenting",
+      "day": "2026-09-28",
+      "status": "SAVED_NAVER"
+    },
+    {
+      "request_id": "exercise-00-deadlift",
+      "category": "exercise",
+      "day": "2026-09-28",
+      "status": "SAVED_NAVER"
+    },
+    {
+      "request_id": "community-c939f0b8a7bc581009109bcf",
+      "category": "investment",
+      "day": "2026-09-28",
+      "status": "SAVED_NAVER"
+    },
+    {
+      "request_id": "owner-20261002-benefits-gift-refresh",
+      "category": "parenting",
+      "day": "2026-10-02",
+      "status": "SAVED_NAVER",
+      "saved_display": "2026.10.02 12:23",
+      "images": 5,
+      "mode": "assisted_recovery",
+      "verification": "draft_list_title_time",
+      "reopened": false
+    },
+    {
+      "request_id": "exercise-05-leg-press",
+      "category": "exercise",
+      "day": "2026-10-02",
+      "status": "SAVED_NAVER",
+      "saved_display": "2026.10.02 12:29",
+      "images": 5,
+      "mode": "assisted_recovery",
+      "verification": "draft_list_title_time",
+      "reopened": false
+    },
+    {
+      "request_id": "community-8c9c795de7cfc6071b206754",
+      "category": "investment",
+      "day": "2026-10-02",
+      "status": "SAVED_NAVER",
+      "saved_display": "2026.10.02 12:36",
+      "images": 3,
+      "mode": "assisted_recovery",
+      "verification": "draft_list_title_time",
+      "reopened": false
+    }
+  ]
+}

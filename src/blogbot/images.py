@@ -30,7 +30,7 @@ def atomic_json(path: Path, value: dict) -> None:
 def image_prompt(post: PostDraft, section: str, *, thumbnail: bool = False) -> str:
     subject = re.sub(r'[#|*_]', ' ', section).strip()[:300]
     scene = ''
-    figures = 'asymmetric round heads, simple stick/box bodies, tiny dot eyes, minimal expression and'
+    figures = 'friendly rounded cartoon characters, natural simple bodies, tiny dot eyes and'
     if post.category == 'parenting':
         scene = '''For parenting about an infant: show one plainly recognizable awake baby with round baby
 proportions, short limbs and a plain onesie, or a relevant simple object. Never substitute an
@@ -61,15 +61,16 @@ Use a large central subject, strong black-line contrast and one bright flat acce
 Keep headline and subject inside the central 80% so a square crop stays understandable.
 Readable at 160 by 160 pixels; no dense checklist, collage or decorative filler.
 The cover must promise only what the article supports, with no fear bait or invented facts.'''
-    return f'''Create one simple MS Paint mouse-drawn doodle for this Korean blog section.
+    return f'''Create one simple hand-drawn cartoon illustration for this Korean blog section.
 Article: {post.title}\nSection: {subject}
 Category: {post.category}. The depicted age, activity and props must match this title and section.
 {scene}
-Keep the same deliberately rough MS Paint doodle style in every image:
-pure white background, thin slightly wobbly black mouse-drawn lines, {figures}
-generous whitespace. Flat shapes only; at most one {'bright' if thumbnail else 'muted'} accent color.
+Match the established seated-row and comfort-toy illustrations from 2026-10-01:
+pure white background, thick slightly wobbly black hand-drawn outlines, {figures}
+generous whitespace and mostly white fills. Flat simple coloring with sparse muted
+sage-green and warm-yellow accents; no painted scenic background.
 {emphasis}
-Show one clear everyday moment with at most one person and two simple props.
+Show one clear everyday moment with only the few characters and props the topic needs.
 Keep objects separate and grounded: each hand belongs to one arm, any held
 object touches that hand, furniture has a continuous outline, and nothing
 floats, merges, duplicates or passes through another object. If a scene would

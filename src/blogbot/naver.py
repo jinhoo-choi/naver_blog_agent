@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -9,6 +10,42 @@ from playwright.sync_api import Page, expect, sync_playwright
 from .core import PostDraft
 from .inputs import verify_photos
 from .presentation import render_segments
+
+
+class _ClipboardText(HTMLParser):
+    """Plain fallback for our escaped renderer; preserve meaning-unit boundaries."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == 'br':
+            self.parts.append('\n')
+        elif tag in {'p', 'div', 'h1', 'h2', 'h3', 'hr', 'blockquote', 'ul', 'ol', 'table'}:
+            self.parts.append('\n\n')
+        elif tag == 'li':
+            self.parts.append('\n')
+
+    def handle_endtag(self, tag):
+        if tag in {'td', 'th'}:
+            self.parts.append('\t')
+        elif tag in {'p', 'div', 'h1', 'h2', 'h3', 'blockquote', 'ul', 'ol', 'table'}:
+            self.parts.append('\n\n')
+        elif tag in {'li', 'tr'}:
+            self.parts.append('\n')
+
+    def handle_data(self, data):
+        self.parts.append(data)
+
+
+def clipboard_plain_text(html_text: str) -> str:
+    parser = _ClipboardText()
+    parser.feed(html_text)
+    parser.close()
+    text = ''.join(parser.parts).replace('\xa0', ' ')
+    text = re.sub(r'[ \t]+\n', '\n', text)
+    return re.sub(r'\n{3,}', '\n\n', text).strip()
 
 
 class NaverDraftWriter:
@@ -73,9 +110,9 @@ class NaverDraftWriter:
     def _write_clipboard(editor, html_text: str) -> None:
         editor.evaluate(
             """async value => navigator.clipboard.write([new ClipboardItem({
-              'text/html': new Blob([value], {type: 'text/html'}),
-              'text/plain': new Blob([value.replace(/<[^>]+>/g, ' ')], {type: 'text/plain'})
-            })])""", html_text,
+              'text/html': new Blob([value.html], {type: 'text/html'}),
+              'text/plain': new Blob([value.plain], {type: 'text/plain'})
+            })])""", {"html": html_text, "plain": clipboard_plain_text(html_text)},
         )
 
     def _paste_html(self, page: Page, editor, html_text: str, selector: str = "") -> None:

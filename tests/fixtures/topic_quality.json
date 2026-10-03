@@ -1,0 +1,37 @@
+{
+  "notice": "Offline editorial examples, not publishable articles or verified medical/financial advice. Supplied evidence is synthetic test input; no live source validation or model-quality score is implied.",
+  "cases": [
+    {
+      "topic": "parenting",
+      "evidence": "사용자 제공: 수유 자세를 바꿔 보았음. 효과 수치나 아기 반응은 제공하지 않음.",
+      "before": "써누애비는 자세를 바꾸고 아기의 불편함이 50% 줄었습니다. 자세를 살펴보도록 하겠습니다.",
+      "after": "수유 자세는 아기 상태와 적용 조건을 먼저 확인해야 합니다. 저는 자세를 바꿔 보았습니다.\n\n## 자세를 확인하는 순서\n\n실제 적용 순서와 중단 신호는 확인된 원문 범위에서 설명합니다.",
+      "expected_review": "미제공 50% 효과는 허위 경험으로 기존 blocking_issues에 기록. 사용자 제공 자세 변경 경험은 보존. 안전 행동을 삭제하지 않음.",
+      "required_guidance": ["적용 월령/조건", "관찰할 신호", "연구 결과"]
+    },
+    {
+      "topic": "exercise",
+      "evidence": "공식 동작 자료를 확인해야 하는 입력. 특정 관절 각도·반복 횟수·경력은 제공하지 않음.",
+      "before": "자세는 중요합니다. 자세는 중요합니다. 매일 100회 하면 됩니다.",
+      "after": "동작은 무게보다 확인된 자세와 안전 조건에 맞춰 수행합니다.\n\n## 준비와 수행\n\n공식 동작 자료의 접점과 몸통 위치를 비교합니다.\n\n## 흔한 오류와 중단 신호\n\n통증·저림이 있으면 멈춥니다.",
+      "expected_review": "근거 없는 100회 삭제. 올바른/잘못된 자세의 실제 관찰 지점은 출처 대조 필요. 삽화만 보고 정확성을 승인하지 않음.",
+      "required_guidance": ["발/손 접점", "올바른 자세", "중단 신호"]
+    },
+    {
+      "topic": "investment",
+      "evidence": "가상 입력: 산업 정책 검토 단계. sector_only=true. 회사 연결과 확정 시행일은 없음.",
+      "before": "정책이 확정되어 A사는 반드시 수혜를 받습니다. 지금 매수할 기회입니다.",
+      "after": "이번 자료는 정책 검토 단계에 관한 내용입니다. 특정 기업의 실적 반영은 확인되지 않았습니다.\n\n## 검토 중인 내용과 남은 조건\n\n정책 검토와 확정 시행을 구분합니다.\n\n## 자료로 확인할 수 없는 연결\n\n산업 자료만으로 개별 기업의 수혜를 확정하지 않습니다.",
+      "expected_review": "검토를 확정으로 바꾼 시점 오류, 원문 없는 기업 연결과 매수 권유는 기존 blocking_issues. 날짜는 실제 발간일로 확인.",
+      "required_guidance": ["sector_only", "발간/공시일", "남은 조건"]
+    },
+    {
+      "topic": "ai_tutorial",
+      "evidence": "가상 실행기록: 옵션 X를 껐을 때 실패했고 켰을 때 파일 1개를 얻음. 시간 측정 없음.",
+      "before": "누구나 한 번에 성공합니다. 작업시간이 90% 줄었습니다.",
+      "after": "이 실행에서는 옵션 X를 켠 뒤 파일 한 개를 얻었습니다. 옵션을 끈 시도는 실패했습니다.\n\n## 사용한 설정과 입력\n\n옵션 X를 켰습니다.\n\n## 실패한 시도와 다시 실행한 결과\n\n옵션을 바꾸기 전과 후의 실제 캡처를 대조합니다. 시간 절감은 측정하지 않았습니다.",
+      "expected_review": "90% 절감과 보편적 성공 삭제. 실제 사용 설정/실패/결과를 보존. 미검증 수정안은 실행기록과 구분. 이 fixture는 실제 캡처를 제공하지 않음.",
+      "required_guidance": ["실패 조건", "실제 캡처", "미검증 제안"]
+    }
+  ]
+}

@@ -217,8 +217,19 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
             if not (today-timedelta(days=3)).isoformat() <= post.as_of_date <= today.isoformat():
                 continue
             stem = settings.artifact_dir / f"{post.as_of_date}-{row['id']:05d}"
-            payload = json.loads(stem.with_suffix('.json').read_text(encoding='utf-8'))
-            request = ContentRequest(**payload['input'])
+            try:
+                payload = json.loads(stem.with_suffix('.json').read_text(encoding='utf-8'))
+                request = ContentRequest(**payload['input'])
+                if (request.id != post.request_id or request.category != post.category
+                        or not isinstance(payload['review'], dict)):
+                    raise ValueError('Pending packet does not match approved post')
+            except (OSError, ValueError, TypeError, KeyError):
+                # A DB/file checkpoint interruption must not abort unrelated posts or
+                # authorize replacement writer/reviewer/image calls. Keep its pending row.
+                results.append({'post_id': row['id'], 'category': post.category,
+                                'request_id': post.request_id, 'status': 'ERROR',
+                                'stage': 'media_resume', 'reason': 'pending_packet_requires_reconciliation'})
+                continue
             results.append(complete_media(settings, conn, row['id'], post, request, payload['review']))
         if retry_failed:
             from .recovery import recover_rejected

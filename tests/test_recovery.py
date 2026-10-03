@@ -19,7 +19,7 @@ from blogbot.pipeline import run_daily
 
 
 @pytest.fixture
-def settings(tmp_path, monkeypatch):
+def settings(tmp_path, monkeypatch, weekday_clock):
     monkeypatch.setenv('BLOG_DATA_DIR', str(tmp_path))
     result = load_settings()
     result.config['images']['parenting_count'] = 1

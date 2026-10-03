@@ -126,7 +126,9 @@ def test_export_date_and_future_events_cannot_refresh_old_or_undated_sources(fac
     assert community_request(record, origin, {}) is None
 
 
-def test_collect_waits_for_today_morning_export_without_consuming_inputs(tmp_path, monkeypatch):
+def test_collect_waits_for_today_morning_export_without_consuming_inputs(
+    tmp_path, monkeypatch, weekday_clock,
+):
     from datetime import timedelta
 
     monkeypatch.setenv('BLOG_DATA_DIR', str(tmp_path))

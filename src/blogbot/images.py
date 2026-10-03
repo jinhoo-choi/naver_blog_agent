@@ -28,7 +28,7 @@ def atomic_json(path: Path, value: dict) -> None:
 
 
 def image_prompt(post: PostDraft, section: str, *, thumbnail: bool = False) -> str:
-    subject = re.sub(r'[#|*_]', ' ', section).strip()[:300]
+    subject = re.sub(r'[#|*_]', ' ', section).strip()[:1200]
     scene = ''
     figures = 'friendly rounded cartoon characters, natural simple bodies, tiny dot eyes and'
     if post.category == 'parenting':
@@ -41,10 +41,14 @@ If an infant sleep scene is relevant, show the infant on their back in fitted pa
         figures = ''
         scene = '''Objects only: no people, children, infants, baby-care props or medical crosses.
 Use simple inanimate objects from the article. No letters at all, including the letters AI.'''
-        if 'AI' in post.title and not thumbnail:
-            scene += '\nDraw a plain rectangular microchip protected by a simple plain umbrella, and nothing else.'
     elif post.category == 'exercise':
         scene = 'Use adults or exercise equipment only; match the actual movement and age in the article.'
+    if not thumbnail:
+        scene += '''\nExplain a concrete relationship, step, or observable cue supported by the section.
+Do not replace the explanation with a generic decorative symbol. Do not invent details
+missing from the text. For exercise, show only source-supported posture cues; if these
+cannot be depicted safely, use relevant equipment rather than a guessed demonstration.
+Generated illustrations are explanatory aids, never evidence of real use or results.'''
     lettering = 'No labels, letters, numbers, speech bubbles or captions in the image.'
     emphasis = ''
     if thumbnail:
@@ -82,6 +86,11 @@ unsupported exercise technique, numeric charts, fabricated statistics or financi
 Show the actual topic, not a generic thinking/checking/preparation scene. Do not depict a real family.'''
 
 
+def section_contexts(body: str) -> list[str]:
+    """Keep the heading and its actual explanation together for image planning."""
+    return [part.strip() for part in re.split(r'^##\s+', body, flags=re.MULTILINE)[1:]]
+
+
 def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostDraft:
     if post.category == 'cooking':
         return replace(post, photos=request.photos)
@@ -91,15 +100,13 @@ def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostD
         config.get('investment_extended_min_chars', 2500)
     ):
         count = int(config.get('investment_extended_count', count))
-    sections = re.findall(r'^##\s+(.+)$', post.body, re.MULTILINE)
+    sections = section_contexts(post.body)
     if len(sections) < max(1, count - 1):
         raise ValueError('Not enough sections to place images')
     folder = settings.artifact_dir / 'generated-images' / post.request_id
     folder.mkdir(parents=True, exist_ok=True)
-    client = OpenAI(api_key=settings.openai_api_key,
-                    timeout=float(config.get('timeout_seconds', 120)), max_retries=0)
-
-    def one(index: int) -> dict:
+    plans = []
+    for index in range(count):
         thumbnail = index == 0
         section = '글 전체 핵심 요약' if thumbnail else sections[
             round((index - 1) * (len(sections) - 1) / max(1, count - 2))]
@@ -109,6 +116,24 @@ def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostD
                   'size': str(config.get('size', '1024x1024')),
                   'output_format': str(config.get('output_format', 'jpeg'))}
         key = hashlib.sha256(json.dumps(params, sort_keys=True).encode()).hexdigest()
+        plans.append((params, key))
+    # Prompt edits must not reset existing per-image paid-call budgets.
+    # Store only identities; all parameters can be reconstructed from the approved post.
+    plan_path = folder / '.image-plan'
+    plan = {'version': 'section-context-v3', 'keys': [key for _, key in plans]}
+    if plan_path.exists():
+        if json.loads(plan_path.read_text()) != plan:
+            raise ImagePending('Image plan changed; reconcile existing checkpoints before generation')
+    elif any(folder.iterdir()):
+        raise ImagePending('Legacy image checkpoints need reconciliation; no new images requested')
+    else:
+        atomic_json(plan_path, plan)
+    client = OpenAI(api_key=settings.openai_api_key,
+                    timeout=float(config.get('timeout_seconds', 120)), max_retries=0)
+
+    def one(index: int) -> dict:
+        thumbnail = index == 0
+        params, key = plans[index]
         suffix = 'jpg' if params['output_format'] == 'jpeg' else params['output_format']
         path = folder / f'{key}.{suffix}'
         manifest = folder / f'{key}.json'

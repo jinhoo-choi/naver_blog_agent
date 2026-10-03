@@ -99,9 +99,17 @@ def extract_bundle(encrypted: bytes, directory: Path, key: str) -> None:
             relative = Path(photo['file']).relative_to(old_root)
             photo['file'] = str((directory / relative).resolve())
     for path in (directory / 'drafts').glob('*.json'):
-        payload = json.loads(path.read_text())
-        rebase(payload['post']['photos'])
-        rebase(payload['input']['photos'])
+        try:
+            payload = json.loads(path.read_text())
+            post_photos, input_photos = payload['post']['photos'], payload['input']['photos']
+            if not isinstance(post_photos, list) or not isinstance(input_photos, list):
+                raise TypeError('Invalid packet photo lists')
+        except (ValueError, TypeError, KeyError):
+            # Retain damaged bytes for reconciliation; pending media cannot use them.
+            # Path validation in rebase remains fail-closed for parseable packets.
+            continue
+        rebase(post_photos)
+        rebase(input_photos)
         atomic_json(path, payload)
     ready_path = directory / 'ready.json'
     if ready_path.exists():
@@ -179,6 +187,8 @@ def pack(settings, destination: Path) -> None:
     # Render transport segments; the saver can paste them without another generation.
     from .core import load_post
     with closing(connect_db(settings.db_path)) as conn:
+        pending_ids = {r['request_id'] for r in conn.execute(
+            "SELECT request_id FROM posts WHERE status IN ('TEXT_APPROVED','IMAGES_PENDING')")}
         rows = conn.execute("SELECT * FROM posts WHERE status='APPROVED' "
                             "AND as_of_date BETWEEN ? AND ? ORDER BY as_of_date,id",
                             ((today-timedelta(days=3)).isoformat(), today.isoformat())).fetchall()
@@ -193,11 +203,20 @@ def pack(settings, destination: Path) -> None:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:
         # Retain state and recent packets; old completed media are not transported forever.
-        keep_ids = set()
+        keep_ids = set(pending_ids)
         for path in settings.artifact_dir.glob('*.json'):
-            payload = json.loads(path.read_text())
-            if payload['post']['as_of_date'] >= cutoff:
-                keep_ids.add(payload['post']['request_id'])
+            try:
+                payload = json.loads(path.read_text())
+                keep = payload['post']['as_of_date'] >= cutoff
+                request_id = payload['post']['request_id']
+                if not isinstance(request_id, str):
+                    raise TypeError('Invalid packet request id')
+            except (ValueError, TypeError, KeyError):
+                # Preserve evidence, never silently drop the broken packet or paid-call state.
+                archive.write(path, path.relative_to(directory))
+                continue
+            if keep or request_id in pending_ids:
+                keep_ids.add(request_id)
                 archive.write(path, path.relative_to(directory))
                 md = path.with_suffix('.md')
                 if md.exists(): archive.write(md, md.relative_to(directory))

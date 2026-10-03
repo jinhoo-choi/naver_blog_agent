@@ -9,8 +9,9 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from openai import OpenAI
 
 from .core import PostDraft, today_kst
+from .editorial import editorial_hints, quality_guidance
 from .inputs import ContentRequest
-from .responses import DRAFT_SCHEMA, REVIEW_SCHEMA, _get, request_json
+from .responses import DRAFT_SCHEMA, REVIEW_SCHEMA, ResponseFailure, _get, request_json
 
 
 def _load(path: Path) -> str:
@@ -158,6 +159,7 @@ class BlogLLM:
 
         prompt = f"""
 {self.writer_prompt}
+{quality_guidance(request.category)}
 
 오늘 날짜: {today}
 카테고리: {display} ({category_key})
@@ -220,6 +222,11 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
         rules = "\n".join(f"- {r}" for r in category_info.get("rules", []))
         prompt = f"""
 {self.reviewer_prompt}
+{quality_guidance(request.category)}
+
+기계적 편집 관찰(오류 확정/추가 차단 기준 아님, 문맥으로 검토):
+{json.dumps(editorial_hints(post.body), ensure_ascii=False)}
+기존 6개 점수를 근거대로 매긴다. 기준 통과를 위해 점수를 올리지 않는다.
 
 오늘 한국시간 기준일: {today_kst().isoformat()}
 작성 기준일은 위 날짜와 대조한다. UTC 날짜나 모델 내부 날짜로 어제/내일을 추정하지 않는다.
@@ -251,6 +258,7 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
         rules = "\n".join(f"- {r}" for r in category_info.get("rules", []))
         prompt = f"""
 {self.writer_prompt}
+{quality_guidance(request.category)}
 
 오늘 한국시간 기준일: {today_kst().isoformat()}
 기존 초안을 심사 지적사항에 맞게 수정한다. 주제와 핵심 출처는 유지하되 오류·과장·중복을 제거한다.
@@ -268,12 +276,21 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
             "tools": [{"type": "web_search"}], "tool_choice": "required",
             "include": ["web_search_call.action.sources"], "max_tool_calls": 3,
         }
-        payload, response = request_json(
-            self.client, model=self.model, stage="rewrite", request_id=request.id,
-            schema=DRAFT_SCHEMA, journal=self.journal, max_output_tokens=12000,
-            retry_output_tokens=16000, reasoning={"effort": "low"}, input=prompt,
-            cache_only=cache_only, **search,
-        )
+        call = dict(model=self.model, stage="rewrite", request_id=request.id,
+                    schema=DRAFT_SCHEMA, journal=self.journal, max_output_tokens=12000,
+                    retry_output_tokens=16000, reasoning={"effort": "low"},
+                    cache_only=cache_only, **search)
+        try:
+            payload, response = request_json(self.client, input=prompt, **call)
+        except ResponseFailure as exc:
+            if not cache_only or exc.reason != 'cached_response_unavailable':
+                raise
+            # One read-only compatibility lookup for pre-topic-quality-v1 interrupted rewrites.
+            # All other inputs stay byte-for-byte identical; never grant another paid attempt.
+            legacy_prompt = prompt.replace(
+                self.writer_prompt + '\n' + quality_guidance(request.category) + '\n',
+                self.writer_prompt + '\n', 1)
+            payload, response = request_json(self.client, input=legacy_prompt, **call)
         return replace(
             post,
             subcategory=str(payload.get("subcategory", post.subcategory)),

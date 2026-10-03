@@ -556,3 +556,70 @@ def test_editorial_recovery_updates_checkpoint_and_caps_new_revisions(settings, 
         assert recover_rejected(settings, conn, [request])[0]['reason'] == 'editorial_revision_limit'
     assert len(calls) == 2 and calls[1][0] == calls[0][0] + ' 수정'
     assert all(not cached for _, cached in calls)
+
+
+@pytest.mark.parametrize('broken', ['missing', 'invalid_json', 'wrong_id'])
+def test_orphan_pending_packet_holds_only_affected_post(settings, monkeypatch, broken):
+    from dataclasses import asdict, replace
+
+    from blogbot.images import atomic_json
+
+    first = replace(draft(), request_id='orphan', status='TEXT_APPROVED')
+    second = replace(draft(), request_id='healthy', title='별도 국 만드는 순서',
+                     body='별도 재료를 계량합니다.', status='TEXT_APPROVED')
+    with closing(connect_db(settings.db_path)) as conn:
+        first_id = save_post(conn, first)
+        second_id = save_post(conn, second)
+    settings.artifact_dir.mkdir(parents=True, exist_ok=True)
+    first_path = settings.artifact_dir / f'{first.as_of_date}-{first_id:05d}.json'
+    if broken == 'invalid_json':
+        first_path.write_text('{broken')
+    elif broken == 'wrong_id':
+        atomic_json(first_path, {'input': asdict(ContentRequest('other', 'cooking', {})), 'review': {}})
+    atomic_json(settings.artifact_dir / f'{second.as_of_date}-{second_id:05d}.json', {
+        'input': asdict(ContentRequest('healthy', 'cooking', {})), 'review': {}})
+    monkeypatch.setattr('blogbot.pipeline.reserve_attempt', lambda *args: None)
+    monkeypatch.setattr('blogbot.pipeline.BlogLLM', lambda *a: pytest.fail('No new LLM call'))
+    calls = []
+    def complete(*args):
+        calls.append(args[2])
+        return {'status': 'APPROVED', 'request_id': args[3].request_id}
+    monkeypatch.setattr('blogbot.pipeline.complete_media', complete)
+    settings.config['categories']['cooking']['max_daily'] = 2
+    results = run_daily(settings, count=1)
+    assert calls == [second_id]
+    assert any(r.get('reason') == 'pending_packet_requires_reconciliation' for r in results)
+    assert any(r.get('request_id') == 'healthy' and r['status'] == 'APPROVED' for r in results)
+    with closing(connect_db(settings.db_path)) as conn:
+        assert conn.execute('SELECT status FROM posts WHERE id=?', (first_id,)).fetchone()[0] == 'TEXT_APPROVED'
+
+
+@pytest.mark.parametrize('damaged', ['{broken', '{"input": {}}'])
+def test_broken_pending_packet_survives_encrypted_transport_with_image_budget(settings, monkeypatch, damaged):
+    from cryptography.fernet import Fernet
+
+    from blogbot.cloud import extract_bundle, pack
+
+    post = draft()
+    post.request_id, post.status = 'pending-damaged', 'IMAGES_PENDING'
+    with closing(connect_db(settings.db_path)) as conn:
+        post_id = save_post(conn, post)
+    settings.artifact_dir.mkdir(parents=True, exist_ok=True)
+    path = settings.artifact_dir / f'{post.as_of_date}-{post_id:05d}.json'
+    path.write_text(damaged)
+    folder = settings.artifact_dir / 'generated-images' / post.request_id
+    folder.mkdir(parents=True)
+    (folder / '.image-plan').write_text('{"version":"test","keys":["old"]}')
+    (folder / 'old.json').write_text('{"state":"UNCERTAIN","attempts":1}')
+    key = Fernet.generate_key().decode()
+    monkeypatch.setenv('BLOG_BUNDLE_KEY', key)
+    bundle = settings.db_path.parent / 'packet.enc'
+    pack(settings, bundle)
+    restored = settings.db_path.parent / 'restored'
+    extract_bundle(bundle.read_bytes(), restored, key)
+    assert (restored / path.relative_to(settings.db_path.parent)).read_text() == damaged
+    for name in ['.image-plan', 'old.json']:
+        assert (restored / folder.relative_to(settings.db_path.parent) / name).read_bytes() == (folder / name).read_bytes()
+    assert json.loads((restored / 'ready.json').read_text())['posts'] == []
+    with closing(connect_db(restored / 'blog.db')) as conn:
+        assert conn.execute('SELECT status FROM posts WHERE id=?', (post_id,)).fetchone()[0] == 'IMAGES_PENDING'

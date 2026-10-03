@@ -236,7 +236,8 @@ def test_investment_image_prompt_excludes_parenting_scene_instructions():
     from blogbot.images import image_prompt
     post = PostDraft('investment', '시장·산업', 'topic', 'AI칩 담보대출 보험', 'body', [], [], '2026-09-30')
     prompt = image_prompt(post, '리스크')
-    assert 'Objects only' in prompt and 'microchip protected by' in prompt
+    assert 'Objects only' in prompt and 'microchip protected by' not in prompt
+    assert 'concrete relationship' in prompt
     assert 'onesie' not in prompt and 'round heads' not in prompt
     assert 'onesie' in image_prompt(replace(post, category='parenting', title='아기 손가락'), '수면')
 

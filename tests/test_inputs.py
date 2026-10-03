@@ -215,7 +215,12 @@ def test_weekend_feature_quota_and_selected_topic(tmp_path, monkeypatch, day, qu
         context = requests[0].data['context']
         for detail in ['출생 재태주수가 아니라 평가 당시 월경후연령',
                        'ESL 자세 비교20명과 별도 paced bottle feeding 비교20명',
-                       '각 조건2분씩', '저희 아이에게는 도움이 됐어요',
+                       '각 조건2분씩', '저희 아이에게는 도움이 됐습니다',
+                       '기침·사레가 적고 호흡 멈춤이 짧게 관찰',
+                       '별도 paced bottle feeding군의 결과를 ESL 결과와 합치지 않는다',
+                       'ESL 자세와 단계별 순서', '각각 독립 대제목',
+                       '정확한 의료 자세·손 위치·순서',
+                       '세이지 그린', '따뜻한 노란색', '응급 도움',
                        '임상 근거와 분리', '반복되는 기침·사레',
                        '단단하고 평평한 별도 수면 공간', '최종 총5장을 강제하지 않는다']:
             assert detail in context

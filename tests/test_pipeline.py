@@ -18,7 +18,7 @@ from blogbot.pipeline import run_daily, save_pending
 
 
 @pytest.fixture
-def settings(tmp_path, monkeypatch):
+def settings(tmp_path, monkeypatch, weekday_clock):
     monkeypatch.setattr('blogbot.research.prepare_reference_evidence', lambda d, r, u: r)
     monkeypatch.setattr('blogbot.recovery.prepare_reference_evidence', lambda d, r, u: r)
     monkeypatch.setenv("BLOG_DATA_DIR", str(tmp_path))

@@ -44,9 +44,10 @@ sector_only는 종목을 억지로 연결하지 않는다. 원문에 없는 수�
 }
 
 
-def quality_guidance(category: str) -> str:
+def quality_guidance(category: str, editorial_type: str | None = None) -> str:
     """Select only the relevant form; unknown categories retain common safeguards."""
-    return COMMON + '\n' + TOPICS.get(category, '')
+    key = 'ai_tutorial' if category == 'parenting' and editorial_type == 'ai_tutorial' else category
+    return COMMON + '\n' + TOPICS.get(key, '')
 
 
 def editorial_hints(body: str) -> list[str]:
@@ -66,3 +67,31 @@ def editorial_hints(body: str) -> list[str]:
         if phrase in body:
             hints.append(f'상투적/제3자 표현 후보: {phrase} (인용이면 보존)')
     return list(dict.fromkeys(hints))
+
+
+def routed_prompt(prompt: str, category: str, editorial_type: str | None = None) -> str:
+    """Only AI-family subtype removes irrelevant age-table requirements; legacy bytes stay exact."""
+    if category != 'parenting' or editorial_type != 'ai_tutorial':
+        return prompt
+    output = []
+    for line in prompt.splitlines():
+        if line.startswith('- 개월수별 특징'):
+            output.append('- 설정·입력·결과·실패 조건 비교는 확인된 정보만 2~3열 표로 정리한다. '
+                          '자료에 없는 설정·숫자를 채우지 않는다.')
+        elif line.startswith(('- 육아는 실제 질문에 먼저', '육아는 정확한 월령이 없을 때')):
+            output.append('가족 AI 튜토리얼은 실제 질문과 검증된 제작 조건에 답한다. '
+                          '아이 실명·병력·개인정보는 공개하지 않고 관련 없는 월령 표를 강제하지 않는다.')
+        else:
+            output.append(line)
+    return '\n'.join(output)
+
+
+def routed_category_info(info: dict, category: str, editorial_type: str | None = None) -> dict:
+    if category != 'parenting' or editorial_type != 'ai_tutorial':
+        return info
+    rules = [r for r in info.get('rules', []) if not r.startswith(
+        ('질문 → 핵심 답변 →', '월령이 입력되지 않았으면'))]
+    rules.append('가족 AI 튜토리얼은 육아 슬롯으로 세되 실제 환경·설정·입력·결과·실패·재현 절차를 따른다. '
+                 '관련 없는 의료 월령·진료 목차를 강제하지 않는다. 사용자가 고른 실제 질문과 '
+                 '제공/확인된 기록만 쓰며 새 영상·개인 경험을 만들지 않는다.')
+    return {**info, 'rules': rules}

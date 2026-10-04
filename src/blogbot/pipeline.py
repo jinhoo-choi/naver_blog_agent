@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import closing
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import timedelta
 
 from openai import OpenAIError
@@ -28,6 +28,17 @@ from .images import ImagePending, atomic_json, generate_images
 from .inputs import ContentRequest, collect_requests
 from .llm import BlogLLM
 from .naver import NaverDraftWriter
+from .planning import (
+    MediaBusy,
+    SaveDateRequired,
+    active_plan,
+    attempt_matches,
+    matches_post,
+    matches_request,
+    media_claim,
+    reservation_result,
+    saved_count,
+)
 from .pre_review import (
     DraftCandidate,
     PreReviewFailure,
@@ -54,6 +65,9 @@ def make_writer(settings: Settings) -> NaverDraftWriter:
 
 def save_pending(settings: Settings) -> list[dict]:
     """Retry reviewed text without buying another generation or repeating uncertain saves."""
+    plan = active_plan(settings)
+    if plan and plan.get('reservation'):
+        return [reservation_result(plan)]
     writer = make_writer(settings)
     results = []
     with closing(connect_db(settings.db_path)) as conn:
@@ -62,9 +76,16 @@ def save_pending(settings: Settings) -> list[dict]:
         ).fetchone()
         if uncertain:
             return [{"id": uncertain[0], "status": "MANUAL_CHECK_REQUIRED"}]
+        if plan:
+            try:
+                saved_count(conn, plan)
+            except SaveDateRequired:
+                return [{'status': 'MANUAL_CHECK_REQUIRED', 'reason': 'save_date_reconciliation_required'}]
         rows = conn.execute("SELECT * FROM posts WHERE status='APPROVED' ORDER BY id").fetchall()
         for row in rows:
             post = load_post(row)
+            if plan and (not matches_post(post, plan) or saved_count(conn, plan)):
+                continue
             if post.as_of_date != today_kst().isoformat():
                 set_status(conn, row["id"], "STALE_REVIEW_REQUIRED")
                 results.append({"id": row["id"], "status": "STALE_REVIEW_REQUIRED"})
@@ -75,8 +96,14 @@ def save_pending(settings: Settings) -> list[dict]:
                 results.append({"id": row["id"], "status": "SETUP_REQUIRED",
                                 "error": type(exc).__name__})
                 continue
+            active_plan(settings)  # Do not start a save under yesterday's slot.
             # Claim before opening a browser. Crashes leave SAVING for manual resolution.
             with conn:
+                conn.execute('BEGIN IMMEDIATE')
+                if plan and (saved_count(conn, plan) or conn.execute(
+                    "SELECT 1 FROM posts WHERE status IN ('SAVING','SAVE_UNCERTAIN') LIMIT 1"
+                ).fetchone()):
+                    break
                 claimed = conn.execute(
                     "UPDATE posts SET status='SAVING' WHERE id=? AND status='APPROVED'",
                     (row["id"],),
@@ -100,7 +127,22 @@ def save_pending(settings: Settings) -> list[dict]:
 
 def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool = False,
               retry_failed: bool = False) -> list[dict]:
+    plan = active_plan(settings)
+    if plan and plan.get('reservation'):
+        return [reservation_result(plan)]
     requested = settings.daily_count if count is None else count
+    if plan:
+        requested = min(requested, plan['target'])
+        with closing(connect_db(settings.db_path)) as conn:
+            if conn.execute("SELECT 1 FROM posts WHERE status IN ('SAVING','SAVE_UNCERTAIN') LIMIT 1").fetchone():
+                return [{'status': 'MANUAL_CHECK_REQUIRED', 'reason': 'unresolved_save'}]
+            try:
+                used = saved_count(conn, plan)
+            except SaveDateRequired:
+                return [{'status': 'MANUAL_CHECK_REQUIRED', 'reason': 'save_date_reconciliation_required'}]
+            if used:
+                return [{'status': 'DAILY_PLAN_LIMIT', 'category': plan['category']}]
+
     limits = settings.config["blog"]
     if not int(limits["daily_min"]) <= requested <= int(limits["daily_max"]):
         raise ValueError("Daily count must be between 1 and 5")
@@ -114,10 +156,24 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                 return [{"id": uncertain[0], "status": "MANUAL_CHECK_REQUIRED"}]
     candidates, notices = collect_requests(settings)
     candidates = [r for r in candidates if settings.config['categories'][r.category]['max_daily'] > 0]
+    if plan:
+        candidates = [replace(r, provenance={**r.provenance, 'daily_plan': plan,
+                                            'editorial_type': r.data.get('editorial_type', 'article')})
+                      for r in candidates if matches_request(r, plan)]
     llm = None
     settings.artifact_dir.mkdir(parents=True, exist_ok=True)
     results: list[dict] = list(notices)
     with closing(connect_db(settings.db_path)) as conn:
+        plan_post_id = None
+        if plan:
+            plan_posts = [r for r in conn.execute(
+                "SELECT * FROM posts WHERE status IN ('APPROVED','TEXT_APPROVED','IMAGES_PENDING') "
+                "ORDER BY CASE WHEN status='APPROVED' THEN 0 ELSE 1 END,id"
+            ) if matches_post(load_post(r), plan)]
+            if plan_posts:
+                plan_post_id = plan_posts[0]['id']
+                candidates = []  # Resume at most this one slot; never top it up with a new article.
+                results = [r for r in results if r.get('status') != 'PLANNED_INPUT_REQUIRED']
         candidates = rank_candidates(settings, conn, candidates, requested)
         # Editorial priority must survive optional trend ranking or missing credentials.
         investments = iter(sorted(
@@ -136,6 +192,8 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
             ).fetchall():
                 if settings.config['categories'][row['category']]['max_daily'] == 0:
                     continue
+                if plan and (plan_post_id is not None or not attempt_matches(row, plan)):
+                    continue
                 if row['request_id'] in by_id:
                     retries.append((row['id'], by_id[row['request_id']]))
                 else:
@@ -144,6 +202,8 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
             for row in conn.execute("SELECT * FROM posts WHERE status IN ('APPROVED', 'REPAIR_PENDING') AND as_of_date=?",
                                     (today_kst().isoformat(),)).fetchall():
                 post = load_post(row)
+                if plan:
+                    continue  # Legacy paid repairs cannot adopt a different operating profile.
                 if settings.config['categories'][post.category]['max_daily'] == 0:
                     continue
                 stem = settings.artifact_dir / f"{post.as_of_date}-{row['id']:05d}"
@@ -214,7 +274,7 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                                  (result['status'], post.request_id))
                 results.append(result)
                 print(json.dumps(result, ensure_ascii=False), flush=True)
-        if retry_failed:
+        if retry_failed and not plan:
             # Replace the old investment prompt that accidentally contained infant scene instructions.
             for row in conn.execute("SELECT * FROM posts WHERE status='APPROVED' AND category='investment' "
                                     "AND as_of_date=?", (str(today_kst()),)).fetchall():
@@ -227,6 +287,8 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
         for row in pending:
             post = load_post(row)
             today = today_kst()
+            if plan and (row['id'] != plan_post_id or not matches_post(post, plan)):
+                continue
             if settings.config['categories'][post.category]['max_daily'] == 0:
                 continue
             if limits.get('weekend_feature') and today.weekday() >= 5 and post.as_of_date != str(today):
@@ -238,6 +300,10 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                 payload = json.loads(stem.with_suffix('.json').read_text(encoding='utf-8'))
                 request = ContentRequest(**payload['input'])
                 if (request.id != post.request_id or request.category != post.category
+                        or (plan and (request.provenance.get('daily_plan') != plan
+                                      or not matches_request(request, plan)
+                                      or request.data.get('editorial_type', 'article')
+                                      != post.provenance.get('editorial_type', 'article')))
                         or not isinstance(payload['review'], dict)):
                     raise ValueError('Pending packet does not match approved post')
             except (OSError, ValueError, TypeError, KeyError):
@@ -401,12 +467,36 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                 conn.execute("UPDATE attempts SET status=? WHERE id=?", (result["status"], attempt_id))
             results.append(result)
             print(json.dumps(result, ensure_ascii=False), flush=True)
+    if plan and plan_post_id is not None and not results:
+        results.append({'status': 'DAILY_PLAN_READY', 'id': plan_post_id,
+                        'category': plan['category']})
     if save_to_naver:
         results.extend(save_pending(settings))
+    if plan and not results:
+        return [{'status': 'PLANNED_INPUT_REQUIRED', 'category': plan['category'],
+                 'editorial_types': plan['editorial_types']}]
     return results or [{"status": "NO_ELIGIBLE_INPUT_OR_DAILY_LIMIT"}]
 
 
 def complete_media(settings, conn, post_id, post, request, review):
+    plan = active_plan(settings)
+    if plan and plan.get('reservation'):
+        return reservation_result(plan)
+    if not plan:
+        return _complete_media(settings, conn, post_id, post, request, review)
+    try:
+        with media_claim(settings.db_path.parent, request.id):
+            row = conn.execute('SELECT status FROM posts WHERE id=?', (post_id,)).fetchone()
+            if row and row['status'] in {'APPROVED', 'SAVED_NAVER'}:
+                return {'id': post_id, 'category': post.category, 'status': row['status']}
+            return _complete_media(settings, conn, post_id, post, request, review)
+    except MediaBusy:
+        # Do not downgrade a concurrently completed row or alter its paid checkpoints.
+        return {'id': post_id, 'category': post.category, 'status': 'IMAGES_PENDING',
+                'reason': 'media_in_progress'}
+
+
+def _complete_media(settings, conn, post_id, post, request, review):
     stem = settings.artifact_dir / f"{post.as_of_date}-{post_id:05d}"
     try:
         post = generate_images(settings, request, post)

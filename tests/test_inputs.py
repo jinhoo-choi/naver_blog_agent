@@ -7,7 +7,7 @@ from blogbot.core import today_kst
 from blogbot.inputs import collect_requests, community_request, enqueue_file
 
 
-def test_cooking_needs_recipe_and_photo_and_tracks_changes(tmp_path, monkeypatch):
+def test_cooking_needs_recipe_and_photo_and_tracks_changes(tmp_path, monkeypatch, weekday_clock):
     monkeypatch.setenv("BLOG_DATA_DIR", str(tmp_path / "data"))
     settings = load_settings()
     settings.config['topics'].pop('scheduled', None)
@@ -159,7 +159,7 @@ def test_snapshot_date_is_korean_date_not_utc(monkeypatch):
     assert origin['snapshot_at'] == '2026-09-29T08:35:00+09:00'
 
 
-def test_dated_topic_replaces_only_selected_category_and_expires(tmp_path, monkeypatch):
+def test_dated_topic_replaces_only_selected_category_and_expires(tmp_path, monkeypatch, weekday_clock):
     from datetime import date
 
     monkeypatch.setenv('BLOG_DATA_DIR', str(tmp_path))
@@ -188,7 +188,7 @@ def test_dated_topic_replaces_only_selected_category_and_expires(tmp_path, monke
     ('2026-10-02', (1, 1, 1), 5),
     ('2026-10-03', (1, 0, 0), 1),
     ('2026-10-04', (1, 0, 0), 1),
-    ('2026-10-05', (1, 1, 1), 5),
+    ('2026-10-05', (1, 0, 0), 1),
     ('2026-10-10', (1, 0, 0), 1),
 ])
 def test_weekend_feature_quota_and_selected_topic(tmp_path, monkeypatch, day, quotas, maximum):
@@ -197,6 +197,7 @@ def test_weekend_feature_quota_and_selected_topic(tmp_path, monkeypatch, day, qu
     today = date.fromisoformat(day)
     monkeypatch.setattr('blogbot.config.today_kst', lambda: today)
     monkeypatch.setattr('blogbot.inputs.today_kst', lambda: today)
+    monkeypatch.setattr('blogbot.planning.today_kst', lambda: today)
     monkeypatch.setenv('BLOG_DATA_DIR', str(tmp_path))
     settings = load_settings()
     assert tuple(settings.config['categories'][c]['max_daily']

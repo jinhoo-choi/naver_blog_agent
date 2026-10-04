@@ -1,6 +1,18 @@
 {
-  "verified_date": "2026-10-02",
+  "verified_date": "2026-10-05",
   "records": [
+    {
+      "request_id": "manual-parenting-carseat-20260927",
+      "category": "parenting",
+      "day": "2026-09-27",
+      "status": "SAVED_NAVER"
+    },
+    {
+      "request_id": "community-c026865d7f6747a7c7ff0c44",
+      "category": "investment",
+      "day": "2026-09-27",
+      "status": "SAVED_NAVER"
+    },
     {
       "request_id": "owner-00-child-gift",
       "category": "parenting",
@@ -17,6 +29,60 @@
       "request_id": "community-c939f0b8a7bc581009109bcf",
       "category": "investment",
       "day": "2026-09-28",
+      "status": "SAVED_NAVER"
+    },
+    {
+      "request_id": "owner-01-baby-sleep",
+      "category": "parenting",
+      "day": "2026-09-29",
+      "status": "SAVED_NAVER"
+    },
+    {
+      "request_id": "exercise-01-squat",
+      "category": "exercise",
+      "day": "2026-09-29",
+      "status": "SAVED_NAVER"
+    },
+    {
+      "request_id": "community-aae36ea607f64b3c016e9ad0",
+      "category": "investment",
+      "day": "2026-09-29",
+      "status": "SAVED_NAVER"
+    },
+    {
+      "request_id": "owner-02-finger-sucking",
+      "category": "parenting",
+      "day": "2026-09-30",
+      "status": "SAVED_NAVER"
+    },
+    {
+      "request_id": "exercise-02-lat-pulldown",
+      "category": "exercise",
+      "day": "2026-09-30",
+      "status": "SAVED_NAVER"
+    },
+    {
+      "request_id": "community-ff5b337a86258f74f5ec6e4a",
+      "category": "investment",
+      "day": "2026-09-30",
+      "status": "SAVED_NAVER"
+    },
+    {
+      "request_id": "community-bd892b2a9a165ae2a7562666",
+      "category": "investment",
+      "day": "2026-10-01",
+      "status": "SAVED_NAVER"
+    },
+    {
+      "request_id": "owner-03-comfort-toy",
+      "category": "parenting",
+      "day": "2026-10-01",
+      "status": "SAVED_NAVER"
+    },
+    {
+      "request_id": "exercise-03-seated-row",
+      "category": "exercise",
+      "day": "2026-10-01",
       "status": "SAVED_NAVER"
     },
     {
@@ -51,6 +117,18 @@
       "mode": "assisted_recovery",
       "verification": "draft_list_title_time",
       "reopened": false
+    },
+    {
+      "request_id": "owner-20261003-esl-feeding-feature",
+      "category": "parenting",
+      "day": "2026-10-03",
+      "status": "SAVED_NAVER"
+    },
+    {
+      "request_id": "owner-04-sunlight",
+      "category": "parenting",
+      "day": "2026-10-04",
+      "status": "SAVED_NAVER"
     }
   ]
 }

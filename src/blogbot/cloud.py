@@ -18,6 +18,16 @@ from .core import connect_db, today_kst
 from .images import atomic_json
 from .inputs import enqueue_file
 from .pipeline import run_daily
+from .planning import (
+    SaveDateRequired,
+    active_plan,
+    matches_post,
+    ready_categories,
+    receipt_day,
+    reservation_result,
+    resolve_plan,
+    saved_count,
+)
 from .presentation import render_segments
 
 
@@ -27,6 +37,9 @@ class PreparationFailed(RuntimeError):
 
 def recover_preparation(settings, results: list[dict], count: int) -> list[dict]:
     """Resume missing work with a durable daily budget, including explicit recover runs."""
+    plan = active_plan(settings)
+    if plan and plan.get('reservation'):
+        return [reservation_result(plan)]
     path = settings.db_path.parent / 'auto-recovery.json'
     state = json.loads(path.read_text()) if path.exists() else {}
     attempts = (int(state.get('attempts', int(bool(state.get('attempted')))))
@@ -44,10 +57,7 @@ def recover_preparation(settings, results: list[dict], count: int) -> list[dict]
         expected = {key for key, info in categories.items()
                     if key != 'cooking' and info.get('max_daily', 1) > 0}
         with closing(connect_db(settings.db_path)) as conn:
-            ready = {row[0] for row in conn.execute(
-                "SELECT category FROM posts WHERE as_of_date=? AND status IN ('APPROVED','SAVED_NAVER') "
-                "UNION SELECT category FROM attempts WHERE day=? AND status='SAVED_NAVER'",
-                (str(today_kst()), str(today_kst())))}
+            ready = ready_categories(settings, conn)
         if expected <= ready:
             break
         attempts += 1
@@ -147,18 +157,27 @@ def import_manual_saves(settings) -> None:
     payload = json.loads(path.read_text())
     with closing(connect_db(settings.db_path)) as conn, conn:
         for record in payload['records']:
+            day = receipt_day(record)
             if (record.get('status') != 'SAVED_NAVER' or not record.get('request_id')
                     or record.get('category') not in settings.config['categories']
-                    or date.fromisoformat(record['day']) > today_kst()):
+                    or date.fromisoformat(day) > today_kst()):
                 raise ValueError('Invalid manual-save receipt')
-            existing = conn.execute('SELECT id FROM attempts WHERE request_id=?',
+            receipt = conn.execute('SELECT day,category FROM save_receipts WHERE request_id=?',
+                                   (record['request_id'],)).fetchone()
+            if receipt and (receipt['day'] != day or receipt['category'] != record['category']):
+                raise ValueError('Conflicting manual-save receipt; reconcile without resetting budgets')
+            conn.execute('INSERT OR IGNORE INTO save_receipts(request_id,day,category) VALUES(?,?,?)',
+                         (record['request_id'], day, record['category']))
+            existing = conn.execute('SELECT id,category FROM attempts WHERE request_id=?',
                                     (record['request_id'],)).fetchone()
             if existing:
+                if existing['category'] != record['category']:
+                    raise ValueError('Receipt category does not match the original request')
                 conn.execute("UPDATE attempts SET status='SAVED_NAVER' WHERE request_id=?",
                              (record['request_id'],))
             else:
                 conn.execute('INSERT INTO attempts(day,category,request_id,status) VALUES(?,?,?,?)',
-                             (record['day'], record['category'], record['request_id'], 'SAVED_NAVER'))
+                             (day, record['category'], record['request_id'], 'SAVED_NAVER'))
 
 
 def seed_inputs(settings) -> None:
@@ -184,6 +203,10 @@ def pack(settings, destination: Path) -> None:
     today = today_kst()
     cutoff = (today-timedelta(days=7)).isoformat()
     packet = []
+    config = getattr(settings, 'config', {})
+    plan = resolve_plan(config, today) if config.get('operating_plan') else active_plan(settings)
+    stale_settings = config.get('daily_plan') != plan
+    # A midnight boundary must hold delivery, never prevent checkpoint transport.
     # Render transport segments; the saver can paste them without another generation.
     from .core import load_post
     with closing(connect_db(settings.db_path)) as conn:
@@ -192,12 +215,25 @@ def pack(settings, destination: Path) -> None:
         rows = conn.execute("SELECT * FROM posts WHERE status='APPROVED' "
                             "AND as_of_date BETWEEN ? AND ? ORDER BY as_of_date,id",
                             ((today-timedelta(days=3)).isoformat(), today.isoformat())).fetchall()
+        uncertain = conn.execute("SELECT 1 FROM posts WHERE status IN ('SAVING','SAVE_UNCERTAIN') LIMIT 1").fetchone()
+        try:
+            used = saved_count(conn, plan) if plan else 0
+        except SaveDateRequired:
+            used = 1
+            uncertain = True
         for row in rows:
             post = load_post(row)
+            if stale_settings or (plan and (plan.get('reservation') or uncertain or not matches_post(post, plan)
+                                           or packet or used)):
+                continue
             packet.append({'id': row['id'], 'category_no': settings.config['categories'][post.category]['naver_category_no'],
                            'requires_fresh_review': post.as_of_date != today.isoformat(),
                            'post': post.__dict__, 'segments': [s.__dict__ for s in render_segments(post)]})
-    atomic_json(directory / 'ready.json', {'date': today.isoformat(), 'posts': packet})
+    hold = ('kst_date_changed' if stale_settings else 'editorial_slot_reserved'
+            if plan and plan.get('reservation') else None)
+    atomic_json(directory / 'ready.json', {'date': today.isoformat(), 'posts': packet,
+                                          **({'daily_plan': plan} if plan else {}),
+                                          **({'hold': hold} if hold else {})})
     atomic_json(directory / 'bundle-info.json', {'data_root': str(directory.resolve()),
                                                 'date': today.isoformat(), 'version': 1})
     buffer = io.BytesIO()
@@ -240,25 +276,43 @@ def pack(settings, destination: Path) -> None:
     destination.write_bytes(Fernet(os.environ['BLOG_BUNDLE_KEY'].encode()).encrypt(buffer.getvalue()))
 
 
-def filter_ready(directory: Path, receipts: dict) -> None:
+def filter_ready(directory: Path, receipts: dict, plan: dict | None = None) -> None:
     """Require today's verified Work ledger; old API state cannot acknowledge saves."""
     today = today_kst()
     if receipts.get('verified_date') != today.isoformat() or not isinstance(receipts.get('records'), list):
         raise ValueError('A freshly verified Work save ledger is required')
     blocked = set()
+    used = set()
+    uncertain = False
     for record in receipts['records']:
         if not record.get('request_id') or record.get('status') not in {
             'SAVING', 'SAVE_UNCERTAIN', 'SAVED_NAVER', 'PUBLISHED',
         }:
             raise ValueError('Invalid Work save receipt')
         blocked.add(record['request_id'])
+        if plan:
+            try:
+                day = date.fromisoformat(receipt_day(record))
+            except (KeyError, TypeError, ValueError):
+                raise ValueError('Daily-plan receipts require the actual save day') from None
+            if day > today:
+                raise ValueError('Receipt cannot be future-dated')
+            if day == today:
+                used.add(record['request_id'])
+            uncertain |= record['status'] in {'SAVING', 'SAVE_UNCERTAIN'}
     path = directory / 'ready.json'
     ready = json.loads(path.read_text())
     if ready['date'] != today.isoformat():
         raise ValueError('Stale handoff')
+    if ready.get('daily_plan') != plan or (plan and plan['date'] != today.isoformat()):
+        raise ValueError('Handoff does not match the current daily plan')
     eligible = []
     for item in ready['posts']:
         post = item['post']
+        if plan and (plan.get('reservation') or uncertain or used or eligible or post['as_of_date'] != plan['date']
+                     or post['category'] != plan['category']
+                     or post.get('provenance', {}).get('daily_plan') != plan):
+            continue
         identity = post['request_id']
         if not identity:
             raise ValueError('Missing request identity')
@@ -284,7 +338,7 @@ def main():
             parser.error('unpack requires --receipts from the verified Work save ledger')
         receipts = json.loads(args.receipts.read_text())
         extract_bundle(args.file.read_bytes(), args.destination, os.environ['BLOG_BUNDLE_KEY'])
-        filter_ready(args.destination, receipts)
+        filter_ready(args.destination, receipts, active_plan(load_settings()))
         # Recreate packet segments with local image paths after relocation.
         print(json.dumps({'status': 'UNPACKED', 'directory': str(args.destination)}))
         return
@@ -306,8 +360,13 @@ def main():
         return
     restore(directory)
     try:
-        seed_inputs(settings)
-        if args.mode == 'probe':
+        plan = active_plan(settings)
+        reserved = bool(args.mode in {'prepare', 'recover'} and plan and plan.get('reservation'))
+        if not reserved:
+            seed_inputs(settings)
+        if reserved:
+            results = [reservation_result(plan)]
+        elif args.mode == 'probe':
             from openai import OpenAI
 
             from .responses import BENCHMARK_SCHEMA, _get, request_json
@@ -326,12 +385,13 @@ def main():
             results = [{'status':'PROBE_PASSED', 'response_status':_get(response, 'status'),
                         'records':len(payload['records'])}]
         else:
-            daily_target = min(3, getattr(settings, 'config', {}).get('blog', {}).get('daily_max', 3))
+            daily_target = min(getattr(settings, 'daily_count', 3),
+                               getattr(settings, 'config', {}).get('blog', {}).get('daily_max', 3))
             results = run_daily(settings, count=daily_target, save_to_naver=False,
                                 retry_failed=args.mode == 'recover')
             if getattr(settings, 'config', {}).get('categories'):
                 results = recover_preparation(settings, results, daily_target)
-        if args.mode != 'probe':
+        if args.mode != 'probe' and not reserved:
             with closing(connect_db(settings.db_path)) as conn:
                 unresolved = conn.execute(
                     "SELECT COUNT(*) FROM attempts WHERE day=? AND status IN ('ERROR', 'STARTED')",
@@ -344,27 +404,23 @@ def main():
                                         'SETUP_REQUIRED', 'MANUAL_CHECK_REQUIRED',
                                         'INPUT_REJECTED', 'COMMUNITY_SOURCE_PENDING',
                                         'COMMUNITY_SOURCE_UNAVAILABLE',
-                                        'SAVE_UNCERTAIN', 'RECOVERY_INPUT_UNAVAILABLE',
+                                        'SAVE_UNCERTAIN', 'RECOVERY_INPUT_UNAVAILABLE', 'PLANNED_INPUT_REQUIRED',
                                         'UNRESOLVED_FAILED_ATTEMPTS', 'NO_ELIGIBLE_INVESTMENT',
                                         'DROP_REVIEW', 'DROP_DUPLICATE'} for r in results)
         # A no-op/partial run must not report success when a category has no deliverable.
         categories = getattr(settings, 'config', {}).get('categories', {})
-        if categories:
+        if categories and not reserved:
             with closing(connect_db(settings.db_path)) as conn:
-                ready_categories = {row[0] for row in conn.execute(
-                    "SELECT category FROM posts WHERE as_of_date=? AND status IN ('APPROVED','SAVED_NAVER')",
-                    (today_kst().isoformat(),))}
-                ready_categories.update(row[0] for row in conn.execute(
-                    "SELECT category FROM attempts WHERE day=? AND status='SAVED_NAVER'",
-                    (today_kst().isoformat(),)))
+                ready = ready_categories(settings, conn)
             expected = {key for key, info in categories.items()
                         if key != 'cooking' and info.get('max_daily', 1) > 0}
-            missing = sorted(expected - ready_categories)
+            missing = sorted(expected - ready)
             if missing:
                 results.append({'status': 'PREPARATION_PARTIAL', 'missing_categories': missing})
                 failed = True
             elif all(r.get('status') in {'APPROVED', 'SAVED_NAVER', 'DROP_REVIEW',
-                                         'DROP_DUPLICATE', 'NO_ELIGIBLE_INPUT_OR_DAILY_LIMIT'}
+                                         'DROP_DUPLICATE', 'NO_ELIGIBLE_INPUT_OR_DAILY_LIMIT',
+                                         'DAILY_PLAN_READY', 'DAILY_PLAN_LIMIT'}
                      for r in results):
                 failed = False  # A bounded replacement can resolve an earlier editorial rejection.
         atomic_json(directory / 'run-summary.json',

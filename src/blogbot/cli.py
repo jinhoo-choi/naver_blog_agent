@@ -10,10 +10,11 @@ from openai import OpenAIError
 from playwright.sync_api import Error as PlaywrightError
 
 from .config import load_settings
-from .core import connect_db, mark_saved, set_status
+from .core import connect_db, set_status
 from .inputs import enqueue_file
 from .notify import telegram
 from .pipeline import make_writer, run_daily, save_pending
+from .planning import active_plan, record_verified_save
 
 
 def main() -> None:
@@ -32,6 +33,9 @@ def main() -> None:
     resolve = sub.add_parser("resolve", help="네이버 임시저장 목록을 직접 확인한 뒤 상태 확정")
     resolve.add_argument("--id", type=int, required=True)
     resolve.add_argument("--outcome", choices=["saved", "not-saved", "discard"], required=True)
+    saved_when = resolve.add_mutually_exclusive_group()
+    saved_when.add_argument('--saved-at', help='Verified actual save timestamp with timezone offset')
+    saved_when.add_argument('--saved-day', help='Verified actual KST save day YYYY-MM-DD')
     args = parser.parse_args()
     settings = load_settings()
 
@@ -60,7 +64,9 @@ def main() -> None:
                 if row is None or row[0] not in {"SAVING", "SAVE_UNCERTAIN", "STALE_REVIEW_REQUIRED"}:
                     raise ValueError("Only uncertain or stale posts can be resolved")
                 if args.outcome == "saved":
-                    mark_saved(conn, args.id)
+                    if not args.saved_at and not args.saved_day:
+                        raise ValueError('Saved resolution requires actual --saved-at or --saved-day evidence')
+                    record_verified_save(conn, args.id, {'saved_at': args.saved_at, 'day': args.saved_day})
                 else:
                     set_status(conn, args.id, "APPROVED" if args.outcome == "not-saved" else "DISCARDED")
                 print(json.dumps({"id": args.id, "resolution": args.outcome}))
@@ -75,7 +81,11 @@ def main() -> None:
         except (OSError, ValueError, RuntimeError) as exc:
             print(json.dumps({"notification": "FAILED", "error": type(exc).__name__}))
         errors = {"ERROR", "SAVE_UNCERTAIN", "MANUAL_CHECK_REQUIRED", "STALE_REVIEW_REQUIRED",
-                  "INPUT_REJECTED", "COMMUNITY_SOURCE_UNAVAILABLE", "SETUP_REQUIRED", "RESEARCH_REQUIRED"}
+                  "INPUT_REJECTED", "COMMUNITY_SOURCE_UNAVAILABLE", "SETUP_REQUIRED", "RESEARCH_REQUIRED",
+                  "PLANNED_INPUT_REQUIRED", "IMAGES_PENDING", "COMMUNITY_SOURCE_PENDING",
+                  "NO_ELIGIBLE_INVESTMENT"}
+        if active_plan(settings):
+            errors |= {"DROP_REVIEW", "DROP_DUPLICATE"}
         raise SystemExit(1 if any(r["status"] in errors for r in results) else 0)
     except (KeyboardInterrupt, SystemExit):
         raise

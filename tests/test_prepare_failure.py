@@ -14,12 +14,13 @@ from blogbot.presentation import (
 )
 
 
-def test_saturday_feature_does_not_require_exercise_or_investment(tmp_path, monkeypatch):
+def test_saturday_feature_does_not_require_exercise_or_investment(tmp_path, monkeypatch, weekday_clock):
     from blogbot.config import load_settings
     from blogbot.core import connect_db, save_post, today_kst
 
     monkeypatch.setenv('BLOG_DATA_DIR', str(tmp_path))
     settings = load_settings()
+    # Exercise legacy Saturday quotas explicitly, before the daily plan starts.
     settings.config['blog']['daily_max'] = 1
     for category in ['exercise', 'investment']:
         settings.config['categories'][category]['max_daily'] = 0

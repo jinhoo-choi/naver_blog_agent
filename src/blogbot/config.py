@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .core import today_kst
+from .planning import resolve_plan
 
 
 @dataclass(frozen=True)
@@ -35,7 +36,17 @@ def load_settings() -> Settings:
         config = tomllib.load(f)
 
     weekday = today_kst().weekday()
-    if config["blog"].get("weekend_feature", False) and weekday >= 5:
+    plan = resolve_plan(config, today_kst())
+    if plan:
+        config['daily_plan'] = plan
+        config['blog']['daily_max'] = plan['target']
+        config['community']['enabled'] = (config['community'].get('enabled', False)
+                                           and plan['category'] == 'investment')
+        for category, info in config['categories'].items():
+            info['max_daily'] = int(category == plan['category'])
+        info = config['categories'][plan['category']]
+        info['rules'].extend(config.get('editorial', {}).get('deep', {}).get('rules', []))
+    elif config["blog"].get("weekend_feature", False) and weekday >= 5:
         config["blog"]["daily_max"] = 1
         config["community"]["enabled"] = False
         for category, info in config["categories"].items():

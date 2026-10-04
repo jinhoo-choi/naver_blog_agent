@@ -27,11 +27,16 @@ def atomic_json(path: Path, value: dict) -> None:
     os.replace(temporary, path)
 
 
-def image_prompt(post: PostDraft, section: str, *, thumbnail: bool = False) -> str:
+def image_prompt(post: PostDraft, section: str, *, thumbnail: bool = False,
+                 editorial_type: str | None = None) -> str:
     subject = re.sub(r'[#|*_]', ' ', section).strip()[:1200]
     scene = ''
     figures = 'friendly rounded cartoon characters, natural simple bodies, tiny dot eyes and'
-    if post.category == 'parenting':
+    if post.category == 'parenting' and editorial_type == 'ai_tutorial':
+        scene = ('For a family AI tutorial, illustrate only a simple topic-supported concept or object. '
+                 'Do not force infant-care scenes. Never fabricate application screens, menus, '
+                 'settings or generated results; actual screenshots are supplied separately as evidence.')
+    elif post.category == 'parenting':
         scene = '''For parenting about an infant: show one plainly recognizable awake baby with round baby
 proportions, short limbs and a plain onesie, or a relevant simple object. Never substitute an
 adult, a screen/tablet, office work or a generic checking scene for an infant topic.
@@ -111,7 +116,8 @@ def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostD
         section = '글 전체 핵심 요약' if thumbnail else sections[
             round((index - 1) * (len(sections) - 1) / max(1, count - 2))]
         params = {'model': str(config.get('model', 'gpt-image-2.5-flare')),
-                  'prompt': image_prompt(post, section, thumbnail=thumbnail),
+                  'prompt': image_prompt(post, section, thumbnail=thumbnail,
+                                         editorial_type=request.data.get('editorial_type')),
                   'quality': str(config.get('quality', 'medium')),
                   'size': str(config.get('size', '1024x1024')),
                   'output_format': str(config.get('output_format', 'jpeg'))}

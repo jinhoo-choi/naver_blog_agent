@@ -21,6 +21,7 @@ from .core import (
 from .images import atomic_json
 from .inputs import ContentRequest
 from .llm import BlogLLM, _checked_review, _historical_source_urls, _source_urls
+from .planning import active_plan, attempt_matches, reservation_result
 from .presentation import normalize_structure, validate_structure
 from .research import prepare_reference_evidence, prepare_request
 
@@ -86,6 +87,9 @@ def editorial_patch(settings, post):
 def recover_rejected(settings, conn, candidates):
     from .pipeline import complete_media
     results, handled = [], set()
+    plan = active_plan(settings)
+    if plan and plan.get('reservation'):
+        return [reservation_result(plan)]
     by_id = {request.id: request for request in candidates}
     ready = {row[0] for row in conn.execute(
         "SELECT category FROM posts WHERE as_of_date=? AND status IN "
@@ -93,6 +97,8 @@ def recover_rejected(settings, conn, candidates):
     for row in conn.execute("SELECT * FROM attempts WHERE day=? AND status='DROP_REVIEW' ORDER BY id",
                             (str(today_kst()),)).fetchall():
         category = row['category']
+        if plan and not attempt_matches(row, plan):
+            continue
         if settings.config['categories'][category]['max_daily'] == 0:
             continue
         if category in ready or category in handled:

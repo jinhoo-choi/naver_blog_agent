@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import replace
@@ -66,6 +67,13 @@ def _source_identity(url: str) -> str:
             and value.startswith('redirected'))
         or (parts.hostname == 'www.mayoclinic.org' and key in {'p', 'pg'} and value == '1')
     )]
+    # Public FDA canonical + identical article text verified 2026-10-04.
+    # Only this exact HTTPS article/parameter pair; other linkId values and all
+    # extra query fields remain significant (no general query stripping).
+    if (parts.scheme == 'https' and parts.netloc == 'www.fda.gov'
+            and path == '/drugs/understanding-over-counter-medicines/sunscreen-how-help-protect-your-skin-sun'
+            and query == [('linkId', '100000002918349')]):
+        query = []
     # AAP article IDs survive DOI/volume routes and title-slug redirects.
     article = re.fullmatch(r'/pediatrics/article/(?:doi/10\.1542/[^/]+|\d+/\d+/[^/]+)/(\d+)/[^/]+/?', path)
     if parts.hostname == 'publications.aap.org' and article:
@@ -149,7 +157,8 @@ class BlogLLM:
         request: ContentRequest,
         category_info: dict,
         recent_titles: list[str],
-    ) -> PostDraft:
+        *, raw: bool = False,
+    ):
         category_key = request.category
         display = category_info["display_name"]
         subcats = ", ".join(category_info["subcategories"])
@@ -192,10 +201,13 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
             self.client, model=self.model, stage="writer", request_id=request.id,
             schema=DRAFT_SCHEMA, journal=self.journal, max_output_tokens=12000,
             retry_output_tokens=16000, reasoning={"effort": "low"}, input=prompt,
-            **search,
+            validate_required=not raw, **search,
         )
         evidence = request.provenance.get('primary_evidence', {})
         observed = _extract_urls(response) + [evidence[k] for k in ['url', 'viewer_url'] if k in evidence]
+        if raw:
+            from .pre_review import DraftCandidate
+            return DraftCandidate(payload, observed)
         urls = _source_urls(payload, observed, required=category_key != "cooking")
         return PostDraft(
             category=category_key,
@@ -210,6 +222,37 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
             photos=request.photos,
             provenance=request.provenance,
         )
+
+    def correct_draft(self, candidate, category_info, issue_codes, request, *, cache_only=False):
+        """One pre-review correction; no search or truncation retry, no new evidence."""
+        from .pre_review import DraftCandidate
+        prompt = f"""
+{self.writer_prompt}
+{quality_guidance(request.category)}
+
+정식 검수 전 1회 수정입니다. 아래 기계적 오류만 고치고 같은 주제·근거를 유지하세요.
+새로운 사실, 출처, 경험, 사진 관찰, 의학·투자 권고를 창작하지 마세요.
+제공되지 않은 실제 경험이나 아이 월령은 삭제하고 일반 설명으로 바꾸세요.
+근거가 부족하면 분량을 채우지 마세요. 검수 점수·통과 여부를 추정하지 마세요.
+source_urls와 본문 URL은 아래 실제 관찰 URL 중에서만 선택하세요.
+문서 식별자나 쿼리를 추측·삭제하거나 다른 문서를 같은 자료로 바꾸지 마세요.
+오늘 한국시간 기준일: {today_kst().isoformat()}
+필수 형식: 쉬운 도입 요약, 대제목 ## 최소 4개와 소제목 ###,
+육아·운동 본문 최소 1800자, 이미지 마크업 없음. 소제목은 내용에 맞게 정하세요.
+오류 코드: {json.dumps(issue_codes, ensure_ascii=False)}
+허용 카테고리와 규칙: {json.dumps(category_info, ensure_ascii=False)}
+원본 입력: {json.dumps(request.prompt_data(), ensure_ascii=False)}
+실제 관찰 URL: {json.dumps(candidate.observed, ensure_ascii=False)}
+수정할 원고: {json.dumps(candidate.payload, ensure_ascii=False)}
+""".strip()
+        payload, _ = request_json(
+            self.client, model=self.model, stage='pre_review_correction', request_id=request.id,
+            schema=DRAFT_SCHEMA, journal=self.journal, max_output_tokens=12000,
+            reasoning={'effort': 'low'}, input=prompt, cache_only=cache_only,
+            validate_required=False,
+        )
+        # Correction cannot expand evidence, even if a mocked/changed response has URLs.
+        return DraftCandidate(payload, list(candidate.observed))
 
     @staticmethod
     def _draft_data(post: PostDraft) -> dict:
@@ -249,8 +292,10 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
 
     def rewrite(
         self, post: PostDraft, category_info: dict, review: dict, request: ContentRequest,
-        *, cache_only: bool = False,
+        *, cache_only: bool = False, single_attempt: bool = False, raw: bool = False,
     ) -> PostDraft:
+        original_identity = json.dumps([self.model, self._draft_data(post), category_info,
+                                        review, request.prompt_data()], sort_keys=True)
         if not cache_only:
             from .research import prepare_reference_evidence
             request = prepare_reference_evidence(
@@ -276,14 +321,29 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
             "tools": [{"type": "web_search"}], "tool_choice": "required",
             "include": ["web_search_call.action.sources"], "max_tool_calls": 3,
         }
+        if single_attempt:
+            from .images import atomic_json
+            from .pre_review import checkpoint_path
+            path = checkpoint_path(self.journal.parent, request.id).with_suffix('.rewrite-input.json')
+            path.parent.mkdir(parents=True, exist_ok=True)
+            digest = hashlib.sha256(original_identity.encode()).hexdigest()
+            if path.exists():
+                saved = json.loads(path.read_text())
+                if saved['identity'] != digest:
+                    raise ResponseFailure('rewrite', 'rewrite_input_changed')
+                prompt = saved['prompt']
+            elif cache_only:
+                raise ResponseFailure('rewrite', 'cached_rewrite_input_unavailable')
+            else:
+                atomic_json(path, {'identity': digest, 'prompt': prompt})
         call = dict(model=self.model, stage="rewrite", request_id=request.id,
                     schema=DRAFT_SCHEMA, journal=self.journal, max_output_tokens=12000,
-                    retry_output_tokens=16000, reasoning={"effort": "low"},
+                    retry_output_tokens=None if single_attempt else 16000, reasoning={"effort": "low"},
                     cache_only=cache_only, **search)
         try:
             payload, response = request_json(self.client, input=prompt, **call)
         except ResponseFailure as exc:
-            if not cache_only or exc.reason != 'cached_response_unavailable':
+            if single_attempt or not cache_only or exc.reason != 'cached_response_unavailable':
                 raise
             # One read-only compatibility lookup for pre-topic-quality-v1 interrupted rewrites.
             # All other inputs stay byte-for-byte identical; never grant another paid attempt.
@@ -291,6 +351,10 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
                 self.writer_prompt + '\n' + quality_guidance(request.category) + '\n',
                 self.writer_prompt + '\n', 1)
             payload, response = request_json(self.client, input=legacy_prompt, **call)
+        observed = post.source_urls + _extract_urls(response) + _historical_source_urls(self.journal, request.id)
+        if raw:
+            from .pre_review import DraftCandidate
+            return DraftCandidate(payload, observed)
         return replace(
             post,
             subcategory=str(payload.get("subcategory", post.subcategory)),
@@ -298,8 +362,7 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
             title=str(payload.get("title", post.title)).strip(),
             body=str(payload.get("body", post.body)).strip(),
             tags=[str(x).lstrip("#") for x in payload.get("tags", post.tags)][:8],
-            source_urls=_source_urls(payload, post.source_urls + _extract_urls(response)
-                                    + _historical_source_urls(self.journal, request.id),
+            source_urls=_source_urls(payload, observed,
                                     required=post.category != "cooking"),
             as_of_date=post.as_of_date,
         )

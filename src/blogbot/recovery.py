@@ -25,7 +25,7 @@ from .presentation import normalize_structure, validate_structure
 from .research import prepare_reference_evidence, prepare_request
 
 
-def rejected_checkpoint(settings, request):
+def rejected_checkpoint(settings, request, *, raw=False):
     directory = settings.db_path.parent
     ids, positions = {}, {}
     for position, line in enumerate((directory / 'usage.jsonl').read_text().splitlines()):
@@ -42,6 +42,9 @@ def rejected_checkpoint(settings, request):
     original = cached['writer']
     latest = cached.get('rewrite', original)
     data = latest['payload']
+    if raw:
+        from .pre_review import DraftCandidate
+        return DraftCandidate(data, _historical_source_urls(directory / 'usage.jsonl', request.id))
     reviewer = cached.get('reviewer', {})
     sources = _source_urls(data, _historical_source_urls(directory / 'usage.jsonl', request.id))
     request = prepare_reference_evidence(directory, request, sources)
@@ -96,6 +99,15 @@ def recover_rejected(settings, conn, candidates):
             continue
         handled.add(category)  # At most one existing manuscript per missing category.
         result = {'attempt': row['id'], 'category': category, 'request_id': row['request_id']}
+        from .pre_review import checkpoint_path, revision_path
+        if checkpoint_path(settings.db_path.parent, row['request_id']).exists():
+            # New automatic drafts share a durable single-correction budget.
+            # Explicit legacy recovery must not silently grant them extra rewrites.
+            results.append({**result, 'status': 'DROP_REVIEW',
+                            'reason': ('manuscript_correction_limit' if revision_path(
+                                settings.db_path.parent, row['request_id']).exists()
+                                       else 'review_rejected_after_pre_review')})
+            continue
         key = hashlib.sha256(row['request_id'].encode()).hexdigest()
         path = settings.db_path.parent / 'response-cache' / f'{today_kst()}-recovery-{key}.json'
         path.parent.mkdir(parents=True, exist_ok=True)

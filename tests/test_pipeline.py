@@ -78,7 +78,7 @@ def test_recovery_retries_failed_category_and_fills_new_category(settings, monke
     class FakeLLM:
         def __init__(self, *args):
             pass
-        def create_draft(self, request, info, titles):
+        def create_draft(self, request, info, titles, **kwargs):
             calls.append(request.id)
             post = draft()
             post.category, post.subcategory = request.category, info['subcategories'][0]
@@ -89,7 +89,7 @@ def test_recovery_retries_failed_category_and_fills_new_category(settings, monke
     monkeypatch.setattr('blogbot.pipeline.collect_requests', lambda _: (requests, []))
     monkeypatch.setattr('blogbot.pipeline.rank_candidates', lambda *args: requests)
     monkeypatch.setattr('blogbot.pipeline.prepare_request', lambda settings, request: request)
-    monkeypatch.setattr('blogbot.pipeline.validate_structure', lambda *args: None)
+    monkeypatch.setattr('blogbot.pre_review.validate_structure', lambda *args: None)
     monkeypatch.setattr('blogbot.pipeline.generate_images', lambda settings, request, post: post)
     monkeypatch.setattr('blogbot.pipeline.BlogLLM', FakeLLM)
     results = run_daily(settings, retry_failed=True)
@@ -130,7 +130,7 @@ def test_rewrite_duplicate_is_blocked(settings, monkeypatch):
         def __init__(self, *args):
             self.reviews = 0
 
-        def create_draft(self, request, info, recent):
+        def create_draft(self, request, info, recent, **kwargs):
             post = draft()
             post.category, post.subcategory = request.category, info["subcategories"][0]
             post.title = "완전히 다른 주제의 작성 후보"
@@ -142,7 +142,7 @@ def test_rewrite_duplicate_is_blocked(settings, monkeypatch):
             return {"scores": scores, "total": sum(scores),
                     "decision": "REWRITE" if self.reviews == 1 else "PASS"}
 
-        def rewrite(self, post, info, review, request):
+        def rewrite(self, post, info, review, request, **kwargs):
             post.title = first.title
             return post
 
@@ -150,7 +150,7 @@ def test_rewrite_duplicate_is_blocked(settings, monkeypatch):
     candidate = ContentRequest("question-1", "parenting", {"question": "월령별 발달 과정"})
     monkeypatch.setattr("blogbot.pipeline.collect_requests", lambda _: ([candidate], []))
     monkeypatch.setattr("blogbot.pipeline.prepare_request", lambda settings, request: request)
-    monkeypatch.setattr("blogbot.pipeline.validate_structure", lambda post, required: None)
+    monkeypatch.setattr("blogbot.pre_review.validate_structure", lambda post, required: None)
     assert run_daily(settings, count=1)[0]["status"] == "DROP_DUPLICATE"
 
 
@@ -389,7 +389,7 @@ def test_source_error_recovery_reuses_completed_writer_without_repurchase(settin
     url = 'https://www.healthychildren.org/English/safety-prevention/at-home/Pages/Make-Babys-Room-Safe.aspx'
     atomic_json(folder/f'{today_kst()}-completed.json', {
         'payload': {'title': '검증된 작성 응답', 'subcategory': '육아생활', 'body': '안전 본문',
-                    'tags': ['안전'], 'source_urls': [url]},
+                    'tags': ['안전'], 'source_urls': [url], 'as_of_date': str(today_kst())},
         'response': {'id': 'completed-writer', 'output': [{'status': 'completed', 'action': {
             'type': 'search', 'sources': [{'url': url+'?form=HealthyChildren'}]}}]}})
     (settings.db_path.parent/'usage.jsonl').write_text(
@@ -400,7 +400,7 @@ def test_source_error_recovery_reuses_completed_writer_without_repurchase(settin
         conn.commit()
     monkeypatch.setattr('blogbot.pipeline.collect_requests', lambda _: ([request], []))
     monkeypatch.setattr('blogbot.pipeline.prepare_request', lambda _, r: r)
-    monkeypatch.setattr('blogbot.pipeline.validate_structure', lambda *a: None)
+    monkeypatch.setattr('blogbot.pre_review.validate_structure', lambda *a: None)
     monkeypatch.setattr('blogbot.pipeline.generate_images', lambda s, r, p: p)
     class LLM:
         def __init__(self, *a): pass
@@ -414,7 +414,7 @@ def test_source_error_recovery_reuses_completed_writer_without_repurchase(settin
 
 
 def test_invalid_preview_recovery_rewrites_cached_draft_before_review(settings, monkeypatch):
-    from dataclasses import asdict, replace
+    from blogbot.pre_review import DraftCandidate, candidate_from_post
     request = ContentRequest('preview-repair', 'investment', {'kind': 'policy'})
     body = '작성일: 2026-10-02\n\n## 사실\n내용\n\n## 의미\n내용\n\n## 조건\n내용\n\n## 정리\n### 변수\n내용'
     post = PostDraft('investment', '시장·산업', '정책', '정책 확인', body, [],
@@ -424,20 +424,21 @@ def test_invalid_preview_recovery_rewrites_cached_draft_before_review(settings, 
                      (str(today_kst()), request.category, request.id, 'ERROR'))
     monkeypatch.setattr('blogbot.pipeline.collect_requests', lambda _: ([request], []))
     monkeypatch.setattr('blogbot.pipeline.prepare_request', lambda s, r: r)
-    monkeypatch.setattr('blogbot.recovery.rejected_checkpoint', lambda *a: {'post': asdict(post)})
+    monkeypatch.setattr('blogbot.recovery.rejected_checkpoint', lambda *a, **kw: candidate_from_post(post))
     monkeypatch.setattr('blogbot.pipeline.generate_images', lambda s, r, p: p)
     calls = []
     class LLM:
         def __init__(self, *a): pass
         def create_draft(self, *a): pytest.fail('Completed writer must be reused')
-        def rewrite(self, p, info, review, request):
-            calls.append(review['rewrite_instructions'])
-            return replace(p, body=p.body.replace('작성일: 2026-10-02', '핵심 정책 내용을 확인해요.'))
+        def correct_draft(self, p, info, codes, request, **kwargs):
+            calls.extend(codes)
+            return DraftCandidate({**p.payload, 'body': p.payload['body'].replace(
+                '작성일: 2026-10-02', '핵심 정책 내용을 확인해요.')}, p.observed)
         def review(self, *a):
             return {'scores': [5]*6, 'total': 30, 'decision': 'PASS'}
     monkeypatch.setattr('blogbot.pipeline.BlogLLM', LLM)
     assert run_daily(settings, retry_failed=True)[0]['status'] == 'APPROVED'
-    assert calls == ['Start with a plain-language preview summary, not dates or URLs']
+    assert calls == ['invalid_preview']
 
 
 def test_recovery_does_not_repurchase_uncertain_failed_api(settings, monkeypatch):

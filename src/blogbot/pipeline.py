@@ -11,7 +11,6 @@ from playwright.sync_api import Error as PlaywrightError
 
 from .config import Settings
 from .core import (
-    PostDraft,
     connect_db,
     load_post,
     mark_saved,
@@ -29,6 +28,16 @@ from .images import ImagePending, atomic_json, generate_images
 from .inputs import ContentRequest, collect_requests
 from .llm import BlogLLM
 from .naver import NaverDraftWriter
+from .pre_review import (
+    DraftCandidate,
+    PreReviewFailure,
+    candidate_from_post,
+    checkpoint_path,
+    claim_revision,
+    inspect_candidate,
+    resume_candidate,
+    run_pre_review,
+)
 from .presentation import normalize_structure, validate_structure
 from .research import ResearchRequired, prepare_primary_evidence, prepare_request
 from .topics import rank_candidates
@@ -143,6 +152,14 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                     and any('://dart.fss.or.kr/dsaf001/main.do?' in u for u in post.source_urls)
                     and not payload['input'].get('provenance', {}).get('primary_evidence'))
                 if review_result(payload['review'])[1] == 'PASS' and not needs_primary_review:
+                    continue
+                if checkpoint_path(settings.db_path.parent, post.request_id).exists():
+                    # A new checked draft must never re-enter the legacy paid repair
+                    # path. Hold a contradictory approval without weakening its gate.
+                    set_status(conn, row['id'], 'REPAIR_PENDING')
+                    results.append({'id': row['id'], 'category': post.category,
+                                    'request_id': post.request_id, 'status': 'MANUAL_CHECK_REQUIRED',
+                                    'stage': 'legacy_repair', 'reason': 'pre_review_recovery_guard'})
                     continue
                 result = {'id': row['id'], 'category': post.category, 'request_id': post.request_id}
                 print(json.dumps({**result, 'status': 'REPAIR_STARTED'}), flush=True)
@@ -290,32 +307,24 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                 if context_path.exists():
                     existing += json.loads(context_path.read_text()).get('published_titles', [])
                 stage = "writer"
-                if is_retry:
+                candidate = resume_candidate(settings.db_path.parent, request) if is_retry else None
+                if candidate is None and is_retry:
                     from .recovery import rejected_checkpoint
                     try:
-                        post = PostDraft(**rejected_checkpoint(settings, request)['post'])
+                        candidate = rejected_checkpoint(settings, request, raw=True)
                     except (FileNotFoundError, KeyError):
-                        post = llm.create_draft(request, info, existing)
-                else:
-                    post = llm.create_draft(request, info, existing)
-                post = normalize_structure(post)
-                validate_post(post, info)
-                rewritten = False
-                try:
-                    validate_structure(post, settings.config.get("editorial", {}).get("require_structure", True))
-                except ValueError as exc:
-                    if str(exc) not in {
-                        'Use at least four major sections and a subsection',
-                        'Parenting draft is too short; add supported explanation, not filler',
-                        'Start with a plain-language preview summary, not dates or URLs',
-                    }:
-                        raise
-                    stage = "rewrite"
-                    post = llm.rewrite(post, info, {'rewrite_instructions': str(exc)}, request)
-                    post = normalize_structure(post)
-                    # Structural repair is separate from the one editorial revision below.
-                    validate_post(post, info)
-                    validate_structure(post, settings.config.get("editorial", {}).get("require_structure", True))
+                        pass
+                if candidate is None:
+                    candidate = llm.create_draft(request, info, existing, raw=True)
+                stage = "pre_review_check"
+                post, pre_review = run_pre_review(
+                    settings.db_path.parent, llm, candidate, request, info,
+                    settings.config.get("editorial", {}).get("require_structure", True))
+                result['pre_review'] = pre_review
+                # One paid manuscript correction total in this automatic pipeline.
+                # Pre-review correction replaces the old structural rewrite slot;
+                # it also consumes the editorial revision rather than stacking calls.
+                rewritten = pre_review['model_correction_used']
                 threshold = float(limits["max_similarity"])
                 if max_title_similarity(post.title, existing) >= threshold:
                     result["status"] = "DROP_DUPLICATE"
@@ -325,10 +334,17 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                     score, decision = review_result(review)
                     if decision == "REWRITE" and not rewritten and score >= int(limits["rewrite_score"]):
                         stage = "rewrite"
-                        post = llm.rewrite(post, info, review, request)
-                        post = normalize_structure(post)
-                        validate_post(post, info)
-                        validate_structure(post, settings.config.get("editorial", {}).get("require_structure", True))
+                        resume_revision = claim_revision(
+                            settings.db_path.parent, request.id, stage,
+                            {'post': asdict(post), 'review': review, 'input': request.prompt_data()})
+                        revised = llm.rewrite(post, info, review, request, cache_only=resume_revision,
+                                              single_attempt=True, raw=True)
+                        post, issues, _ = inspect_candidate(
+                            revised if isinstance(revised, DraftCandidate) else candidate_from_post(revised),
+                            request, info,
+                            settings.config.get("editorial", {}).get("require_structure", True))
+                        if issues:
+                            raise PreReviewFailure('post_review_recheck', issues)
                         stage = "reviewer"
                         review = llm.review(post, info, request)
                         score, decision = review_result(review)
@@ -358,7 +374,10 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                 conn.rollback()
                 result["status"] = "DROP_DUPLICATE"
             except (OpenAIError, PlaywrightError, OSError, RuntimeError, ValueError, TypeError, KeyError) as exc:
-                result.update(status="ERROR", error=type(exc).__name__, stage=stage)
+                result.update(status="ERROR", error=type(exc).__name__,
+                              stage=getattr(exc, "stage", stage))
+                if hasattr(exc, "codes"):
+                    result["issue_codes"] = exc.codes
                 if hasattr(exc, "reason"):
                     result["reason"] = exc.reason
                 elif isinstance(exc, ValueError):

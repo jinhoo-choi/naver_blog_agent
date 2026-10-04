@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 
 from .config import Settings
 from .core import today_kst
+from .planning import active_plan, editorial_type, matches_request
 
 
 @dataclass
@@ -71,6 +72,8 @@ def enqueue_file(settings: Settings, source: Path) -> str:
             raise TypeError("context must be text")
         data = {"question": question.strip(), "age_months": age, "context": context,
                 "benchmark_query": str(raw.get("benchmark_query", ""))}
+        if 'editorial_type' in raw:
+            data['editorial_type'] = editorial_type(category, raw)
         photos = []
     elif category == "cooking":
         recipe = raw.get("recipe", {})
@@ -241,6 +244,7 @@ def collect_requests(settings: Settings) -> tuple[list[ContentRequest], list[dic
                 verify_photos(request.photos)
             elif request.category not in {"parenting", "exercise"} or not request.data.get("question"):
                 raise ValueError("Question missing or unsupported category")
+            editorial_type(request.category, request.data)
             requests.append(request)
         except (OSError, ValueError, TypeError, KeyError):
             notices.append({"status": "INPUT_REJECTED"})
@@ -252,11 +256,15 @@ def collect_requests(settings: Settings) -> tuple[list[ContentRequest], list[dic
                 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", request.id)
                 or not request.data.get("question")):
             raise ValueError("Invalid scheduled topic")
+        editorial_type(request.category, request.data)
         requests = [request, *[r for r in requests if r.category != request.category]]
     context_path = settings.db_path.parent / "context.json"
     context = json.loads(context_path.read_text()) if context_path.exists() else {}
     config = settings.config.get("community", {})
-    if config.get("enabled", False):
+    plan = active_plan(settings)
+    if plan:
+        requests = [r for r in requests if matches_request(r, plan)]
+    if config.get("enabled", False) and (not plan or plan['category'] == 'investment'):
         try:
             records, provenance = fetch_community(config)
             if config.get("require_today_snapshot", True):
@@ -284,4 +292,7 @@ def collect_requests(settings: Settings) -> tuple[list[ContentRequest], list[dic
         except (OSError, ValueError, TypeError, KeyError) as exc:
             notices.append({"status": "COMMUNITY_SOURCE_UNAVAILABLE", "error": type(exc).__name__,
                             "http_status": getattr(exc, 'code', None)})
+    if plan and not requests and not notices:
+        notices.append({'status': 'PLANNED_INPUT_REQUIRED', 'category': plan['category'],
+                        'editorial_types': plan['editorial_types']})
     return requests, notices

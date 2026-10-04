@@ -41,7 +41,7 @@
         "sendBody": true,
         "contentType": "raw",
         "rawContentType": "application/json",
-        "body": "{\"event_type\": \"blog_daily\", \"client_payload\": {\"count\": 3, \"mode\": \"save\"}}",
+        "body": "{\"event_type\": \"blog_daily\", \"client_payload\": {\"count\": 1, \"mode\": \"save\"}}",
         "options": {},
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth"

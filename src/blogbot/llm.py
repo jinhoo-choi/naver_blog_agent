@@ -10,7 +10,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from openai import OpenAI
 
 from .core import PostDraft, today_kst
-from .editorial import editorial_hints, quality_guidance
+from .editorial import editorial_hints, quality_guidance, routed_category_info, routed_prompt
 from .inputs import ContentRequest
 from .responses import DRAFT_SCHEMA, REVIEW_SCHEMA, ResponseFailure, _get, request_json
 
@@ -159,6 +159,7 @@ class BlogLLM:
         recent_titles: list[str],
         *, raw: bool = False,
     ):
+        category_info = routed_category_info(category_info, request.category, request.data.get('editorial_type'))
         category_key = request.category
         display = category_info["display_name"]
         subcats = ", ".join(category_info["subcategories"])
@@ -167,8 +168,8 @@ class BlogLLM:
         today = today_kst().isoformat()
 
         prompt = f"""
-{self.writer_prompt}
-{quality_guidance(request.category)}
+{routed_prompt(self.writer_prompt, request.category, request.data.get('editorial_type'))}
+{quality_guidance(request.category, request.data.get('editorial_type'))}
 
 오늘 날짜: {today}
 카테고리: {display} ({category_key})
@@ -226,9 +227,10 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
     def correct_draft(self, candidate, category_info, issue_codes, request, *, cache_only=False):
         """One pre-review correction; no search or truncation retry, no new evidence."""
         from .pre_review import DraftCandidate
+        category_info = routed_category_info(category_info, request.category, request.data.get('editorial_type'))
         prompt = f"""
-{self.writer_prompt}
-{quality_guidance(request.category)}
+{routed_prompt(self.writer_prompt, request.category, request.data.get('editorial_type'))}
+{quality_guidance(request.category, request.data.get('editorial_type'))}
 
 정식 검수 전 1회 수정입니다. 아래 기계적 오류만 고치고 같은 주제·근거를 유지하세요.
 새로운 사실, 출처, 경험, 사진 관찰, 의학·투자 권고를 창작하지 마세요.
@@ -259,13 +261,14 @@ source_urls와 본문 URL은 아래 실제 관찰 URL 중에서만 선택하세�
         return {k: v for k, v in post.__dict__.items() if k != "photos"}
 
     def review(self, post: PostDraft, category_info: dict, request: ContentRequest) -> dict:
+        category_info = routed_category_info(category_info, request.category, request.data.get('editorial_type'))
         from .research import prepare_reference_evidence
         request = prepare_reference_evidence(
             self.journal.parent if self.journal else None, request, post.source_urls)
         rules = "\n".join(f"- {r}" for r in category_info.get("rules", []))
         prompt = f"""
-{self.reviewer_prompt}
-{quality_guidance(request.category)}
+{routed_prompt(self.reviewer_prompt, request.category, request.data.get('editorial_type'))}
+{quality_guidance(request.category, request.data.get('editorial_type'))}
 
 기계적 편집 관찰(오류 확정/추가 차단 기준 아님, 문맥으로 검토):
 {json.dumps(editorial_hints(post.body), ensure_ascii=False)}
@@ -294,6 +297,7 @@ source_urls와 본문 URL은 아래 실제 관찰 URL 중에서만 선택하세�
         self, post: PostDraft, category_info: dict, review: dict, request: ContentRequest,
         *, cache_only: bool = False, single_attempt: bool = False, raw: bool = False,
     ) -> PostDraft:
+        category_info = routed_category_info(category_info, request.category, request.data.get('editorial_type'))
         original_identity = json.dumps([self.model, self._draft_data(post), category_info,
                                         review, request.prompt_data()], sort_keys=True)
         if not cache_only:
@@ -302,8 +306,8 @@ source_urls와 본문 URL은 아래 실제 관찰 URL 중에서만 선택하세�
                 self.journal.parent if self.journal else None, request, post.source_urls)
         rules = "\n".join(f"- {r}" for r in category_info.get("rules", []))
         prompt = f"""
-{self.writer_prompt}
-{quality_guidance(request.category)}
+{routed_prompt(self.writer_prompt, request.category, request.data.get('editorial_type'))}
+{quality_guidance(request.category, request.data.get('editorial_type'))}
 
 오늘 한국시간 기준일: {today_kst().isoformat()}
 기존 초안을 심사 지적사항에 맞게 수정한다. 주제와 핵심 출처는 유지하되 오류·과장·중복을 제거한다.
@@ -348,7 +352,7 @@ source_urls와 본문 URL은 아래 실제 관찰 URL 중에서만 선택하세�
             # One read-only compatibility lookup for pre-topic-quality-v1 interrupted rewrites.
             # All other inputs stay byte-for-byte identical; never grant another paid attempt.
             legacy_prompt = prompt.replace(
-                self.writer_prompt + '\n' + quality_guidance(request.category) + '\n',
+                self.writer_prompt + '\n' + quality_guidance(request.category, request.data.get('editorial_type')) + '\n',
                 self.writer_prompt + '\n', 1)
             payload, response = request_json(self.client, input=legacy_prompt, **call)
         observed = post.source_urls + _extract_urls(response) + _historical_source_urls(self.journal, request.id)

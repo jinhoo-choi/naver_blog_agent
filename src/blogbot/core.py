@@ -69,11 +69,13 @@ def connect_db(path: Path) -> sqlite3.Connection:
         "id INTEGER PRIMARY KEY, day TEXT NOT NULL, category TEXT NOT NULL, "
         "status TEXT NOT NULL DEFAULT 'STARTED')"
     )
+    conn.execute("CREATE TABLE IF NOT EXISTS save_receipts ("
+                 "request_id TEXT PRIMARY KEY, day TEXT NOT NULL, category TEXT NOT NULL)")
     for table, columns in {
         "posts": {"request_id": "TEXT NOT NULL DEFAULT ''",
                   "photos_json": "TEXT NOT NULL DEFAULT '[]'",
                   "provenance_json": "TEXT NOT NULL DEFAULT '{}'"},
-        "attempts": {"request_id": "TEXT"},
+        "attempts": {"request_id": "TEXT", "plan_json": "TEXT NOT NULL DEFAULT '{}'"},
     }.items():
         present = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
         for name, definition in columns.items():
@@ -169,6 +171,22 @@ def reserve_attempt(conn: sqlite3.Connection, config: dict, daily_target: int, c
             "SELECT category, status, COUNT(*) FROM attempts WHERE day=? GROUP BY category, status",
             (today_kst().isoformat(),),
         ).fetchall()
+        plan = config.get('daily_plan')
+        if plan:
+            if plan.get('reservation'):
+                return None
+            if plan['date'] != today_kst().isoformat():
+                raise ValueError('Reload settings after the KST date changes')
+            from .planning import matches_post, saved_count
+            if saved_count(conn, plan) or conn.execute(
+                "SELECT 1 FROM posts WHERE status IN ('SAVING','SAVE_UNCERTAIN') LIMIT 1"
+            ).fetchone():
+                return None
+            if any(matches_post(load_post(row), plan) for row in conn.execute(
+                "SELECT * FROM posts WHERE status IN ('APPROVED','TEXT_APPROVED','IMAGES_PENDING')"
+            )):
+                return None
+            daily_target = min(daily_target, plan['target'])
         attempted = sum(row[2] for row in rows)
         dropped = sum(row[2] for row in rows if row[1] == "DROP_REVIEW")
         # Permit one replacement after editorial rejection, with a hard cap on paid attempts.
@@ -184,6 +202,9 @@ def reserve_attempt(conn: sqlite3.Connection, config: dict, daily_target: int, c
                      int(any(c == category and status == "DROP_REVIEW" for c, status, _ in rows))}
         seen = {row[0] for row in conn.execute("SELECT request_id FROM attempts")}
         available = [r for r in candidates if r.id not in seen]
+        if plan:
+            from .planning import matches_request
+            available = [r for r in available if matches_request(r, plan)]
         present = {r.category for r in available}
         limited = {"categories": {k: v for k, v in config["categories"].items()
                                   if k in present and k not in exhausted}}
@@ -195,8 +216,8 @@ def reserve_attempt(conn: sqlite3.Connection, config: dict, daily_target: int, c
         category = choices[0]
         request = next(r for r in available if r.category == category)
         cur = conn.execute(
-            "INSERT INTO attempts(day, category, request_id) VALUES (?, ?, ?)",
-            (today_kst().isoformat(), category, request.id),
+            "INSERT INTO attempts(day, category, request_id, plan_json) VALUES (?, ?, ?, ?)",
+            (today_kst().isoformat(), category, request.id, json.dumps(plan or {}, sort_keys=True)),
         )
         return int(cur.lastrowid), request
 

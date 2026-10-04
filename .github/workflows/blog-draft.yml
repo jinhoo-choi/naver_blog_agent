@@ -6,7 +6,7 @@ on:
       count:
         description: 'KST daily candidate target (1-5)'
         type: choice
-        default: '3'
+        default: '1'
         options: ['1', '2', '3', '4', '5']
       mode:
         description: 'Generate text, save drafts, or retry approved text'
@@ -49,7 +49,7 @@ jobs:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       BLOG_NOTIFY_ENABLED: ${{ vars.BLOG_NOTIFY_ENABLED || 'false' }}
-      BLOG_DAILY_COUNT: ${{ inputs.count || github.event.client_payload.count || vars.BLOG_DAILY_COUNT || '3' }}
+      BLOG_DAILY_COUNT: ${{ inputs.count || github.event.client_payload.count || vars.BLOG_DAILY_COUNT || '1' }}
       BLOG_MODE: ${{ inputs.mode || github.event.client_payload.mode || vars.BLOG_MODE || 'generate' }}
       NAVER_HEADLESS: 'false'
       PYTHONUTF8: '1'

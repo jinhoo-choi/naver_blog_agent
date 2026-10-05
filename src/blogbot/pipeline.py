@@ -355,6 +355,8 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                     continue
             category_key = request.category
             result = {"attempt": attempt_id, "category": category_key, "request_id": request.id}
+            if request.provenance.get('creator_trends'):
+                result['creator_trends_status'] = request.provenance['creator_trends']['status']
             if category_key == 'investment':
                 result['source_kind'] = request.data.get('kind')
                 result['eligible_source_kinds'] = {kind: sum(

@@ -10,6 +10,10 @@ def telegram(results: list[dict]) -> None:
     prepared = [r for r in results if r.get('status') == 'APPROVED']
     lines = [f"[NAVER BLOG] 원고 준비 {len(prepared)}건 / 네이버 임시저장 {len(saved)}건"]
     lines += [f"• #{r['id']} ({r['category']}, {r.get('score', '-')}/30)" for r in saved]
+    trend_states = sorted({r['creator_trends_status'] for r in results
+                           if r.get('creator_trends_status')})
+    if trend_states:
+        lines.append('Creator Advisor 주제 선정 참고: ' + ', '.join(trend_states))
     reserved = [r for r in results if r.get('status') == 'EDITORIAL_SLOT_RESERVED']
     if reserved:
         lines.append(f"기존 수동 초안으로 예약된 편집 슬롯 {len(reserved)}건: 당일 자동 생성·저장 생략")

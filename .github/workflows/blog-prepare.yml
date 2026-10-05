@@ -36,6 +36,9 @@ jobs:
       OPENAI_REVIEW_MODEL: ${{ vars.OPENAI_REVIEW_MODEL || 'gpt-5' }}
       BLOG_BUNDLE_KEY: ${{ secrets.BLOG_BUNDLE_KEY }}
       BLOG_SEED_JSON: ${{ secrets.BLOG_SEED_JSON }}
+      # Bounded observed public trend metadata, supplied before the existing 09:00 run.
+      # The runner does not inherit Work/cloud-browser login or collect Trends itself.
+      BLOG_CREATOR_TRENDS_JSON: ${{ vars.BLOG_CREATOR_TRENDS_JSON }}
       NAVER_API_HUB_CLIENT_ID: ${{ secrets.NAVER_API_HUB_CLIENT_ID }}
       NAVER_API_HUB_CLIENT_SECRET: ${{ secrets.NAVER_API_HUB_CLIENT_SECRET }}
       GITHUB_TOKEN: ${{ github.token }}

@@ -118,6 +118,11 @@ rules = [
   "모바일 짧은 문단·대소제목·구분선·핵심강조를 유지한다. 글자수보다 질문에 대한 답·재현가능성·시각증거·재사용자료를 우선하며 기존 사실성·안전성·품질 심사는 유지한다. 대표이미지는 전체 핵심을 보여주고 캡처 캡션에 무엇을 확인할지 설명한다. 개인정보는 가리고 외부화면/문서 출처를 남긴다. 캡처·사진은 재사용 권한과 허용 범위를 확인하고 필요한 부분만 사용한다. 권한 또는 필수 근거/캡처/링크가 확인되지 않으면 보류하며 실제 캡처를 생성 이미지로 대체하지 않는다."
 ]
 
+# Authenticated UI evidence is imported before eligible-topic selection.
+[creator_advisor]
+enabled = true
+channel_id = "choijku"
+
 # Optional ranking of existing eligible inputs; missing credentials preserve queue order.
 [topics]
 enabled = true

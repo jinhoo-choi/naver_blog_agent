@@ -268,7 +268,9 @@ def pack(settings, destination: Path) -> None:
         for path in (directory / 'source-evidence').glob('*.json'):
             archive.write(path, path.relative_to(directory))
         for name in ['blog.db', 'bundle-info.json', 'ready.json', 'context.json',
-                     'topic-cache.json', 'topic-selection.json', 'usage.jsonl', 'run-summary.json',
+                     'topic-cache.json', 'topic-selection.json', 'creator-trends.json',
+                     'creator-trend-selection.json', 'creator-trend-decisions.json',
+                     'usage.jsonl', 'run-summary.json',
                      'auto-recovery.json']:
             path = directory/name
             if path.exists(): archive.write(path, name)

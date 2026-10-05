@@ -129,6 +129,19 @@
       "category": "parenting",
       "day": "2026-10-04",
       "status": "SAVED_NAVER"
+    },
+    {
+      "request_id": "manual-origins-silbi-20261005",
+      "category": "origins",
+      "day": "2026-10-05",
+      "status": "SAVED_NAVER",
+      "saved_at": "2026-10-05T10:17+00:00",
+      "saved_at_precision": "minute",
+      "saved_display": "2026.10.05 03:17",
+      "images": 1,
+      "mode": "owner_requested_manual_preparation",
+      "verification": "single_save_click_and_draft_list_title_count",
+      "reopened": false
     }
   ]
 }

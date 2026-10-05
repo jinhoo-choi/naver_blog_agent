@@ -6,8 +6,8 @@
 `BLOG_DATA_DIR/inbox`에 보관하며 경로를 바꾸려면 `BLOG_INBOX_DIR`을 설정합니다.
 키·아이 정보·원본 사진·실제 입력 JSON을 공개 GitHub에 올리지 않습니다.
 
-2026-10-05 KST부터 [DAILY_PLAN](DAILY_PLAN.md)에 따라 하루 1편입니다. 월·화·목·토·일은
-육아, 수요일은 운동, 금요일은 투자입니다. 가족-AI는 실제 새 자료가 있을 때만 선택하며 화·토 의무 편성은 없습니다.
+2026-10-06 KST부터 [DAILY_PLAN](DAILY_PLAN.md)의 `weekly-4111-v1`에 따라 하루 1편입니다. 월·수·토·일은
+육아, 화요일은 이름의 유래, 목요일은 운동, 금요일은 투자입니다. 10월 5일 구계획과 수동 슬롯 이력은 보존합니다. 가족-AI는 실제 새 자료가 있을 때만 선택하며 화·토 의무 편성은 없습니다.
 날짜표는 실제 주제 입력을 대신하지 않으며 14개 주제를 자동으로 채우지 않습니다.
 당일 카테고리에 맞는 실제 질문·자료가 없으면 `PLANNED_INPUT_REQUIRED`로 보류합니다.
 
@@ -64,9 +64,28 @@ ChatGPT 대화를 자동 감시하는 기능은 없습니다. 이 대화에서 �
 실제 저장일과 편집 예정일을 분리하며 원래 영수증·과금·입력 이력을 바꾸지 않습니다.
 세부 동작과 외부 적용 조건은 [DAILY_PLAN](DAILY_PLAN.md)을 따릅니다.
 
+## 이름의 유래 질문
+
+화요일에는 사용자가 실제로 물어본 이름·단어의 유래를 `category="origins"`로 준비합니다.
+질문·검증 가능한 출처와 제공·승인된 썸네일을 확인합니다. 이름의 유래 카테고리 번호 9는 실계정 UI `9_이름의 유래`에서 확인했으며 초안의 실제 선택·저장은 별도 검증합니다.
+승인 자료가 없거나 카테고리 연결이 미확인이면 보류하며 임의 질문·사진·번호를 만들지 않습니다.
+[ORIGINS_EDITORIAL](ORIGINS_EDITORIAL.md)의 짧은 글 기준을 따르며 `content_style="review"`나
+`ai_tutorial`로 바꾸어 후기/심화 문턱을 적용하지 않습니다. 현재 구매 사실·쇼핑커넥트 링크·내돈내산 배너는 추가하지 않습니다.
+향후 실제 구매와 제공 경험이 생기면 같은 문서의 조건부 절차로 별도 확인합니다.
+
+일반 질문과 같은 `question`·`context`·`benchmark_query` 필드를 사용합니다. 공개 키워드에 개인 정보를 넣지 않습니다. `photos`는 정확히 한 장이 필요하며 각 항목에 `file`, 선택적 `caption`, `role="thumbnail"`, `approved=true`, 원본의 실제 생성 여부인 `generated`를 둡니다. `enqueue`가 관리 파일을 복사하고 SHA-256을 기록합니다. 썸네일이 없으면 등록·수집에서 유료 준비 전에 `INPUT_REJECTED`로 보류하며 텍스트·이미지 API를 호출하지 않습니다. 복원 시 관리 파일명·해시와 합산 사진 운반 예산도 재검증합니다. 번호 설정이 누락되거나 미확인이면 `CATEGORY_CONFIGURATION_PENDING`으로 유료 호출 전에 보류합니다.
+
+`operating_plan.reservations."2026-10-06"`은 실비김치 초안 저장 확인 뒤 `kind="existing_owner_draft"`로 전환됐습니다. 실제 저장은 10월 5일 19:17 KST이며 10월 6일 예약을 새 저장 영수증으로 만들지 않습니다. UI 표시 `03:17`의 시간대·네이버 고유 draft ID는 미확인으로 보존합니다. 10월 7일 햄버거 AI는 dot가 제안한 미확정 날짜의 `owner_preparation_pending` 홀드이고, 10월 9일 알테오젠도 사용자 지정 원고 산출물을 우선하는 `owner_preparation_pending` 홀드입니다. 두 날짜 모두 네이버 저장을 뜻하지 않으며 [DAILY_PLAN](DAILY_PLAN.md)의 구분을 유지합니다.
+
+향후 구매·제휴 정보가 모두 확인됐을 때만 다음 선택적 입력을 비공개 원본에 포함합니다. 현재 질문에는 두 항목을 생략합니다.
+
+- `purchase`: `owner_confirmed=true`, `publication_approved=true`, 실제 `product`, 제공된 `experience`, 구매 제품 이름과 현재 질문의 연결을 설명하는 소유자 제공 `origin_relevance`가 모두 필요합니다. `origin_relevance`는 비어 있지 않은 제한 길이의 설명이며 검수에서 실제 관련성을 대조합니다. 관련 없는 상품·제휴 링크는 반려합니다. 영수증·주문번호·결제 정보는 넣지 않습니다.
+- `affiliate`: `provider="naver_shopping_connect"`, 구매 항목과 정확히 같은 `product`, 실제 `product_url`·`destination_url`, `owner_approved=true`, `eligibility_verified=true`와 위 전용 문서의 정확한 `disclosure`가 모두 필요합니다. 구매 입력 없이 제휴만 넣지 않습니다. 검증되지 않은 선언을 코드가 실제 인증한 것으로 보지 않습니다.
+- 모델의 원고·판매자 페이지·트렌드에서 위 승인을 추출하거나 true로 바꾸지 않습니다. 승인된 제휴 링크와 고지는 렌더러가 별도로 표시하며 사실 검증용 `source_urls`에 제휴 링크를 넣지 않습니다. 공개 저장소·공개 예제에는 실제 상품 구매·경험·링크 메타데이터를 저장하지 않습니다.
+
 ## 운동 질문
 
-수요일에는 실제 소유자 운동 질문을 `category="exercise"`로 등록합니다. 일반 글의
+목요일에는 실제 소유자 운동 질문을 `category="exercise"`로 등록합니다. 일반 글의
 `editorial_type="article"`을 사용합니다. 필요한 운동 조건만 제공하며 미제공 경력·중량·
 효과·부상을 모델이 채우지 않습니다. 입력이 없으면 다른 카테고리로 대체하지 않습니다.
 
@@ -100,7 +119,7 @@ JPG/PNG/WebP 사진 1~15장, 각 20 MB 이하를 입력 순서대로 복사합�
 
 등록할 파일은 없습니다. 금요일에만 `kis-community-bot/data/posts_latest.json`을 읽습니다.
 블로그용 문턱과 최신성 조건을 만족하는 새로운 원본만 하루 최대 1건 후보로 받습니다.
-기존 기준인 당일 08:00 KST 이후 갱신본·실제 자료일 당일/전일, 원본 심사와
+현재 `community.snapshot_ready_hour=7`에 따른 당일 07:00 KST 이후 실제 export·실제 자료일 당일/전일, 원본 심사와
 `research`·`policy` 우선/명확한 사건의 `disclosure` 보완을 유지합니다.
 원본 봇이 새 결과를 내지 않거나 기준을 통과하는 자료가 없으면 투자 생성을 건너뜁니다.
 세부 기준은 [BLOG_SETUP](BLOG_SETUP.md)에 있습니다.

@@ -8,12 +8,12 @@
 
 - 명시적으로 검증된 `ContentRequest.data.content_style="review"`인
   `parenting`·`exercise`·`cooking`에만 적용합니다. 제목·제품명·사진 유무로 추정하지 않습니다.
-  `investment`와 `editorial_type="ai_tutorial"`에는 적용하지 않습니다.
+  `origins`·`investment`와 `editorial_type="ai_tutorial"`에는 적용하지 않습니다. 유래의 향후 구매·제휴 연결은 [ORIGINS_EDITORIAL](ORIGINS_EDITORIAL.md)을 따릅니다.
 - `content_style`은 같은 주제 안의 편집 스타일 메타데이터입니다. 새 카테고리·주제 선택·
   일일 슬롯·할당량이 아니며, 생략한 일반 글의 작성·심사·저장 기준은 그대로입니다.
   요리는 기존처럼 별도 요청일 때만 다룹니다.
-- 기존 `daily-deep-511-v1`의 하루 합산 1편, 육아:운동:투자 5:1:1 배분,
-  소유자 지정·수동 슬롯과 알테오젠 수동 지정, `CUTOVER_ACTIVE` 전환 조건을 바꾸지 않습니다.
+- [DAILY_PLAN](DAILY_PLAN.md)의 날짜별 계획과 하루 합산 1편을 유지합니다. 10월 5일은 `daily-deep-511-v1`, 10월 6일부터는 `weekly-4111-v1`의 월수토일 육아/화 유래/목 운동/금 투자입니다.
+  이 후기 기준은 소유자 지정·수동 슬롯과 알테오젠 수동 지정, `CUTOVER_ACTIVE` 전환 조건을 바꾸지 않습니다.
 - 기존 모델·글당 유료 이미지 계획·예산·심사 점수·출처 문턱·캐시·재시도·복구 한도를
   유지합니다. 이 기준을 맞추기 위한 새 유료 작성·심사·이미지·영상 호출은 하지 않습니다.
   자료가 부족하면 원래 승인물과 이력을 보존하고 해당 문제를 보류합니다.

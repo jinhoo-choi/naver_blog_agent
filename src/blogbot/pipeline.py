@@ -68,6 +68,10 @@ def save_pending(settings: Settings) -> list[dict]:
     plan = active_plan(settings)
     if plan and plan.get('reservation'):
         return [reservation_result(plan)]
+    if plan and plan['category'] == 'origins':
+        number = settings.config['categories']['origins'].get('naver_category_no')
+        if type(number) is not int or number < 1:
+            return [{'status': 'CATEGORY_CONFIGURATION_PENDING', 'category': 'origins'}]
     writer = make_writer(settings)
     results = []
     with closing(connect_db(settings.db_path)) as conn:
@@ -130,6 +134,10 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
     plan = active_plan(settings)
     if plan and plan.get('reservation'):
         return [reservation_result(plan)]
+    if plan and plan['category'] == 'origins':
+        number = settings.config['categories']['origins'].get('naver_category_no')
+        if type(number) is not int or number < 1:
+            return [{'status': 'CATEGORY_CONFIGURATION_PENDING', 'category': 'origins'}]
     requested = settings.daily_count if count is None else count
     if plan:
         requested = min(requested, plan['target'])

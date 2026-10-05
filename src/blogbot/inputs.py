@@ -47,6 +47,9 @@ class ContentRequest:
     provenance: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if self.category == 'origins':
+            from .origins import validate_origin_data
+            self.provenance = {**self.provenance, 'origins': validate_origin_data(self.data)}
         if content_style(self.category, self.data) == 'review':
             # Persist the style with the text-approved DB row, before media completes.
             # Downstream ready export and direct-writer preflight read post provenance.
@@ -76,6 +79,12 @@ def verify_photos(photos: list[dict]) -> None:
             raise ValueError("Unsupported photo format")
         if hashlib.sha256(path.read_bytes()).hexdigest() != photo["sha256"]:
             raise ValueError("Photo changed after request was registered")
+
+
+def origin_photo_metadata(item: dict) -> dict:
+    if not isinstance(item, dict) or item.get('approved') is not True or item.get('role') != 'thumbnail':
+        raise ValueError('Origins requires an explicitly approved supplied thumbnail')
+    return {'approved': True, 'role': 'thumbnail', 'generated': bool(item.get('generated', False))}
 
 
 def review_photo_metadata(item: dict) -> dict:
@@ -117,7 +126,7 @@ def enqueue_file(settings: Settings, source: Path) -> str:
         raise ValueError("Request id must be a unique ASCII slug")
     category = raw.get("category")
     style = content_style(category, raw)
-    if category in {"parenting", "exercise"}:
+    if category in {"parenting", "exercise", "origins"}:
         question = raw.get("question", "")
         if not isinstance(question, str) or len(question.strip()) < 3:
             raise ValueError("Parenting requires the owner's actual question")
@@ -160,6 +169,25 @@ def enqueue_file(settings: Settings, source: Path) -> str:
         verify_photos(photos)
     else:
         raise ValueError("Only parenting questions or supplied cooking material can be enqueued")
+
+    if category == 'origins':
+        from .origins import validate_origin_data
+        data.update({k: raw[k] for k in ('purchase', 'affiliate') if k in raw})
+        validate_origin_data(data)
+        raw_photos = raw.get('photos', [])
+        if not isinstance(raw_photos, list) or len(raw_photos) != 1:
+            raise ValueError('Origins requires one approved supplied thumbnail before paid preparation')
+        photos = []
+        for item in raw_photos:
+            metadata = origin_photo_metadata(item)
+            path = (source.parent / item['file']).resolve()
+            if not path.is_file() or not 0 < path.stat().st_size <= 20_000_000:
+                raise ValueError('Thumbnail missing, empty or larger than 20 MB')
+            photos.append({'file': str(path), 'caption': str(item.get('caption', '')),
+                           'sha256': hashlib.sha256(path.read_bytes()).hexdigest(), **metadata})
+        if photos:
+            verify_photos(photos)
+            verify_review_transport_budget(settings, sum(Path(p['file']).stat().st_size for p in photos))
 
     if 'content_style' in raw:
         data['content_style'] = style
@@ -319,9 +347,20 @@ def collect_requests(settings: Settings) -> tuple[list[ContentRequest], list[dic
                 if not all(request.data.get(k) for k in ("name", "ingredients", "steps")):
                     raise ValueError("Recipe incomplete")
                 verify_photos(request.photos)
-            elif request.category not in {"parenting", "exercise"} or not request.data.get("question"):
+            elif request.category not in {"parenting", "exercise", "origins"} or not request.data.get("question"):
                 raise ValueError("Question missing or unsupported category")
             editorial_type(request.category, request.data)
+            if request.category == 'origins':
+                verify_review_transport_budget(settings)
+                if len(request.photos) != 1:
+                    raise ValueError('Origins accepts one thumbnail')
+                verify_photos(request.photos)
+                for photo in request.photos:
+                    origin_photo_metadata(photo)
+                    if (Path(photo['file']).resolve().parent != path.parent.resolve()
+                            or Path(photo['file']).is_symlink()
+                            or not re.fullmatch(r'photo-\d+\.(?:jpg|jpeg|png|webp)', Path(photo['file']).name)):
+                        raise ValueError('Origins thumbnail is outside its managed queue')
             if content_style(request.category, request.data) == 'review':
                 verify_review_transport_budget(settings)
                 verify_photos(request.photos)
@@ -340,13 +379,13 @@ def collect_requests(settings: Settings) -> tuple[list[ContentRequest], list[dic
     scheduled = settings.config.get("topics", {}).get("scheduled", {}).get(str(today_kst()))
     if scheduled:
         request = ContentRequest(**scheduled)
-        if (request.category not in {"parenting", "exercise"}
+        if (request.category not in {"parenting", "exercise", "origins"}
                 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", request.id)
                 or not request.data.get("question")):
             raise ValueError("Invalid scheduled topic")
         editorial_type(request.category, request.data)
-        if content_style(request.category, request.data) == 'review':
-            raise ValueError('Review photos must be registered through the private input queue')
+        if request.category == 'origins' or content_style(request.category, request.data) == 'review':
+            raise ValueError('Supplied photos must be registered through the private input queue')
         requests = [request, *[r for r in requests if r.category != request.category]]
     context_path = settings.db_path.parent / "context.json"
     context = json.loads(context_path.read_text()) if context_path.exists() else {}
@@ -360,7 +399,10 @@ def collect_requests(settings: Settings) -> tuple[list[ContentRequest], list[dic
             if config.get("require_today_snapshot", True):
                 stamp = datetime.fromisoformat(provenance["snapshot_at"])
                 stamp = stamp.astimezone(ZoneInfo("Asia/Seoul"))
-                if stamp.date() != today_kst() or stamp.hour < 8:
+                ready_hour = config.get('snapshot_ready_hour', 7)
+                if type(ready_hour) is not int or not 0 <= ready_hour <= 23:
+                    raise ValueError('Invalid community snapshot readiness hour')
+                if stamp.date() != today_kst() or stamp.hour < ready_hour:
                     notices.append({"status": "COMMUNITY_SOURCE_PENDING"})
                     return requests, notices
             eligible = 0

@@ -1,0 +1,25 @@
+{
+  "enabled": false,
+  "version": "creator-advisor-v1",
+  "channel_id": "choijku",
+  "capture_method": "authenticated_ui",
+  "captured_at": "2026-10-05T08:30:00+09:00",
+  "groups": [
+    {
+      "category": "parenting",
+      "ui_category": "육아·결혼",
+      "metric": "search_inflow_rank",
+      "data_date": "2026-10-04",
+      "keyword": "실제 확인한 검색어로 교체",
+      "source_url": "https://creator-advisor.naver.com/naver_blog/choijku/trends",
+      "entries": [
+        {
+          "rank": 1,
+          "title": "실제 관찰한 게시물 제목으로 교체 (활성화 금지 예제)",
+          "url": "https://blog.naver.com/replace_with_observed/0",
+          "views": null
+        }
+      ]
+    }
+  ]
+}

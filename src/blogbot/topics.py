@@ -12,6 +12,7 @@ from http.client import HTTPException
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .core import today_kst
+from .creator_trends import consult
 from .images import atomic_json
 
 ENDPOINT = "https://naverapihub.apigw.ntruss.com/search-trend/v1/search"
@@ -116,7 +117,7 @@ def rank_candidates(settings, conn, candidates: list, daily_target: int) -> list
         ))
         for slot, request in zip(slots, ordered):
             output[slot] = request
-    return output
+    return consult(settings, conn, output, daily_target)
 
 
 def _rank(settings, conn, candidates: list, daily_target: int) -> list:

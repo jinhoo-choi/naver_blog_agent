@@ -239,6 +239,9 @@ def load_post(row: sqlite3.Row) -> PostDraft:
 
 
 def validate_post(post: PostDraft, category_info: dict) -> None:
+    if post.category == 'origins':
+        from .origins import validate_origin_post
+        validate_origin_post(post)
     if not post.title or not post.body or post.subcategory not in category_info["subcategories"]:
         raise ValueError("Empty draft or invalid subcategory")
     if date.fromisoformat(post.as_of_date) != today_kst():

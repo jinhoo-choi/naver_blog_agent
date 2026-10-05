@@ -90,6 +90,9 @@ def quality_guidance(category: str, editorial_type: str | None = None,
     key = 'ai_tutorial' if category == 'parenting' and editorial_type == 'ai_tutorial' else category
     selected = content_style(category, {'content_style': style or 'article',
                                       'editorial_type': editorial_type or 'article'})
+    if category == 'origins':
+        from .origins import GUIDANCE
+        return GUIDANCE
     return COMMON + '\n' + (REVIEW if selected == 'review' else TOPICS.get(key, ''))
 
 
@@ -113,8 +116,11 @@ def editorial_hints(body: str) -> list[str]:
 
 
 def routed_prompt(prompt: str, category: str, editorial_type: str | None = None,
-                  style: str | None = None) -> str:
+                  style: str | None = None, *, role: str = 'writer') -> str:
     """Route explicit styles without changing ordinary article prompt bytes."""
+    if category == 'origins':
+        from .origins import PLAN, REVIEWER, WRITER
+        return PLAN + (REVIEWER if role == 'reviewer' else WRITER)
     if content_style(category, {'content_style': style or 'article',
                                'editorial_type': editorial_type or 'article'}) == 'review':
         return '\n'.join(

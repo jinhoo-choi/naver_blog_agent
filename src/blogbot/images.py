@@ -15,7 +15,7 @@ from openai import APIStatusError, OpenAI
 
 from .core import PostDraft
 from .editorial import content_style
-from .inputs import ContentRequest, review_photo_metadata, verify_photos
+from .inputs import ContentRequest, origin_photo_metadata, review_photo_metadata, verify_photos
 
 
 class ImagePending(RuntimeError):
@@ -98,6 +98,15 @@ def section_contexts(body: str) -> list[str]:
 
 
 def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostDraft:
+    if request.category == 'origins':
+        folder = settings.artifact_dir / 'generated-images' / post.request_id
+        if folder.exists() and any(folder.iterdir()):
+            raise ImagePending('Existing image checkpoints need origins reconciliation')
+        if len(request.photos) != 1:
+            raise ImagePending('Origins needs one approved thumbnail; no generated substitute')
+        verify_photos(request.photos)
+        photo = {**request.photos[0], **origin_photo_metadata(request.photos[0])}
+        return replace(post, photos=[photo])
     if content_style(request.category, request.data) == 'review':
         # Supplied evidence is not a new paid image plan. Never reinterpret old jobs.
         folder = settings.artifact_dir / 'generated-images' / post.request_id

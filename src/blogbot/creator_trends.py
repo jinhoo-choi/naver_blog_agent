@@ -28,6 +28,7 @@ UI_CATEGORIES = {
     'parenting': {'육아·결혼'},
     'exercise': {'스포츠', '건강·의학'},
     'investment': {'비즈니스·경제'},
+    'origins': {'요리·레시피', '맛집', '국내여행', '해외여행', '문학·책'},
 }
 METRICS = {'keyword_inflow_order', 'search_inflow_rank', 'main_inflow_rank'}
 

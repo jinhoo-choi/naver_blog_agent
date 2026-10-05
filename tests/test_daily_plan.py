@@ -65,7 +65,7 @@ def test_every_measurement_day_has_one_explicit_slot(tmp_path, monkeypatch, offs
     day = date(2026, 10, 5) + timedelta(days=offset)
     settings = settings_on(tmp_path, monkeypatch, str(day))
     plan = active_plan(settings)
-    expected = ['parenting', 'parenting', 'exercise', 'parenting', 'investment',
+    expected = ['parenting', 'origins', 'parenting', 'exercise', 'investment',
                 'parenting', 'parenting'][day.weekday()]
     assert plan['date'] == str(day) and plan['category'] == expected and plan['target'] == 1
     assert plan['editorial_types'] == (['article', 'ai_tutorial'] if expected == 'parenting' else ['article'])
@@ -73,7 +73,11 @@ def test_every_measurement_day_has_one_explicit_slot(tmp_path, monkeypatch, offs
     assert sum(info['max_daily'] for info in settings.config['categories'].values()) == 1
     assert settings.config['categories'][expected]['max_daily'] == 1
     assert settings.config['community']['enabled'] == (expected == 'investment')
-    assert any('실제 캡처' in r for r in settings.config['categories'][expected]['rules'])
+    if expected == 'origins':
+        assert plan['depth'] == 'short'
+        assert not any('실제 캡처/직접 제공 사진' in r for r in settings.config['categories'][expected]['rules'])
+    else:
+        assert any('실제 캡처' in r for r in settings.config['categories'][expected]['rules'])
     assert [settings.config['images'][c + '_count'] for c in
             ['parenting', 'exercise', 'investment']] == [5, 5, 3]
     assert settings.config['images']['max_attempts'] == 2
@@ -84,7 +88,7 @@ def test_two_week_totals_and_no_automatic_expiry(tmp_path, monkeypatch):
     settings = settings_on(tmp_path, monkeypatch)
     start = date(2026, 10, 5)
     assert Counter(resolve_plan(settings.config, start + timedelta(days=i))['category']
-                   for i in range(14)) == {'parenting': 10, 'exercise': 2, 'investment': 2}
+                   for i in range(14)) == {'parenting': 8, 'origins': 2, 'exercise': 2, 'investment': 2}
     for day in ['2026-10-19', '2026-11-02']:
         assert resolve_plan(settings.config, date.fromisoformat(day))['target'] == 1
 
@@ -110,7 +114,7 @@ def test_long_running_process_must_reload_plan_at_kst_midnight(tmp_path, monkeyp
 
 
 def test_family_ai_queue_requires_explicit_subtype_and_does_not_fetch_kis(tmp_path, monkeypatch):
-    settings = settings_on(tmp_path, monkeypatch, '2026-10-06')
+    settings = settings_on(tmp_path, monkeypatch, '2026-10-07')
     monkeypatch.setattr('blogbot.inputs.fetch_community', lambda _: pytest.fail('Unscheduled KIS read'))
     source = tmp_path / 'input.json'
     for identity, category, subtype in [('p', 'parenting', None),
@@ -134,7 +138,7 @@ def test_family_ai_queue_requires_explicit_subtype_and_does_not_fetch_kis(tmp_pa
 
 
 def test_missing_planned_input_holds_without_paid_calls_or_filler(tmp_path, monkeypatch):
-    settings = settings_on(tmp_path, monkeypatch, '2026-10-06')
+    settings = settings_on(tmp_path, monkeypatch, '2026-10-07')
     monkeypatch.setattr('blogbot.pipeline.BlogLLM', lambda *a: pytest.fail('No paid filler'))
     monkeypatch.setattr('blogbot.inputs.fetch_community', lambda _: pytest.fail('No KIS read'))
     results = run_daily(settings, count=3)
@@ -147,9 +151,10 @@ def test_missing_planned_input_holds_without_paid_calls_or_filler(tmp_path, monk
 
 @pytest.mark.parametrize('snapshot,source_day,status', [
     ('2026-10-08T09:00:00+09:00', '2026-10-09', 'COMMUNITY_SOURCE_PENDING'),
-    ('2026-10-09T07:59:59+09:00', '2026-10-09', 'COMMUNITY_SOURCE_PENDING'),
+    ('2026-10-09T06:59:59+09:00', '2026-10-09', 'COMMUNITY_SOURCE_PENDING'),
     ('2026-10-09T08:00:00+09:00', '2026-10-07', 'NO_ELIGIBLE_INVESTMENT'),
-    ('2026-10-09T08:00:00+09:00', '2026-10-08', None),
+    ('2026-10-09T07:00:00+09:00', '2026-10-08', None),
+    ('2026-10-09T07:00:00+09:00', '2026-10-09', None),
 ])
 def test_friday_keeps_source_and_snapshot_freshness(tmp_path, monkeypatch, snapshot, source_day, status):
     settings = settings_on(tmp_path, monkeypatch, '2026-10-09')
@@ -573,7 +578,7 @@ def test_explicit_manual_draft_reserves_only_october_fifth(tmp_path, monkeypatch
     plan = active_plan(settings)
     assert plan['reservation'] == {'category': 'parenting', 'kind': 'existing_owner_draft'}
     assert plan['date'] == '2026-10-05' and plan['target'] == 1
-    for day in ['2026-10-06', '2026-10-12', '2026-10-19']:
+    for day in ['2026-10-08', '2026-10-12', '2026-10-19']:
         assert 'reservation' not in resolve_plan(settings.config, date.fromisoformat(day))
     assert resolve_plan(settings.config, date(2026, 10, 4)) is None
 
@@ -656,8 +661,8 @@ def test_reserved_handoff_stays_empty_even_with_matching_approved_packet(tmp_pat
         assert conn.execute('SELECT COUNT(*) FROM save_receipts').fetchone()[0] == 0
 
 
-def test_day_after_reservation_resumes_ordinary_input_requirements(tmp_path, monkeypatch):
-    settings = settings_on(tmp_path, monkeypatch, '2026-10-06', keep_reservation=True)
+def test_next_unreserved_parenting_day_resumes_ordinary_input_requirements(tmp_path, monkeypatch):
+    settings = settings_on(tmp_path, monkeypatch, '2026-10-10', keep_reservation=True)
     assert 'reservation' not in active_plan(settings)
     assert run_daily(settings)[0]['status'] == 'PLANNED_INPUT_REQUIRED'
 

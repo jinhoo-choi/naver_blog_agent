@@ -239,6 +239,9 @@ def pack(settings, destination: Path) -> None:
             uncertain = True
         for row in rows:
             post = load_post(row)
+            number = settings.config['categories'][post.category].get('naver_category_no')
+            if type(number) is not int or number < 1:
+                continue
             if stale_settings or (plan and (plan.get('reservation') or uncertain or not matches_post(post, plan)
                                            or packet or used)):
                 continue

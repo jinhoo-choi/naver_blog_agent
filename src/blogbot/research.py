@@ -120,6 +120,9 @@ def collect_benchmark(query: str, profile_dir: str, target: int = 7) -> dict:
 
 def prepare_request(settings, request):
     request = prepare_primary_evidence(settings, request)
+    if request.category == 'origins':
+        # Short fact-led explanations do not purchase a five-blog format benchmark.
+        return request
     if not settings.config.get("editorial", {}).get("enabled", True):
         return request
     query = public_query(request)

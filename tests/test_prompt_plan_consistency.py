@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def assert_daily_prompt(prompt, config):
     assert config['operating_plan']['version'] in prompt
-    assert 'daily_plan' in prompt and '하루 심화글 1편' in prompt
+    assert 'daily_plan' in prompt and '하루 글 1편' in prompt
     assert 'editorial.deep' in prompt
     weekday_names = ['월', '화', '수', '목', '금', '토', '일']
     schedule = config['operating_plan']['weekdays']
@@ -41,11 +41,11 @@ def test_prompt_files_match_daily_plan_and_image_configuration(filename):
 
 
 @pytest.mark.parametrize('day,category,subtype', [
-    ('2026-10-06', 'parenting', 'article'),
-    ('2026-10-07', 'exercise', 'article'),
+    ('2026-10-07', 'parenting', 'article'),
+    ('2026-10-08', 'exercise', 'article'),
     ('2026-10-09', 'investment', 'article'),
     ('2026-10-10', 'parenting', 'article'),
-    ('2026-10-13', 'parenting', 'ai_tutorial'),
+    ('2026-10-14', 'parenting', 'ai_tutorial'),
 ])
 def test_all_model_paths_receive_consistent_daily_plan(
         tmp_path, monkeypatch, day, category, subtype):

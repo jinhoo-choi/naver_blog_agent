@@ -45,7 +45,8 @@ def load_settings() -> Settings:
         for category, info in config['categories'].items():
             info['max_daily'] = int(category == plan['category'])
         info = config['categories'][plan['category']]
-        info['rules'].extend(config.get('editorial', {}).get('deep', {}).get('rules', []))
+        if plan['depth'] == 'deep':
+            info['rules'].extend(config.get('editorial', {}).get('deep', {}).get('rules', []))
     elif config["blog"].get("weekend_feature", False) and weekday >= 5:
         config["blog"]["daily_max"] = 1
         config["community"]["enabled"] = False

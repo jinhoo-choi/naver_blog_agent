@@ -239,8 +239,8 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
 source_urls와 본문 URL은 아래 실제 관찰 URL 중에서만 선택하세요.
 문서 식별자나 쿼리를 추측·삭제하거나 다른 문서를 같은 자료로 바꾸지 마세요.
 오늘 한국시간 기준일: {today_kst().isoformat()}
-필수 형식: 쉬운 도입 요약, 대제목 ## 최소 4개와 소제목 ###,
-육아·운동 본문 최소 1800자, 이미지 마크업 없음. 소제목은 내용에 맞게 정하세요.
+{('이름의 유래는 짧은 답변·의미별 빈 줄·최소 소제목. 분량과 고정 목차를 채우지 마세요.' if request.category == 'origins' else '필수 형식: 쉬운 도입 요약, 대제목 ## 최소 4개와 소제목 ###, 육아·운동 본문 최소 1800자.')}
+이미지 마크업 없음. 소제목은 내용에 맞게 정하세요.
 오류 코드: {json.dumps(issue_codes, ensure_ascii=False)}
 허용 카테고리와 규칙: {json.dumps(category_info, ensure_ascii=False)}
 원본 입력: {json.dumps(request.prompt_data(), ensure_ascii=False)}
@@ -267,7 +267,7 @@ source_urls와 본문 URL은 아래 실제 관찰 URL 중에서만 선택하세�
             self.journal.parent if self.journal else None, request, post.source_urls)
         rules = "\n".join(f"- {r}" for r in category_info.get("rules", []))
         prompt = f"""
-{routed_prompt(self.reviewer_prompt, request.category, request.data.get('editorial_type'), request.data.get('content_style'))}
+{routed_prompt(self.reviewer_prompt, request.category, request.data.get('editorial_type'), request.data.get('content_style'), role='reviewer')}
 {quality_guidance(request.category, request.data.get('editorial_type'), request.data.get('content_style'))}
 
 기계적 편집 관찰(오류 확정/추가 차단 기준 아님, 문맥으로 검토):

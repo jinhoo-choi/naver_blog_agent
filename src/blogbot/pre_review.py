@@ -120,7 +120,8 @@ MESSAGES = {
     'Start with a plain-language preview summary, not dates or URLs': 'invalid_preview',
 }
 HARD_STOPS = {'no_observed_evidence', 'unobserved_source_url', 'unobserved_body_url',
-              'invalid_source_url', 'missing_owner_photos', 'guaranteed_return_language'}
+              'invalid_source_url', 'missing_owner_photos', 'guaranteed_return_language',
+              'invalid_origins_metadata_or_claim'}
 
 
 def inspect_candidate(candidate: DraftCandidate, request: ContentRequest, info: dict,
@@ -204,6 +205,12 @@ def inspect_candidate(candidate: DraftCandidate, request: ContentRequest, info: 
             check()
         except ValueError as exc:
             codes.append(MESSAGES.get(str(exc), 'invalid_reference_date'))
+    if request.category == 'origins':
+        from .origins import validate_origin_post
+        try:
+            validate_origin_post(post)
+        except ValueError:
+            codes.append('invalid_origins_metadata_or_claim')
     codes.extend(_experience_issues(post.body, request))
     return post, list(dict.fromkeys(codes)), changes
 

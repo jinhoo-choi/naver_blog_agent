@@ -90,6 +90,10 @@ def validate_structure(post: PostDraft, required: bool = True) -> None:
         r"https?://|기준일\s*[:：]|작성일\s*[:：]|작성 기준일\s*[:：]", opening
     ):
         raise ValueError("Start with a plain-language preview summary, not dates or URLs")
+    if re.search(r"<\s*(script|iframe|img)\b|\{\{image:|!\[", post.body, re.IGNORECASE):
+        raise ValueError("Images are placed from verified files, not model URLs")
+    if post.category == 'origins':
+        return  # Fact checks remain mandatory; no length or heading quota for short explanations.
     heads = re.findall(r"^## (.+)$", post.body, re.MULTILINE)
     if len(heads) < 4 or not re.search(r"^### .+", post.body, re.MULTILINE):
         raise ValueError("Use at least four major sections and a subsection")
@@ -102,7 +106,16 @@ def validate_structure(post: PostDraft, required: bool = True) -> None:
 def render_segments(post: PostDraft, *, include_tags: bool = True) -> list[Segment]:
     chunks = re.split(r"(?=^## )", post.body, flags=re.MULTILINE)
     chunks = [c for c in chunks if c.strip()]
+    if post.category == 'origins' and len(chunks) == 1:
+        chunks = re.split(r'\n\s*\n', chunks[0], maxsplit=1)
     result = []
+    if post.category == 'origins':
+        from .origins import SERIES_MOTIVE, validate_origin_post
+        validate_origin_post(post)
+        affiliate = post.provenance['origins'].get('affiliate')
+        if affiliate:
+            result.append(Segment(html=paragraph(affiliate['disclosure'])))
+        result.append(Segment(html=paragraph(SERIES_MOTIVE, 12) + '<hr>'))
     # The opening summary precedes the cover; supporting images follow body sections.
     slots: dict[int, list[dict]] = {}
     review = post.provenance.get('content_style') == 'review'
@@ -143,6 +156,10 @@ def render_segments(post: PostDraft, *, include_tags: bool = True) -> list[Segme
                 caption += f" / {photo['author']} · {photo['license']} (자료사진)"
             if caption:
                 result.append(Segment(html=paragraph(caption, 12)))
+    if post.category == 'origins' and post.provenance['origins'].get('affiliate'):
+        affiliate = post.provenance['origins']['affiliate']
+        result.append(Segment(html='<hr><p><a href="' + html.escape(affiliate['destination_url'], quote=True)
+                              + '">' + html.escape(affiliate['product']) + '</a></p>'))
     references = "<hr>" + paragraph("참고자료와 이미지 출처", 24, True)
     for i, url in enumerate(dict.fromkeys(post.source_urls), 1):
         label = f"참고자료 {i} · {urlsplit(url).hostname}"

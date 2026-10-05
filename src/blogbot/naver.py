@@ -166,6 +166,15 @@ class NaverDraftWriter:
 
     def preflight(self, post: PostDraft) -> None:
         self.editor_url(post.category)
+        if post.category == 'origins':
+            from .inputs import origin_photo_metadata
+            from .origins import validate_origin_post
+            validate_origin_post(post)
+            if len(post.photos) != 1:
+                raise RuntimeError('Origins needs one approved thumbnail')
+            origin_photo_metadata(post.photos[0])
+            if post.provenance['origins'].get('affiliate'):
+                raise RuntimeError('Affiliate needs Work destination/disclosure verification before saving')
         if post.provenance.get('content_style') == 'review':
             raise RuntimeError('Review requires Work visual privacy/layout checks before saving')
         if not post.photos:

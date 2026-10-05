@@ -139,7 +139,7 @@ def inspect_candidate(candidate: DraftCandidate, request: ContentRequest, info: 
             codes.append(f'invalid_field_{name}')
     if set(data) - set(DRAFT_SCHEMA['properties']):
         codes.append('unexpected_fields')
-    if request.category == 'cooking' and not request.photos:
+    if (request.category == 'cooking' or request.data.get('content_style') == 'review') and not request.photos:
         codes.append('missing_owner_photos')
     if isinstance(data.get('body'), str) and re.search(
             r'수익\s*보장|원금\s*보장|무조건\s*(상승|매수|매도)|확정\s*수익', data['body']):

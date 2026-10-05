@@ -300,6 +300,8 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
                 payload = json.loads(stem.with_suffix('.json').read_text(encoding='utf-8'))
                 request = ContentRequest(**payload['input'])
                 if (request.id != post.request_id or request.category != post.category
+                        or request.data.get('content_style', 'article')
+                        != post.provenance.get('content_style', 'article')
                         or (plan and (request.provenance.get('daily_plan') != plan
                                       or not matches_request(request, plan)
                                       or request.data.get('editorial_type', 'article')

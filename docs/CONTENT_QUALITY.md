@@ -12,6 +12,10 @@
 
 ## 실제 적용 경로
 
+실제 사용·제품·행사 후기는 명시적 `content_style="review"`에만
+[후기 전용 기준](REVIEW_EDITORIAL.md)을 추가합니다. 일반 의료·운동·투자 정보 글에
+개인 경험·구매 인증·후기형 사진 배치를 강제하지 않습니다.
+
 - `src/blogbot/editorial.py`: 공통 기준과 육아·운동·투자·AI 튜토리얼의
   서로 다른 충실도 기준을 한 곳에 둡니다. 고정 소제목 템플릿이 아닙니다.
 - `BlogLLM.create_draft` / `rewrite`: 기존 writer 프롬프트에 해당 주제 기준만

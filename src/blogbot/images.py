@@ -14,7 +14,8 @@ from pathlib import Path
 from openai import APIStatusError, OpenAI
 
 from .core import PostDraft
-from .inputs import ContentRequest
+from .editorial import content_style
+from .inputs import ContentRequest, review_photo_metadata, verify_photos
 
 
 class ImagePending(RuntimeError):
@@ -97,6 +98,29 @@ def section_contexts(body: str) -> list[str]:
 
 
 def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostDraft:
+    if content_style(request.category, request.data) == 'review':
+        # Supplied evidence is not a new paid image plan. Never reinterpret old jobs.
+        folder = settings.artifact_dir / 'generated-images' / post.request_id
+        if folder.exists() and any(folder.iterdir()):
+            raise ImagePending('Existing image checkpoints need review-style reconciliation')
+        if not request.photos:
+            raise ImagePending('Review needs supplied owner photos; no generated substitute')
+        verify_photos(request.photos)
+        photos = [{**p, **review_photo_metadata(p)} for p in request.photos]
+        if not any(p['origin'] == 'owner' for p in photos):
+            raise ImagePending('Review needs an actual owner photo')
+        headings = re.findall(r'^## (.+)$', post.body, re.MULTILINE)
+        if any(p.get('section_heading') and p['section_heading'] not in headings for p in photos):
+            raise ImagePending('Review photo section heading needs reconciliation')
+        photos.sort(key=lambda p: (p['origin'] == 'seller', p.get('role') != 'hero'))
+        prepared = replace(post, photos=photos,
+                           provenance={**post.provenance, 'content_style': 'review'})
+        from .presentation import render_segments
+        try:
+            render_segments(prepared, include_tags=False)
+        except ValueError as exc:
+            raise ImagePending('Review photo layout needs reconciliation') from exc
+        return prepared
     if post.category == 'cooking':
         return replace(post, photos=request.photos)
     config = settings.config.get('images', {})
@@ -223,4 +247,3 @@ def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostD
         if errors:
             raise ImagePending('Some images are pending; completed files retained') from errors[0]
     return replace(post, photos=photos)
-

@@ -53,6 +53,7 @@ ChatGPT의 새 대화·첨부 파일을 상시 읽는 연결은 없으며, 실�
 | [DAILY_PLAN](docs/DAILY_PLAN.md) | 하루 1편·요일/하위유형·측정 구간·과거 원고 보류 |
 | [BLOG_SETUP](docs/BLOG_SETUP.md) | 카테고리별 글 구조와 작성 기준 |
 | [INPUTS](docs/INPUTS.md) | 질문·레시피·사진 등록 |
+| [REVIEW_EDITORIAL](docs/REVIEW_EDITORIAL.md) | 명시적 후기 스타일·실사진·선택적 내돈내산·저장 전 점검 |
 | [OPERATIONS](docs/OPERATIONS.md) | 설치·Secrets·스케줄·복구 |
 | [SECURITY](docs/SECURITY.md) | 실행 경계 |
 

@@ -166,6 +166,8 @@ class NaverDraftWriter:
 
     def preflight(self, post: PostDraft) -> None:
         self.editor_url(post.category)
+        if post.provenance.get('content_style') == 'review':
+            raise RuntimeError('Review requires Work visual privacy/layout checks before saving')
         if not post.photos:
             raise RuntimeError("A reviewed or generated article image is required")
         verify_photos(post.photos)

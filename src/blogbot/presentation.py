@@ -99,14 +99,26 @@ def validate_structure(post: PostDraft, required: bool = True) -> None:
         raise ValueError("Images are placed from verified files, not model URLs")
 
 
-def render_segments(post: PostDraft) -> list[Segment]:
+def render_segments(post: PostDraft, *, include_tags: bool = True) -> list[Segment]:
     chunks = re.split(r"(?=^## )", post.body, flags=re.MULTILINE)
     chunks = [c for c in chunks if c.strip()]
     result = []
     # The opening summary precedes the cover; supporting images follow body sections.
     slots: dict[int, list[dict]] = {}
+    review = post.provenance.get('content_style') == 'review'
+    headings = {match[1]: i for i, chunk in enumerate(chunks)
+                if (match := re.match(r'^## (.+)', chunk))}
+    last_owner_slot = 0
     for i, photo in enumerate(post.photos):
-        if photo.get("role") == "thumbnail":
+        if review and photo.get('role') == 'hero':
+            pos = 0
+        elif review and photo.get('section_heading'):
+            if photo['section_heading'] not in headings:
+                raise ValueError('Review photo section heading needs reconciliation')
+            pos = headings[photo['section_heading']]
+        elif review and photo.get('origin') == 'seller':
+            pos = len(chunks) - 1
+        elif (review and i == 0) or photo.get("role") == "thumbnail":
             pos = 0
         elif photo.get("role") == "section" and post.photos[0].get("role") == "thumbnail":
             pos = min(len(chunks) - 1, 1 + round(
@@ -116,6 +128,11 @@ def render_segments(post: PostDraft) -> list[Segment]:
             pos = min(len(chunks) - 1, max(
                 0, (i + 1) * len(chunks) // (len(post.photos) + 1) - 1
             ))
+        if review:
+            if photo.get('origin') == 'seller' and pos < last_owner_slot:
+                raise ValueError('Seller screenshot must follow owner photo evidence')
+            if photo.get('origin') != 'seller':
+                last_owner_slot = max(last_owner_slot, pos)
         slots.setdefault(pos, []).append(photo)
     for i, chunk in enumerate(chunks):
         result.append(Segment(html=markdown_html(chunk)))
@@ -132,12 +149,14 @@ def render_segments(post: PostDraft) -> list[Segment]:
         references += ('<p style="font-size:12px;line-height:1.9"><a href="'
                        + html.escape(url, quote=True) + '">' + html.escape(label) + '</a></p>')
     for p in post.photos:
-        if p.get("source_url"):
+        if review and p.get('origin') == 'seller' and p.get('source_url'):
+            references += paragraph('판매자 제공 구성 자료 · ' + p['source_url'], 12)
+        elif p.get("source_url"):
             references += paragraph(
                 f"{p['author']} · {p['license']} · 편집 없음(표시 크기 조정)\n"
                 f"{p['source_url']}\n{p['license_url']}", 12
             )
-    if post.tags:
+    if include_tags and post.tags:
         references += paragraph(" ".join(f"#{t}" for t in post.tags))
     result.append(Segment(html=references))
     return result

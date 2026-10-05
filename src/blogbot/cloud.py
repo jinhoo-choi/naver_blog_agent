@@ -16,7 +16,7 @@ from cryptography.fernet import Fernet
 from .config import load_settings
 from .core import connect_db, today_kst
 from .images import atomic_json
-from .inputs import enqueue_file
+from .inputs import enqueue_file, managed_queue_photos
 from .pipeline import run_daily
 from .planning import (
     SaveDateRequired,
@@ -33,6 +33,9 @@ from .presentation import render_segments
 
 class PreparationFailed(RuntimeError):
     """A persisted preparation failure whose detailed notification was already attempted."""
+
+
+MAX_ENCRYPTED_BUNDLE_BYTES = 55_000_000  # Below the 60 MB artifact reader, including ZIP overhead.
 
 
 def recover_preparation(settings, results: list[dict], count: int) -> list[dict]:
@@ -107,7 +110,20 @@ def extract_bundle(encrypted: bytes, directory: Path, key: str) -> None:
     def rebase(photos):
         for photo in photos:
             relative = Path(photo['file']).relative_to(old_root)
-            photo['file'] = str((directory / relative).resolve())
+            target = (directory / relative).resolve()
+            if not target.is_relative_to(directory.resolve()):
+                raise ValueError('Photo path escapes restored bundle')
+            photo['file'] = str(target)
+    for path in (directory / 'inbox').glob('*/request.json'):
+        try:
+            request = json.loads(path.read_text())
+            photos = request['photos']
+            if not isinstance(photos, list):
+                raise TypeError('Invalid queue photos')
+        except (ValueError, TypeError, KeyError):
+            continue  # Preserve rejected input bytes; do not reinterpret a damaged queue.
+        rebase(photos)
+        atomic_json(path, request)
     for path in (directory / 'drafts').glob('*.json'):
         try:
             payload = json.loads(path.read_text())
@@ -228,7 +244,8 @@ def pack(settings, destination: Path) -> None:
                 continue
             packet.append({'id': row['id'], 'category_no': settings.config['categories'][post.category]['naver_category_no'],
                            'requires_fresh_review': post.as_of_date != today.isoformat(),
-                           'post': post.__dict__, 'segments': [s.__dict__ for s in render_segments(post)]})
+                           'post': post.__dict__, 'segments': [s.__dict__ for s in render_segments(
+                               post, include_tags=post.provenance.get('content_style') != 'review')]})
     hold = ('kst_date_changed' if stale_settings else 'editorial_slot_reserved'
             if plan and plan.get('reservation') else None)
     atomic_json(directory / 'ready.json', {'date': today.isoformat(), 'posts': packet,
@@ -262,6 +279,10 @@ def pack(settings, destination: Path) -> None:
                     archive.write(path, path.relative_to(directory))
         for path in settings.inbox_dir.glob('*/request.json'):
             archive.write(path, path.relative_to(directory))
+        # Only managed supplied-image filenames, inside the encrypted bundle.
+        # A review must not lose its evidence when the next runner restores state.
+        for path in managed_queue_photos(settings):
+            archive.write(path, path.relative_to(directory))
         for path in (directory / 'response-cache').glob('*.json'):
             if path.name[:10] >= cutoff:
                 archive.write(path, path.relative_to(directory))
@@ -274,8 +295,11 @@ def pack(settings, destination: Path) -> None:
                      'auto-recovery.json']:
             path = directory/name
             if path.exists(): archive.write(path, name)
+    encrypted = Fernet(os.environ['BLOG_BUNDLE_KEY'].encode()).encrypt(buffer.getvalue())
+    if len(encrypted) > MAX_ENCRYPTED_BUNDLE_BYTES:
+        raise ValueError('Bundle transport capacity exceeded; existing destination preserved')
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_bytes(Fernet(os.environ['BLOG_BUNDLE_KEY'].encode()).encrypt(buffer.getvalue()))
+    destination.write_bytes(encrypted)
 
 
 def filter_ready(directory: Path, receipts: dict, plan: dict | None = None) -> None:

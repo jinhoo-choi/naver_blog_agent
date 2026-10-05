@@ -44,10 +44,53 @@ sector_only는 종목을 억지로 연결하지 않는다. 원문에 없는 수�
 }
 
 
-def quality_guidance(category: str, editorial_type: str | None = None) -> str:
+REVIEW_VERSION = 'review-editorial-v1'
+REVIEW = '''후기 전용 편집 기준 review-editorial-v1:
+명시적으로 content_style=review인 실제 사용·제품·행사 후기만 이 기준을 적용한다.
+기존 출처·안전·검수 기준은 유지하되 관련 없는 월령표·의료 목차를 강제하지 않는다.
+사용자가 공개 반영을 확인한 경험만 해당 사진·캡션과 연결한다. 모델은 사진을 직접
+본 것이 아니므로 캡션 밖 모습을 관찰했다고 쓰지 않는다. 설치 시간·사용 결과·가족 반응·
+가격·단점을 창작하지 않는다. 가격 생략 요청은 구매 카드·사진·캡션에도 적용한다.
+짧고 자연스러운 습니다체 도입과 기존 글꼴을 유지한다. 한 문단은 한 요점, 1~3문장으로
+나누고 의미별 빈 줄을 둔다. 정보는 왼쪽 정렬, 짧은 개인 소감만 선택적으로 가운데 정렬,
+강조색은 한 가지로 절제한다. 실제 기본 실선은 Work/렌더러가 넣고 문자 ---로 대신하지 않는다.
+실제 소유자 사진을 먼저 쓴다. 대표·착용 사진은 크게, 관련 포장·소품은 모바일에서 읽힐
+때만 네이티브 2열로 묶는다. 판매자 구성표·긴 캡처는 실제 사용 사진 뒤 필요한 부분만
+출처와 함께 쓴다. section_heading이 제공되면 일치하는 구역에서 해당 경험을 설명한다.
+후기는 제공 사진을 쓰며 생성 삽화를 실사용 증거로 대신하거나 고정 총장수를 채우지 않는다.
+내돈내산은 사용자의 자비 구매·리뷰 대가 없음 확인과 네이버에서 실제 선택 가능한 적격
+구매/이용 내역이 모두 있을 때만 Work가 네이티브 인증 컴포넌트를 검토한다. 카드의 가격·
+개인정보 노출을 먼저 확인한다. 배너를 이미지/문자로 흉내 내거나 네이버가 품질·효과를
+검증했다고 주장하지 않는다. 인증 불가/미확인/미첨부만으로 글을 탈락시키지 않는다.
+새 구매 연결·개인정보 동의·지속 접근 변경은 하지 않고 필요하면 수동 확인을 요청한다.
+본문에는 태그를 쓰지 않는다. 관련 태그는 보통 3~5개·최대 8개인 기존 기본값을 유지하고
+네이티브 태그와 본문에 중복 삽입하지 않는다. 명시적 글별 지시는 Work에서 별도 대조한다.
+업로드 전에 Work가 실물의 전체 배송 라벨·개인정보 가림을 확인한다. 편집기는 자동 저장될
+수 있으므로 임시저장 버튼 직전까지 미루지 않는다. 저장 전에는 로딩·순서·인접 설명·카드·문단·태그 중복을
+확인한다. 저장 후에는 완료 표시와 목록만 확인하며 자동 재열기 검증을 추가하지 않는다.
+현재 단계는 텍스트 작성/심사다. 네이티브 인증·사진 배치·서식·가림을 이미 확인했다고
+말하지 않는다. 위 편집 항목은 기존 가독성/정확성/안전성 심사에서 다루며 추가 호출이나
+새 점수 문턱을 만들지 않는다. 일반 정보 글에 후기 형식이나 개인 경험을 강제하지 않는다.
+'''
+
+
+def content_style(category: str, data: dict) -> str:
+    """Explicit owner metadata only; never infer reviews from keyword matches."""
+    style = data.get('content_style', 'article')
+    if style not in ('article', 'review') or (style == 'review' and (
+            category not in {'parenting', 'exercise', 'cooking'}
+            or data.get('editorial_type', 'article') != 'article')):
+        raise ValueError('Unsupported content style')
+    return style
+
+
+def quality_guidance(category: str, editorial_type: str | None = None,
+                     style: str | None = None) -> str:
     """Select only the relevant form; unknown categories retain common safeguards."""
     key = 'ai_tutorial' if category == 'parenting' and editorial_type == 'ai_tutorial' else category
-    return COMMON + '\n' + TOPICS.get(key, '')
+    selected = content_style(category, {'content_style': style or 'article',
+                                      'editorial_type': editorial_type or 'article'})
+    return COMMON + '\n' + (REVIEW if selected == 'review' else TOPICS.get(key, ''))
 
 
 def editorial_hints(body: str) -> list[str]:
@@ -69,8 +112,23 @@ def editorial_hints(body: str) -> list[str]:
     return list(dict.fromkeys(hints))
 
 
-def routed_prompt(prompt: str, category: str, editorial_type: str | None = None) -> str:
-    """Only AI-family subtype removes irrelevant age-table requirements; legacy bytes stay exact."""
+def routed_prompt(prompt: str, category: str, editorial_type: str | None = None,
+                  style: str | None = None) -> str:
+    """Route explicit styles without changing ordinary article prompt bytes."""
+    if content_style(category, {'content_style': style or 'article',
+                               'editorial_type': editorial_type or 'article'}) == 'review':
+        return '\n'.join(
+            ('후기는 제공된 사진·경험을 사용하며 실제 배치와 내돈내산은 '
+             'docs/REVIEW_EDITORIAL.md에 따라 Work가 확인한다. 고정 이미지 총수를 요구하지 않는다.'
+             if line.startswith('생성 이미지 기준은') else
+             '후기 비교표는 실제 제공된 차이만 2~3열로 정리하며 관련 없는 월령표를 강제하지 않는다.'
+             if line.startswith('- 개월수별 특징') else
+             '후기는 실제 질문·제공 경험에 답하며 아이 실명·사적 병력은 공개하지 않는다. '
+             '건강·안전 주장이 있는 구역에는 기존 공식 근거·적용 조건 검증을 유지한다.'
+             if line.startswith(('- 육아는 실제 질문에 먼저', '육아는 정확한 월령이 없을 때'))
+             else '운동 동작·사용법을 실제로 다루는 후기 구역에는 다음 안전 검증을 적용한다: ' + line
+             if line.startswith(('- 운동은 선택된 운동의', '운동은 의미·주요 근육'))
+             else line) for line in prompt.splitlines())
     if category != 'parenting' or editorial_type != 'ai_tutorial':
         return prompt
     output = []
@@ -86,7 +144,19 @@ def routed_prompt(prompt: str, category: str, editorial_type: str | None = None)
     return '\n'.join(output)
 
 
-def routed_category_info(info: dict, category: str, editorial_type: str | None = None) -> dict:
+def routed_category_info(info: dict, category: str, editorial_type: str | None = None,
+                         style: str | None = None) -> dict:
+    if content_style(category, {'content_style': style or 'article',
+                               'editorial_type': editorial_type or 'article'}) == 'review':
+        rules = [r for r in info.get('rules', []) if not r.startswith(
+            ('질문 → 핵심 답변 →', '월령이 입력되지 않았으면'))]
+        if category == 'exercise':
+            rules = [('운동 동작·사용법을 실제로 다룰 때: ' + r if r.startswith(
+                ('공식 운동기관·학회·병원 출처로 운동의', '보조자와 안전장치')) else r)
+                for r in rules]
+        rules.append('후기는 제공 경험과 실제 사진을 우선하고 관련 없는 월령/의료/운동 목차를 '
+                     '강제하지 않는다. 실제 건강·안전 주장의 근거와 적용 조건은 그대로 검증한다.')
+        return {**info, 'rules': rules}
     if category != 'parenting' or editorial_type != 'ai_tutorial':
         return info
     rules = [r for r in info.get('rules', []) if not r.startswith(

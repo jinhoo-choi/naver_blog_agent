@@ -16,7 +16,26 @@ from zoneinfo import ZoneInfo
 
 from .config import Settings
 from .core import today_kst
+from .editorial import content_style
 from .planning import active_plan, editorial_type, matches_request
+
+MAX_MANAGED_PHOTO_BYTES = 12_000_000  # Encrypted transport headroom, not an image-count rule.
+
+
+def managed_queue_photos(settings: Settings) -> list[Path]:
+    paths = []
+    for path in settings.inbox_dir.glob('*/photo-*'):
+        if re.fullmatch(r'photo-\d+\.(?:jpg|jpeg|png|webp)', path.name):
+            if (path.is_symlink() or not path.resolve().is_relative_to(settings.inbox_dir.resolve())
+                    or not path.is_file() or not 0 < path.stat().st_size <= 20_000_000):
+                raise ValueError('Invalid managed queue photo')
+            paths.append(path)
+    return paths
+
+
+def verify_review_transport_budget(settings: Settings, additional_bytes: int = 0) -> None:
+    if sum(p.stat().st_size for p in managed_queue_photos(settings)) + additional_bytes > MAX_MANAGED_PHOTO_BYTES:
+        raise ValueError('Review photo transport capacity exceeded; preserve existing files')
 
 
 @dataclass
@@ -27,12 +46,20 @@ class ContentRequest:
     photos: list[dict] = field(default_factory=list)
     provenance: dict = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        if content_style(self.category, self.data) == 'review':
+            # Persist the style with the text-approved DB row, before media completes.
+            # Downstream ready export and direct-writer preflight read post provenance.
+            self.provenance = {**self.provenance, 'content_style': 'review'}
+
     def prompt_data(self) -> dict:
         # Local paths and employee assignment fields never go to the model.
         return {
             "category": self.category,
             "data": self.data,
-            "photos": [{"number": i + 1, "caption": p.get("caption", "")}
+            "photos": [{"number": i + 1, "caption": p.get("caption", ""),
+                        **({k: p[k] for k in ('origin', 'role', 'section_heading', 'source_url')
+                            if k in p} if content_style(self.category, self.data) == 'review' else {})}
                        for i, p in enumerate(self.photos)],
             "provenance": self.provenance,
         }
@@ -51,6 +78,35 @@ def verify_photos(photos: list[dict]) -> None:
             raise ValueError("Photo changed after request was registered")
 
 
+def review_photo_metadata(item: dict) -> dict:
+    """Allow only declared layout/source metadata, never purchase identifiers."""
+    if not isinstance(item, dict) or item.get('generated'):
+        raise ValueError('Review evidence must be a supplied actual photo')
+    origin = item.get('origin', 'owner')
+    if origin not in ('owner', 'seller') or item.get('role') not in (None, 'hero'):
+        raise ValueError('Unsupported review photo metadata')
+    if origin == 'seller' and item.get('role') == 'hero':
+        raise ValueError('Review hero must be an owner photo')
+    result = {'origin': origin}
+    if item.get('role'):
+        result['role'] = item['role']
+    if 'section_heading' in item:
+        heading = item['section_heading']
+        if not isinstance(heading, str) or not 1 <= len(heading.strip()) <= 120 or '\n' in heading:
+            raise ValueError('Invalid review photo section heading')
+        result['section_heading'] = heading.strip()
+    if origin == 'seller':
+        source = item.get('source_url')
+        if not isinstance(source, str):
+            raise ValueError('Seller screenshot needs its source URL')
+        parsed = urlsplit(source)
+        if (parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password
+                or len(source) > 2000):
+            raise ValueError('Invalid seller screenshot source URL')
+        result['source_url'] = source
+    return result
+
+
 def enqueue_file(settings: Settings, source: Path) -> str:
     """Validate first, copy owned photos, then publish an immutable queue manifest."""
     raw = json.loads(source.read_text(encoding="utf-8-sig"))
@@ -60,6 +116,7 @@ def enqueue_file(settings: Settings, source: Path) -> str:
     if not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", request_id):
         raise ValueError("Request id must be a unique ASCII slug")
     category = raw.get("category")
+    style = content_style(category, raw)
     if category in {"parenting", "exercise"}:
         question = raw.get("question", "")
         if not isinstance(question, str) or len(question.strip()) < 3:
@@ -103,6 +160,26 @@ def enqueue_file(settings: Settings, source: Path) -> str:
         verify_photos(photos)
     else:
         raise ValueError("Only parenting questions or supplied cooking material can be enqueued")
+
+    if 'content_style' in raw:
+        data['content_style'] = style
+    if style == 'review':
+        raw_photos = raw.get('photos', [])
+        if not isinstance(raw_photos, list) or not raw_photos:
+            raise ValueError('Review requires supplied photos')
+        photos = []
+        for item in raw_photos:
+            metadata = review_photo_metadata(item)
+            path = (source.parent / item['file']).resolve()
+            if not path.is_file() or not 0 < path.stat().st_size <= 20_000_000:
+                raise ValueError('Photo missing, empty or larger than 20 MB')
+            photos.append({'file': str(path), 'caption': str(item.get('caption', '')),
+                           'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+                           **metadata})
+        verify_photos(photos)
+        if not any(p['origin'] == 'owner' for p in photos):
+            raise ValueError('Review requires an actual owner photo')
+        verify_review_transport_budget(settings, sum(Path(p['file']).stat().st_size for p in photos))
 
     settings.inbox_dir.mkdir(parents=True, exist_ok=True)
     destination = settings.inbox_dir / request_id
@@ -245,6 +322,17 @@ def collect_requests(settings: Settings) -> tuple[list[ContentRequest], list[dic
             elif request.category not in {"parenting", "exercise"} or not request.data.get("question"):
                 raise ValueError("Question missing or unsupported category")
             editorial_type(request.category, request.data)
+            if content_style(request.category, request.data) == 'review':
+                verify_review_transport_budget(settings)
+                verify_photos(request.photos)
+                for photo in request.photos:
+                    review_photo_metadata(photo)
+                    if (Path(photo['file']).resolve().parent != path.parent.resolve()
+                            or Path(photo['file']).is_symlink()
+                            or not re.fullmatch(r'photo-\d+\.(?:jpg|jpeg|png|webp)', Path(photo['file']).name)):
+                        raise ValueError('Review photo is outside its managed queue')
+                if not any(p.get('origin', 'owner') == 'owner' for p in request.photos):
+                    raise ValueError('Review requires an actual owner photo')
             requests.append(request)
         except (OSError, ValueError, TypeError, KeyError):
             notices.append({"status": "INPUT_REJECTED"})
@@ -257,6 +345,8 @@ def collect_requests(settings: Settings) -> tuple[list[ContentRequest], list[dic
                 or not request.data.get("question")):
             raise ValueError("Invalid scheduled topic")
         editorial_type(request.category, request.data)
+        if content_style(request.category, request.data) == 'review':
+            raise ValueError('Review photos must be registered through the private input queue')
         requests = [request, *[r for r in requests if r.category != request.category]]
     context_path = settings.db_path.parent / "context.json"
     context = json.loads(context_path.read_text()) if context_path.exists() else {}

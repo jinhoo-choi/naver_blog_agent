@@ -27,7 +27,7 @@ def resolve_plan(config: dict, day: date | None = None) -> dict | None:
     reservation = policy.get('reservations', {}).get(day.isoformat())
     if reservation and (set(reservation) != {'category', 'kind'}
                         or reservation['category'] != category
-                        or reservation['kind'] not in {'existing_owner_draft', 'owner_preparation_pending'}):
+                        or reservation['kind'] not in {'existing_owner_draft', 'owner_preparation_pending', 'owner_input_pending'}):
         raise ValueError('Editorial reservation must match the selected date/category')
     # measurement_end is reporting metadata, deliberately not an expiry switch.
     return {'version': selected['version'], 'date': day.isoformat(), 'target': 1,

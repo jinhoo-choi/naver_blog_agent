@@ -190,6 +190,20 @@ https://www.cuh.nhs.uk/patient-information/supporting-safe-effective-and-enjoyab
 source = "owner_input"
 editorial_intent = "weekend_feature_esl_feeding"
 
+# Explicit owner selection for this Thursday only; no invented workout experience.
+[topics.scheduled."2026-10-08"]
+id = "owner-20261008-face-pull"
+category = "exercise"
+
+[topics.scheduled."2026-10-08".data]
+question = "페이스풀은 어떤 운동이고, 올바른 자세와 흔한 실수·주의사항은 무엇인가요?"
+benchmark_query = "페이스풀 케이블 로프 자세"
+context = "사용자가 목요일 운동 주제로 페이스풀을 선택했습니다. 공식 운동기관·학회·병원 자료에서 의미·대상 근육·안전한 준비와 수행·흔한 실수·통증 등 중단 신호를 확인합니다. 실제 운동 경력·중량·효과·통증 경험은 제공되지 않았으므로 개인 체험을 창작하지 않습니다. 확인되지 않은 자세·각도·횟수·효능을 단정하거나 다른 운동 주제로 대체하지 않습니다. 기존 심사·일일 1편·이미지·복구 예산을 유지합니다."
+
+[topics.scheduled."2026-10-08".provenance]
+source = "owner_input"
+editorial_intent = "dated_owner_face_pull_selection"
+
 [images]
 mode = "generate"
 model = "gpt-image-2.5-flare"
@@ -245,3 +259,13 @@ kind = "owner_preparation_pending"
 [operating_plan.reservations."2026-10-07"]
 category = "parenting"
 kind = "owner_preparation_pending"
+
+# The owner will choose this weekend's topics; do not consume older queue inputs.
+# These two date-only holds are not existing drafts or save/publication receipts.
+[operating_plan.reservations."2026-10-10"]
+category = "parenting"
+kind = "owner_input_pending"
+
+[operating_plan.reservations."2026-10-11"]
+category = "parenting"
+kind = "owner_input_pending"

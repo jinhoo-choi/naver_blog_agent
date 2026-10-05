@@ -662,7 +662,7 @@ def test_reserved_handoff_stays_empty_even_with_matching_approved_packet(tmp_pat
 
 
 def test_next_unreserved_parenting_day_resumes_ordinary_input_requirements(tmp_path, monkeypatch):
-    settings = settings_on(tmp_path, monkeypatch, '2026-10-10', keep_reservation=True)
+    settings = settings_on(tmp_path, monkeypatch, '2026-10-12', keep_reservation=True)
     assert 'reservation' not in active_plan(settings)
     assert run_daily(settings)[0]['status'] == 'PLANNED_INPUT_REQUIRED'
 

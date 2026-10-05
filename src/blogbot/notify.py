@@ -17,10 +17,13 @@ def telegram(results: list[dict]) -> None:
     reserved = [r for r in results if r.get('status') == 'EDITORIAL_SLOT_RESERVED']
     existing = [r for r in reserved if r.get('reason') == 'existing_owner_draft']
     pending = [r for r in reserved if r.get('reason') == 'owner_preparation_pending']
+    input_pending = [r for r in reserved if r.get('reason') == 'owner_input_pending']
     if existing:
         lines.append(f"기존 수동 초안으로 예약된 편집 슬롯 {len(existing)}건: 당일 자동 생성·저장 생략")
     if pending:
         lines.append(f"편집 원고 준비 대기 슬롯 {len(pending)}건: 중복 자동 생성·저장 보류, 저장 확인 아님")
+    if input_pending:
+        lines.append(f"사용자 주제 입력 대기 슬롯 {len(input_pending)}건: 기존 큐 대체·자동 생성 보류, 저장 확인 아님")
     failed = [r for r in results if r.get("status") not in {
         "SAVED_NAVER", "APPROVED", "EDITORIAL_SLOT_RESERVED"}]
     if failed:

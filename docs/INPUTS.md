@@ -75,7 +75,7 @@ ChatGPT 대화를 자동 감시하는 기능은 없습니다. 이 대화에서 �
 
 일반 질문과 같은 `question`·`context`·`benchmark_query` 필드를 사용합니다. 공개 키워드에 개인 정보를 넣지 않습니다. `photos`는 정확히 한 장이 필요하며 각 항목에 `file`, 선택적 `caption`, `role="thumbnail"`, `approved=true`, 원본의 실제 생성 여부인 `generated`를 둡니다. `enqueue`가 관리 파일을 복사하고 SHA-256을 기록합니다. 썸네일이 없으면 등록·수집에서 유료 준비 전에 `INPUT_REJECTED`로 보류하며 텍스트·이미지 API를 호출하지 않습니다. 복원 시 관리 파일명·해시와 합산 사진 운반 예산도 재검증합니다. 번호 설정이 누락되거나 미확인이면 `CATEGORY_CONFIGURATION_PENDING`으로 유료 호출 전에 보류합니다.
 
-`operating_plan.reservations."2026-10-06"`은 실비김치 초안 저장 확인 뒤 `kind="existing_owner_draft"`로 전환됐습니다. 실제 저장은 10월 5일 19:17 KST이며 10월 6일 예약을 새 저장 영수증으로 만들지 않습니다. UI 표시 `03:17`의 시간대·네이버 고유 draft ID는 미확인으로 보존합니다. 10월 7일 햄버거 AI는 dot가 제안한 미확정 날짜의 `owner_preparation_pending` 홀드이고, 10월 9일 알테오젠도 사용자 지정 원고 산출물을 우선하는 `owner_preparation_pending` 홀드입니다. 두 날짜 모두 네이버 저장을 뜻하지 않으며 [DAILY_PLAN](DAILY_PLAN.md)의 구분을 유지합니다.
+`operating_plan.reservations."2026-10-06"`은 실비김치 초안 저장 확인 뒤 `kind="existing_owner_draft"`로 전환됐습니다. 실제 저장은 10월 5일 19:17 KST이며 10월 6일 예약을 새 저장 영수증으로 만들지 않습니다. UI 표시 `03:17`의 시간대·네이버 고유 draft ID는 미확인으로 보존합니다. 10월 7일 햄버거 AI는 dot가 제안한 미확정 날짜의 `owner_preparation_pending` 홀드이고, 10월 9일은 새 정책용 `owner_preparation_pending` 홀드(`request_id="owner-20261009-new-policy"`)입니다. 알테오젠의 10월 6일 별도 수동 작업은 금요일 파이프라인 밖이며 한도·이력을 초기화하지 않습니다. 10월 9일의 적격 KIS 원본·근거가 없으면 계속 보류합니다. 두 날짜 모두 네이버 저장을 뜻하지 않으며 [DAILY_PLAN](DAILY_PLAN.md)의 구분을 유지합니다.
 
 향후 구매·제휴 정보가 모두 확인됐을 때만 다음 선택적 입력을 비공개 원본에 포함합니다. 현재 질문에는 두 항목을 생략합니다.
 
@@ -117,12 +117,24 @@ JPG/PNG/WebP 사진 1~15장, 각 20 MB 이하를 입력 순서대로 복사합�
 
 ## 투자 자료
 
-등록할 파일은 없습니다. 금요일에만 `kis-community-bot/data/posts_latest.json`을 읽습니다.
-블로그용 문턱과 최신성 조건을 만족하는 새로운 원본만 하루 최대 1건 후보로 받습니다.
-현재 `community.snapshot_ready_hour=7`에 따른 당일 07:00 KST 이후 실제 export·실제 자료일 당일/전일, 원본 심사와
-`research`·`policy` 우선/명확한 사건의 `disclosure` 보완을 유지합니다.
-원본 봇이 새 결과를 내지 않거나 기준을 통과하는 자료가 없으면 투자 생성을 건너뜁니다.
-세부 기준은 [BLOG_SETUP](BLOG_SETUP.md)에 있습니다.
+금요일은 `weekly-policy-v1`의 최근 **5 calendar days, D-4~D0** 새 정책 1건만 다룹니다.
+`kis-community-bot/data/posts_latest.json`의 당일 07:00 KST 이후 최신 export 준비 확인과 제한된
+커밋 이력의 정책 날짜 검증은 별개입니다. 원래 점수·fatal 문턱을 통과한 `policy`만 허용하며
+리포트·공시 대체는 없습니다. 가격·시세·수급은 기존 D-1/D0를 유지합니다.
+
+투자 후보를 `enqueue`하거나 날짜 지정 질문으로 직접 주입하지 않습니다. 적격 KIS 원본을 확인한 뒤
+그 원본의 repository·commit·record_id·url·record_sha256에 묶인 비공개 근거 JSON만 등록합니다.
+
+```sh
+blogbot import-policy-evidence --file /private/path/policy-evidence.json
+```
+
+명령은 `BLOG_DATA_DIR/policy-evidence/{sha256(commit:id)}.json`에 근거를 등록하며 후보·승인 원고를 만들지 않습니다.
+필드 계약과 실제 원문 재검증은 [WEEKLY_POLICY](WEEKLY_POLICY.md)를 따릅니다. 공개 저장소·Actions 로그에는
+실제 근거 JSON을 넣지 않습니다. 등록한 파일을 기존 암호화 상태로 운반하고 다음 실행 환경에서 복원하기 전에는
+기존 러너가 소비할 수 없습니다. 선택적 기존 러너 입력 `BLOG_POLICY_EVIDENCE_JSON`도 같은 등록 검증을 사용하며 공개 공식자료 메타데이터만 전달합니다. 실제 변수 등록은 별도이고 10월 9일 수동 홀드에서는 읽지 않습니다. 새 Secret·환경변수 등록·실행 예약 변경을 이 명령으로 대신하지 않습니다.
+원본·근거가 없거나 원문 검증을 못 하면 보류합니다. 10월 9일은 적격 입력이 확보되어도 기존 수동 홀드를
+자동 해제하지 않으며 새 정책용 승인 절차를 따릅니다.
 
 ## 공통 처리
 

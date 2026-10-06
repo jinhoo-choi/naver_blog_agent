@@ -75,7 +75,8 @@ def connect_db(path: Path) -> sqlite3.Connection:
         "posts": {"request_id": "TEXT NOT NULL DEFAULT ''",
                   "photos_json": "TEXT NOT NULL DEFAULT '[]'",
                   "provenance_json": "TEXT NOT NULL DEFAULT '{}'"},
-        "attempts": {"request_id": "TEXT", "plan_json": "TEXT NOT NULL DEFAULT '{}'"},
+        "attempts": {"request_id": "TEXT", "plan_json": "TEXT NOT NULL DEFAULT '{}'",
+                     "event_key": "TEXT"},
     }.items():
         present = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
         for name, definition in columns.items():
@@ -83,6 +84,8 @@ def connect_db(path: Path) -> sqlite3.Connection:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_attempt_per_request "
                  "ON attempts(request_id) WHERE request_id IS NOT NULL")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_attempt_per_event "
+                 "ON attempts(event_key) WHERE event_key IS NOT NULL")
     conn.commit()
     return conn
 
@@ -201,7 +204,9 @@ def reserve_attempt(conn: sqlite3.Connection, config: dict, daily_target: int, c
                      int(config["categories"][category]["max_daily"]) +
                      int(any(c == category and status == "DROP_REVIEW" for c, status, _ in rows))}
         seen = {row[0] for row in conn.execute("SELECT request_id FROM attempts")}
-        available = [r for r in candidates if r.id not in seen]
+        events = {row[0] for row in conn.execute("SELECT event_key FROM attempts WHERE event_key IS NOT NULL")}
+        available = [r for r in candidates if r.id not in seen
+                     and r.provenance.get("policy_event_key") not in events]
         if plan:
             from .planning import matches_request
             available = [r for r in available if matches_request(r, plan)]
@@ -216,8 +221,9 @@ def reserve_attempt(conn: sqlite3.Connection, config: dict, daily_target: int, c
         category = choices[0]
         request = next(r for r in available if r.category == category)
         cur = conn.execute(
-            "INSERT INTO attempts(day, category, request_id, plan_json) VALUES (?, ?, ?, ?)",
-            (today_kst().isoformat(), category, request.id, json.dumps(plan or {}, sort_keys=True)),
+            "INSERT INTO attempts(day, category, request_id, plan_json, event_key) VALUES (?, ?, ?, ?, ?)",
+            (today_kst().isoformat(), category, request.id, json.dumps(plan or {}, sort_keys=True),
+             request.provenance.get("policy_event_key")),
         )
         return int(cur.lastrowid), request
 

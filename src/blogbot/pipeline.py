@@ -95,6 +95,8 @@ def save_pending(settings: Settings) -> list[dict]:
                 results.append({"id": row["id"], "status": "STALE_REVIEW_REQUIRED"})
                 continue
             try:
+                from .weekly_policy import validate_current_post
+                validate_current_post(settings, post)
                 writer.preflight(post)
             except (OSError, ValueError, RuntimeError) as exc:
                 results.append({"id": row["id"], "status": "SETUP_REQUIRED",
@@ -186,7 +188,8 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
         # Editorial priority must survive optional trend ranking or missing credentials.
         investments = iter(sorted(
             (r for r in candidates if r.category == "investment"),
-            key=lambda r: r.data.get("kind") not in {"research", "policy"},
+            key=lambda r: (r.data.get("kind") != "policy" if plan and plan.get("investment_mode")
+                           else r.data.get("kind") not in {"research", "policy"}),
         ))
         candidates = [next(investments) if r.category == "investment" else r for r in candidates]
         # Explicit recovery reuses today's failed reservations, never resets the budget.
@@ -511,7 +514,12 @@ def complete_media(settings, conn, post_id, post, request, review):
 def _complete_media(settings, conn, post_id, post, request, review):
     stem = settings.artifact_dir / f"{post.as_of_date}-{post_id:05d}"
     try:
+        from .weekly_policy import refresh_request
+        request = refresh_request(settings, request)
         post = generate_images(settings, request, post)
+    except ResearchRequired:
+        return {'id': post_id, 'category': post.category, 'status': 'RESEARCH_REQUIRED',
+                'reason': 'weekly_policy_revalidation_required'}
     except ImagePending:
         set_status(conn, post_id, 'IMAGES_PENDING')
         return {'id': post_id, 'category': post.category, 'status': 'IMAGES_PENDING'}

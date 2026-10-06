@@ -194,6 +194,8 @@ def _dart_html(url):
 
 
 def prepare_primary_evidence(settings, request):
+    from .weekly_policy import verify_evidence
+    request = verify_evidence(settings, request)
     url = request.data.get('src', '')
     parts = urlsplit(url)
     if request.category != 'investment' or parts.hostname != 'dart.fss.or.kr':

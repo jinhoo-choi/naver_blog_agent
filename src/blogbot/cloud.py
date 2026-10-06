@@ -5,6 +5,7 @@ import argparse
 import io
 import json
 import os
+import re
 import zipfile
 from contextlib import closing
 from datetime import date, timedelta
@@ -218,7 +219,7 @@ def pack(settings, destination: Path) -> None:
     directory = settings.db_path.parent
     today = today_kst()
     cutoff = (today-timedelta(days=7)).isoformat()
-    packet = []
+    packet, weekly_holds = [], []
     config = getattr(settings, 'config', {})
     plan = resolve_plan(config, today) if config.get('operating_plan') else active_plan(settings)
     stale_settings = config.get('daily_plan') != plan
@@ -245,15 +246,32 @@ def pack(settings, destination: Path) -> None:
             if stale_settings or (plan and (plan.get('reservation') or uncertain or not matches_post(post, plan)
                                            or packet or used)):
                 continue
+            from .weekly_policy import validate_current_post
+            try:
+                validate_current_post(settings, post)
+            except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+                weekly_holds.append({'id': row['id'], 'request_id': post.request_id,
+                                     'category': 'investment',
+                                     'status': 'WEEKLY_POLICY_REVALIDATION_REQUIRED'})
+                continue  # Preserve checkpoints while withholding unverified weekly output.
             packet.append({'id': row['id'], 'category_no': settings.config['categories'][post.category]['naver_category_no'],
                            'requires_fresh_review': post.as_of_date != today.isoformat(),
                            'post': post.__dict__, 'segments': [s.__dict__ for s in render_segments(
                                post, include_tags=post.provenance.get('content_style') != 'review')]})
-    hold = ('kst_date_changed' if stale_settings else 'editorial_slot_reserved'
+    hold = ('weekly_policy_revalidation_required' if weekly_holds else
+            'kst_date_changed' if stale_settings else 'editorial_slot_reserved'
             if plan and plan.get('reservation') else None)
     atomic_json(directory / 'ready.json', {'date': today.isoformat(), 'posts': packet,
                                           **({'daily_plan': plan} if plan else {}),
                                           **({'hold': hold} if hold else {})})
+    if weekly_holds:
+        summary_path = directory / 'run-summary.json'
+        summary = json.loads(summary_path.read_text()) if summary_path.exists() else {}
+        prior = summary.get('results', []) if summary.get('date') == str(today) else []
+        held_ids = {r['id'] for r in weekly_holds}
+        results = [r for r in prior if r.get('id') not in held_ids
+                   and r.get('status') != 'DAILY_PLAN_READY'] + weekly_holds
+        atomic_json(summary_path, {'date': str(today), 'failed': True, 'results': results})
     atomic_json(directory / 'bundle-info.json', {'data_root': str(directory.resolve()),
                                                 'date': today.isoformat(), 'version': 1})
     buffer = io.BytesIO()
@@ -289,6 +307,11 @@ def pack(settings, destination: Path) -> None:
         for path in (directory / 'response-cache').glob('*.json'):
             if path.name[:10] >= cutoff:
                 archive.write(path, path.relative_to(directory))
+        for path in (directory / 'policy-evidence').glob('*.json'):
+            if (path.is_symlink() or not re.fullmatch(r'[a-f0-9]{64}\.json', path.name)
+                    or path.stat().st_size > 100_000):
+                raise ValueError('Invalid managed policy evidence file')
+            archive.write(path, path.relative_to(directory))
         for path in (directory / 'source-evidence').glob('*.json'):
             archive.write(path, path.relative_to(directory))
         for name in ['blog.db', 'bundle-info.json', 'ready.json', 'context.json',
@@ -303,9 +326,10 @@ def pack(settings, destination: Path) -> None:
         raise ValueError('Bundle transport capacity exceeded; existing destination preserved')
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_bytes(encrypted)
+    return hold
 
 
-def filter_ready(directory: Path, receipts: dict, plan: dict | None = None) -> None:
+def filter_ready(directory: Path, receipts: dict, plan: dict | None = None, settings=None) -> None:
     """Require today's verified Work ledger; old API state cannot acknowledge saves."""
     today = today_kst()
     if receipts.get('verified_date') != today.isoformat() or not isinstance(receipts.get('records'), list):
@@ -335,13 +359,24 @@ def filter_ready(directory: Path, receipts: dict, plan: dict | None = None) -> N
         raise ValueError('Stale handoff')
     if ready.get('daily_plan') != plan or (plan and plan['date'] != today.isoformat()):
         raise ValueError('Handoff does not match the current daily plan')
-    eligible = []
+    eligible, weekly_held = [], False
     for item in ready['posts']:
         post = item['post']
         if plan and (plan.get('reservation') or uncertain or used or eligible or post['as_of_date'] != plan['date']
                      or post['category'] != plan['category']
                      or post.get('provenance', {}).get('daily_plan') != plan):
             continue
+        if plan and plan.get('investment_mode'):
+            from .core import PostDraft
+            from .weekly_policy import validate_current_post
+            if settings is None or not matches_post(PostDraft(**post), plan):
+                weekly_held = True
+                continue
+            try:
+                validate_current_post(settings, PostDraft(**post))
+            except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+                weekly_held = True
+                continue
         identity = post['request_id']
         if not identity:
             raise ValueError('Missing request identity')
@@ -352,7 +387,8 @@ def filter_ready(directory: Path, receipts: dict, plan: dict | None = None) -> N
         item['requires_fresh_review'] = post['as_of_date'] != today.isoformat()
         eligible.append(item)
         blocked.add(identity)
-    atomic_json(path, {**ready, 'posts': eligible})
+    atomic_json(path, {**ready, 'posts': eligible,
+                       **({'hold': 'weekly_policy_revalidation_required'} if weekly_held else {})})
 
 
 def main():
@@ -367,7 +403,11 @@ def main():
             parser.error('unpack requires --receipts from the verified Work save ledger')
         receipts = json.loads(args.receipts.read_text())
         extract_bundle(args.file.read_bytes(), args.destination, os.environ['BLOG_BUNDLE_KEY'])
-        filter_ready(args.destination, receipts, active_plan(load_settings()))
+        from dataclasses import replace
+        settings = load_settings()
+        restored = replace(settings, db_path=args.destination / 'blog.db',
+                           artifact_dir=args.destination / 'drafts', inbox_dir=args.destination / 'inbox')
+        filter_ready(args.destination, receipts, active_plan(settings), restored)
         # Recreate packet segments with local image paths after relocation.
         print(json.dumps({'status': 'UNPACKED', 'directory': str(args.destination)}))
         return
@@ -393,6 +433,8 @@ def main():
         reserved = bool(args.mode in {'prepare', 'recover'} and plan and plan.get('reservation'))
         if not reserved:
             seed_inputs(settings)
+            from .weekly_policy import import_environment
+            import_environment(settings, os.environ.get('BLOG_POLICY_EVIDENCE_JSON', ''))
         if reserved:
             results = [reservation_result(plan)]
         elif args.mode == 'probe':
@@ -458,7 +500,7 @@ def main():
             raise PreparationFailed('Preparation did not complete; inspect private diagnostics')
     finally:
         # Checkpoints survive handled API errors; no raw files are uploaded to the public repository.
-        pack(settings, destination)
+        delivery_hold = pack(settings, destination)
         summary_path = directory / 'run-summary.json'
         if (args.mode != 'probe' and summary_path.exists()
                 and json.loads(summary_path.read_text()).get('date') == today_kst().isoformat()):
@@ -467,6 +509,8 @@ def main():
                 telegram(json.loads(summary_path.read_text())['results'])
             except (OSError, RuntimeError, ValueError) as exc:
                 print(json.dumps({'notification': 'FAILED', 'error': type(exc).__name__}))
+        if delivery_hold == 'weekly_policy_revalidation_required':
+            raise PreparationFailed('Weekly policy revalidation blocked delivery')
 
 
 if __name__ == '__main__':

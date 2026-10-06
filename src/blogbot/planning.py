@@ -25,7 +25,9 @@ def resolve_plan(config: dict, day: date | None = None) -> dict | None:
         raise ValueError('Invalid weekly content plan')
     category = categories[day.weekday()]
     reservation = policy.get('reservations', {}).get(day.isoformat())
-    if reservation and (set(reservation) != {'category', 'kind'}
+    if reservation and (not {'category', 'kind'} <= set(reservation)
+                        or set(reservation) - {'category', 'kind', 'request_id'}
+                        or ('request_id' in reservation and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,79}', reservation['request_id']))
                         or reservation['category'] != category
                         or reservation['kind'] not in {'existing_owner_draft', 'owner_preparation_pending', 'owner_input_pending'}):
         raise ValueError('Editorial reservation must match the selected date/category')
@@ -33,7 +35,9 @@ def resolve_plan(config: dict, day: date | None = None) -> dict | None:
     return {'version': selected['version'], 'date': day.isoformat(), 'target': 1,
             'category': category, 'editorial_types': (['article', 'ai_tutorial']
                                                    if category == 'parenting' else ['article']),
-            'depth': 'short' if category == 'origins' else 'deep', **({'reservation': dict(reservation)} if reservation else {})}
+            'depth': 'short' if category == 'origins' else 'deep',
+            **({'investment_mode': 'weekly-policy-v1'} if category == 'investment'
+               and selected.get('investment_mode') == 'weekly-policy-v1' else {}), **({'reservation': dict(reservation)} if reservation else {})}
 
 
 def active_plan(settings) -> dict | None:
@@ -48,7 +52,9 @@ def active_plan(settings) -> dict | None:
 def reservation_result(plan: dict) -> dict:
     """An intentional editorial hold, never an API approval or actual-save receipt."""
     return {'status': 'EDITORIAL_SLOT_RESERVED', 'date': plan['date'],
-            'category': plan['category'], 'reason': plan['reservation']['kind']}
+            'category': plan['category'], 'reason': plan['reservation']['kind'],
+            **({'request_id': plan['reservation']['request_id']}
+               if plan['reservation'].get('request_id') else {})}
 
 
 def editorial_type(category: str, data: dict) -> str:
@@ -60,13 +66,17 @@ def editorial_type(category: str, data: dict) -> str:
 
 def matches_request(request, plan: dict) -> bool:
     return (request.category == plan['category']
-            and editorial_type(request.category, request.data) in plan['editorial_types'])
+            and editorial_type(request.category, request.data) in plan['editorial_types']
+            and (not plan.get('investment_mode') or (request.data.get('kind') == 'policy'
+                 and request.provenance.get('investment_mode') == plan['investment_mode']
+                 and bool(request.provenance.get('policy_event_key')))))
 
 
 def matches_post(post, plan: dict) -> bool:
     return (post.as_of_date == plan['date'] and post.category == plan['category']
             and post.provenance.get('daily_plan') == plan
-            and post.provenance.get('editorial_type', 'article') in plan['editorial_types'])
+            and post.provenance.get('editorial_type', 'article') in plan['editorial_types']
+            and (not plan.get('investment_mode') or _weekly_post_matches(post, plan)))
 
 
 class SaveDateRequired(RuntimeError):
@@ -227,3 +237,8 @@ def record_verified_save(conn, post_id: int, record: dict) -> None:
                      (record.get('saved_at'), post_id))
         if row['request_id']:
             conn.execute("UPDATE attempts SET status='SAVED_NAVER' WHERE request_id=?", (identity,))
+
+
+def _weekly_post_matches(post, plan):
+    from .weekly_policy import post_contract
+    return post_contract(post, plan)

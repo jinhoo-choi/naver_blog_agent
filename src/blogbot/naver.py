@@ -166,6 +166,8 @@ class NaverDraftWriter:
 
     def preflight(self, post: PostDraft) -> None:
         self.editor_url(post.category)
+        if post.provenance.get('investment_mode') == 'weekly-policy-v1':
+            raise RuntimeError('Weekly policy requires Work source and company-evidence checks before saving')
         if post.category == 'origins':
             from .inputs import origin_photo_metadata
             from .origins import validate_origin_post

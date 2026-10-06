@@ -21,6 +21,11 @@ require_today_snapshot = true
 snapshot_ready_hour = 7
 search_interest_keywords = ["아톤"]
 
+# Friday policy window only; legacy report/market freshness remains one day.
+[community.weekly_policy]
+max_history_exports = 20
+official_hosts = ["inside.nhn.com", "navercorp.com", "www.navercorp.com"]
+
 [categories.parenting]
 naver_category_no = 1
 display_name = "육아"
@@ -47,11 +52,11 @@ subcategories = ["시장·산업", "기업·종목", "투자공부"]
 weight = 1
 max_daily = 1
 rules = [
-  "kis-community-bot의 당일 research·policy·disclosure 통과 자료 facts/src/body를 기반으로만 작성한다.",
-  "research·policy를 우선 선정하고 적격 자료가 없을 때만 명확한 이슈의 disclosure를 선택한다.",
+  "kis-community-bot의 심사 통과 원본 facts/src/body를 기반으로만 작성한다. 금요일 weekly-policy-v1은 최근 5일(D-4~D0)의 새 정책 발표·실질 진전만 선택한다.",
+  "weekly-policy-v1에는 policy와 별도 검증된 기업 관계·후속 일정/조건이 필요하며 미충족 시 보류한다. research·disclosure로 대체하지 않는다. 그 외 기존 모드는 research·policy 우선이다.",
   "공개된 자료만 사용하고 비공개·사내 정보는 사용하지 않는다.",
   "종목 글은 공시·계약·수주·임상·승인·정책·규제·실적 등 이슈가 본문에 명확히 드러날 때만 작성한다.",
-  "전일 또는 당일 자료만 사용하고 이틀 이상 지난 시세·수급 요약은 작성하지 않는다.",
+  "최신 export는 당일 07:00 KST 이후여야 한다. 정책 사건 창과 시세·수급 D-1/D0 조건을 분리한다. 이전 배경은 출처·날짜·새 진전을 구별하고 옛 정책 재보도·미래 시행일로 최신화하지 않는다.",
   "매수·매도 지시, 수익 보장, 단정적 목표가 표현을 금지한다.",
   "자료 날짜는 내부 메타데이터로 검증하고 데이터 출처·실제 사건의 시점·통계 기간을 보존한다. 공개 글에 기준일·작성일 머리말을 붙이지 않고 사실과 해석을 구분한다.",
   "핵심 이슈 → 확인된 사실·수치 → 의미와 해석 → 변수·리스크 → 확인할 항목 → 출처 순서로 구성한다.",
@@ -230,6 +235,7 @@ uploaded_image_selector = ".se-component.se-image img"
 [operating_plan]
 enabled = true
 version = "weekly-4111-v1"
+investment_mode = "weekly-policy-v1"
 start_date = "2026-10-05"
 effective_date = "2026-10-06"
 measurement_end = "2026-10-18"
@@ -249,11 +255,12 @@ kind = "existing_owner_draft"
 category = "origins"
 kind = "existing_owner_draft"
 
-# User-assigned Alteogen article exists as an approved artifact; Naver save pending.
+# October 9 now holds a NEW policy article. Alteogen is a separate October 6 task.
 # Hold editorial capacity only, without a save receipt or unrelated KIS replacement.
 [operating_plan.reservations."2026-10-09"]
 category = "investment"
 kind = "owner_preparation_pending"
+request_id = "owner-20261009-new-policy"
 
 # Wednesday owner article handoff remains pending; no save is asserted.
 [operating_plan.reservations."2026-10-07"]

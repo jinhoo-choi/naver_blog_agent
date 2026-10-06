@@ -23,3 +23,7 @@ inbox/
 *.db*
 *.sqlite*
 *storage_state*.json
+
+# Private policy metadata and source verification bundles.
+policy-evidence/
+**/policy-evidence/

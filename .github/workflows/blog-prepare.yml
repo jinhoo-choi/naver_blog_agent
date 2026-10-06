@@ -8,7 +8,7 @@ on:
         type: choice
         options: [prepare, recover, bootstrap, probe]
         default: prepare
-  # Target: daily 09:00 Asia/Seoul, after the community source refresh at 08:00.
+  # Target: daily 09:00 Asia/Seoul, after the verified >=07:00 community export.
   # cron-job.org job 8527289 must match; a comment does not change its live schedule.
   # No native schedule: avoid duplicate preparation after external cutover.
 
@@ -39,6 +39,9 @@ jobs:
       # Bounded observed public trend metadata, supplied before the existing 09:00 run.
       # The runner does not inherit Work/cloud-browser login or collect Trends itself.
       BLOG_CREATOR_TRENDS_JSON: ${{ vars.BLOG_CREATOR_TRENDS_JSON }}
+      # Optional public source metadata, matched against scored immutable KIS records.
+      # Empty input remains a hold; this is never a direct investment candidate.
+      BLOG_POLICY_EVIDENCE_JSON: ${{ vars.BLOG_POLICY_EVIDENCE_JSON }}
       NAVER_API_HUB_CLIENT_ID: ${{ secrets.NAVER_API_HUB_CLIENT_ID }}
       NAVER_API_HUB_CLIENT_SECRET: ${{ secrets.NAVER_API_HUB_CLIENT_SECRET }}
       GITHUB_TOKEN: ${{ github.token }}

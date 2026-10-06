@@ -31,6 +31,8 @@ def main() -> None:
     enqueue.add_argument("--file", type=Path, required=True)
     trends = sub.add_parser("import-creator-trends", help="관찰한 Creator Advisor 근거만 등록")
     trends.add_argument("--file", type=Path, required=True)
+    policy = sub.add_parser("import-policy-evidence", help="검증할 정책 근거 등록 (후보/승인 생성 안 함)")
+    policy.add_argument("--file", type=Path, required=True)
     doctor = sub.add_parser("doctor", help="비밀값을 출력하지 않고 필수 설정 확인")
     doctor.add_argument("--require-naver", action="store_true")
     resolve = sub.add_parser("resolve", help="네이버 임시저장 목록을 직접 확인한 뒤 상태 확정")
@@ -43,6 +45,10 @@ def main() -> None:
     settings = load_settings()
 
     try:
+        if args.command == "import-policy-evidence":
+            from .weekly_policy import import_evidence
+            print(json.dumps(import_evidence(settings, args.file.resolve())))
+            return
         if args.command == "import-creator-trends":
             print(json.dumps(import_snapshot(settings, args.file.resolve())))
             return

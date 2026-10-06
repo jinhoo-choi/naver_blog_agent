@@ -128,6 +128,8 @@ def recover_rejected(settings, conn, candidates):
                 request = prepare_request(settings, by_id[row['request_id']])
                 payload = rejected_checkpoint(settings, request)
             request = ContentRequest(**payload['input'])
+            from .weekly_policy import refresh_request
+            request = refresh_request(settings, request)
             post = PostDraft(**payload['post'])
             info = settings.config['categories'][category]
             validate_post(post, info)

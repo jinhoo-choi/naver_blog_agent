@@ -8,7 +8,7 @@ import os
 import re
 import shutil
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -254,24 +254,78 @@ def fetch_community(config: dict) -> tuple[list, dict]:
     sha = commit["sha"]
     if not re.fullmatch(r"[a-f0-9]{40}", sha):
         raise ValueError("Invalid source revision")
-    content = _get_json(f"{base}/contents/{path}?ref={sha}")
-    if content.get("encoding") != "base64":
-        raise ValueError("Unexpected community export encoding")
-    records = json.loads(base64.b64decode(content["content"]))
-    if not isinstance(records, list):
-        raise TypeError("Community export must be a list")
-    stamp = datetime.fromisoformat(commit["commit"]["committer"]["date"])
-    stamp = stamp.astimezone(ZoneInfo("Asia/Seoul"))
-    provenance = {
-        "repository": repo, "commit": sha,
-        "snapshot_date": stamp.date().isoformat(),
-        "snapshot_at": stamp.isoformat(),
-        "url": f"https://github.com/{repo}/blob/{sha}/{path}",
-    }
-    return records, provenance
+    return _community_snapshot(repo, commit)
 
 
-def community_request(record: dict, provenance: dict, config: dict) -> ContentRequest | None:
+def _community_snapshot(repo, commit):
+    sha = commit['sha']
+    if not re.fullmatch(r'[a-f0-9]{40}', sha):
+        raise ValueError('Invalid source revision')
+    path = 'data/posts_latest.json'
+    content = _get_json(f'https://api.github.com/repos/{repo}/contents/{path}?ref={sha}')
+    if content.get('encoding') != 'base64':
+        raise ValueError('Unexpected community export encoding')
+    records = json.loads(base64.b64decode(content['content'], validate=False))
+    if not isinstance(records, list) or any(not isinstance(r, dict) for r in records):
+        raise TypeError('Community export must be a list of records')
+    stamp = datetime.fromisoformat(commit['commit']['committer']['date'])
+    if stamp.tzinfo is None:
+        raise ValueError('Community snapshot timestamp needs timezone')
+    stamp = stamp.astimezone(ZoneInfo('Asia/Seoul'))
+    return records, {'repository': repo, 'commit': sha,
+                     'snapshot_date': stamp.date().isoformat(), 'snapshot_at': stamp.isoformat(),
+                     'url': f'https://github.com/{repo}/blob/{sha}/{path}'}
+
+
+def fetch_policy_history(config, latest_records, latest):
+    """Newest revision wins even if it is fatal, withdrawn, or no longer policy."""
+    from .weekly_policy import now_kst, source_identity
+    start = datetime.combine(today_kst() - timedelta(days=4), time.min,
+                             tzinfo=ZoneInfo('Asia/Seoul'))
+    limit = config.get('weekly_policy', {}).get('max_history_exports', 20)
+    if type(limit) is not int or not 1 <= limit <= 50:
+        raise ValueError('Invalid policy history bound')
+    repo = config['repository']
+    commits = _get_json(f'https://api.github.com/repos/{repo}/commits?'
+                       f'path=data%2Fposts_latest.json&sha={latest["commit"]}'
+                       f'&since={quote(start.isoformat(), safe="")}&per_page={limit + 1}')
+    if not isinstance(commits, list) or not commits or len(commits) > limit:
+        raise ValueError('Policy history incomplete or exceeds bounded window')
+    if commits[0]['sha'] != latest['commit']:
+        raise ValueError('Policy history does not match readiness snapshot')
+    records, seen_ids, seen_sources, seen_shas = [], set(), set(), set()
+    previous = now_kst()
+    for commit in commits:
+        sha = commit['sha']
+        stamp = datetime.fromisoformat(commit['commit']['committer']['date'])
+        if stamp.tzinfo is None or not start <= stamp <= previous or sha in seen_shas:
+            raise ValueError('Invalid policy history order or timestamp')
+        previous = stamp
+        seen_shas.add(sha)
+        rows, origin = ((latest_records, latest) if sha == latest['commit']
+                        else _community_snapshot(repo, commit))
+        # Duplicate identities within one export are ambiguous, so suppress all copies.
+        ids = [r.get('id') for r in rows]
+        urls = [source_identity(r['src']) if r.get('src') else None for r in rows]
+        for record in rows:
+            identity = record.get('id')
+            if not isinstance(identity, str) or not identity:
+                raise ValueError('Policy history contains an unidentifiable record')
+            url = source_identity(record['src']) if record.get('src') else None
+            duplicate = identity in seen_ids or (url and url in seen_sources)
+            seen_ids.add(identity)
+            if url:
+                seen_sources.add(url)
+            if duplicate or ids.count(identity) > 1 or (url and urls.count(url) > 1):
+                continue
+            if (record.get('retracted') or record.get('withdrawn')
+                    or record.get('status') in {'retracted', 'withdrawn', 'superseded'}):
+                continue
+            records.append((record, {**origin, 'latest_snapshot': latest}))
+    return records
+
+
+def community_request(record: dict, provenance: dict, config: dict, *, policy_evidence=None) -> ContentRequest | None:
     # posts_latest is the upstream final distribution export. Blog standards are separate.
     allowed_kinds = set(config.get("allowed_kinds", ["research", "policy", "disclosure"]))
     if record.get("kind") not in allowed_kinds:
@@ -322,9 +376,17 @@ def community_request(record: dict, provenance: dict, config: dict) -> ContentRe
         return None
     data_date = min(date.fromisoformat('-'.join(d)) for d in dates)
     age_limit = int(config.get("max_age_days", 1))
-    if not (0 <= (today_kst() - stamp).days <= age_limit
-            and 0 <= (today_kst() - data_date).days <= age_limit):
-        return None
+    if policy_evidence is None:
+        if not (0 <= (today_kst() - stamp).days <= age_limit
+                and 0 <= (today_kst() - data_date).days <= age_limit):
+            return None
+    else:
+        if record.get('kind') != 'policy':
+            return None
+        data_date = date.fromisoformat(policy_evidence['event']['date'])
+        if not (0 <= (today_kst() - stamp).days <= 4
+                and 0 <= (today_kst() - data_date).days <= 4 and data_date <= stamp):
+            return None
     # Strip assignee, private diagnostics and raw model tails.
     data = {key: record.get(key, "") for key in (
         "id", "kind", "stock_code", "stock_name", "title", "facts", "src", "body",
@@ -333,9 +395,19 @@ def community_request(record: dict, provenance: dict, config: dict) -> ContentRe
     if sector_only:
         data.update(stock_name="", stock_code="", sector_only=True)
     key = hashlib.sha256(f"{provenance['repository']}:{record['id']}".encode()).hexdigest()[:24]
-    return ContentRequest(f"community-{key}", "investment", data, provenance={
-        **provenance, "source_date": data_date.isoformat(), "source_url": record["src"],
-    })
+    metadata = {**provenance, 'source_date': data_date.isoformat(), 'source_url': record['src'],
+                'source_record_id': record['id'], 'source_score': dict(score)}
+    if policy_evidence is not None:
+        from .weekly_policy import VERSION, record_digest, source_identity
+        data['policy_evidence'] = policy_evidence
+        event = policy_evidence['event']
+        event_key = hashlib.sha256((source_identity(event['source']['url']) + ':'
+                                    + event['date']).encode()).hexdigest()
+        metadata.update(investment_mode=VERSION, policy_event_key=event_key,
+                        source_url=source_identity(record["src"]),
+                        source_record_sha256=record_digest(record),
+                        policy_evidence=policy_evidence)
+    return ContentRequest(f'community-{key}', 'investment', data, provenance=metadata)
 
 
 def collect_requests(settings: Settings) -> tuple[list[ContentRequest], list[dict]]:
@@ -396,7 +468,8 @@ def collect_requests(settings: Settings) -> tuple[list[ContentRequest], list[dic
     if config.get("enabled", False) and (not plan or plan['category'] == 'investment'):
         try:
             records, provenance = fetch_community(config)
-            if config.get("require_today_snapshot", True):
+            from .weekly_policy import enabled
+            if enabled(settings) or config.get("require_today_snapshot", True):
                 stamp = datetime.fromisoformat(provenance["snapshot_at"])
                 stamp = stamp.astimezone(ZoneInfo("Asia/Seoul"))
                 ready_hour = config.get('snapshot_ready_hour', 7)
@@ -405,14 +478,25 @@ def collect_requests(settings: Settings) -> tuple[list[ContentRequest], list[dic
                 if stamp.date() != today_kst() or stamp.hour < ready_hour:
                     notices.append({"status": "COMMUNITY_SOURCE_PENDING"})
                     return requests, notices
+            from .weekly_policy import enabled, evidence_for, now_kst
+            weekly = enabled(settings)
+            if weekly:
+                if stamp.tzinfo is None or stamp > now_kst():
+                    raise ValueError('Future or naive readiness snapshot')
+                candidates = fetch_policy_history(config, records, provenance)
+            else:
+                candidates = [(r, provenance) for r in records]
             eligible = 0
-            for record in records:
+            for record, origin in candidates:
                 if today_kst().isoformat() <= context.get("exclude_investment_topics_until", ""):
                     source_text = " ".join(str(record.get(k, "")) for k in ["stock_name", "title", "facts"])
                     if any(topic in source_text for topic in context.get("excluded_investment_topics", [])):
                         continue
                 try:
-                    request = community_request(record, provenance, config)
+                    if weekly and record.get('kind') != 'policy':
+                        continue
+                    evidence = evidence_for(settings, record, origin) if weekly else None
+                    request = community_request(record, origin, config, policy_evidence=evidence)
                     if request:
                         requests.append(request)
                         eligible += 1
@@ -420,7 +504,8 @@ def collect_requests(settings: Settings) -> tuple[list[ContentRequest], list[dic
                     continue  # Malformed one-off records do not block the owner's input.
             if not eligible:
                 notices.append({"status": "NO_ELIGIBLE_INVESTMENT", "source_count": len(records),
-                                "reason": "source_date_score_or_issue_not_eligible"})
+                                "reason": ("weekly_policy_evidence_or_source_not_eligible" if weekly
+                                           else "source_date_score_or_issue_not_eligible")})
         except (OSError, ValueError, TypeError, KeyError) as exc:
             notices.append({"status": "COMMUNITY_SOURCE_UNAVAILABLE", "error": type(exc).__name__,
                             "http_status": getattr(exc, 'code', None)})

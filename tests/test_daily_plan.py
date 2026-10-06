@@ -156,8 +156,10 @@ def test_missing_planned_input_holds_without_paid_calls_or_filler(tmp_path, monk
     ('2026-10-09T07:00:00+09:00', '2026-10-08', None),
     ('2026-10-09T07:00:00+09:00', '2026-10-09', None),
 ])
-def test_friday_keeps_source_and_snapshot_freshness(tmp_path, monkeypatch, snapshot, source_day, status):
+def test_legacy_investment_keeps_source_and_snapshot_freshness(tmp_path, monkeypatch, snapshot, source_day, status):
     settings = settings_on(tmp_path, monkeypatch, '2026-10-09')
+    settings.config['operating_plan'].pop('investment_mode')
+    settings.config['daily_plan'] = resolve_plan(settings.config)
     record = {'id': 'source', 'kind': 'policy', 'facts': f'자료 기준일 {source_day}',
               'src': 'https://example.org/source', 'body': '공식 자료의 요약',
               'score': {'factual': 5, 'useful': 4, 'natural': 4, 'compliant': 5,

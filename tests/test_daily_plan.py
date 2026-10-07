@@ -65,14 +65,16 @@ def test_every_measurement_day_has_one_explicit_slot(tmp_path, monkeypatch, offs
     day = date(2026, 10, 5) + timedelta(days=offset)
     settings = settings_on(tmp_path, monkeypatch, str(day))
     plan = active_plan(settings)
-    expected = ['parenting', 'origins', 'parenting', 'exercise', 'investment',
-                'parenting', 'parenting'][day.weekday()]
+    sequence = (['parenting', 'origins', 'investment', 'exercise', 'investment', 'parenting', 'origins']
+                if day >= date(2026, 10, 12) else
+                ['parenting', 'origins', 'parenting', 'exercise', 'investment', 'parenting', 'parenting'])
+    expected = sequence[day.weekday()]
     assert plan['date'] == str(day) and plan['category'] == expected and plan['target'] == 1
     assert plan['editorial_types'] == (['article', 'ai_tutorial'] if expected == 'parenting' else ['article'])
     assert settings.daily_count == settings.config['blog']['daily_max'] == 1
     assert sum(info['max_daily'] for info in settings.config['categories'].values()) == 1
     assert settings.config['categories'][expected]['max_daily'] == 1
-    assert settings.config['community']['enabled'] == (expected == 'investment')
+    assert settings.config['community']['enabled'] == (expected == 'investment' and day.weekday() == 4)
     if expected == 'origins':
         assert plan['depth'] == 'short'
         assert not any('실제 캡처/직접 제공 사진' in r for r in settings.config['categories'][expected]['rules'])
@@ -86,9 +88,9 @@ def test_every_measurement_day_has_one_explicit_slot(tmp_path, monkeypatch, offs
 
 def test_two_week_totals_and_no_automatic_expiry(tmp_path, monkeypatch):
     settings = settings_on(tmp_path, monkeypatch)
-    start = date(2026, 10, 5)
+    start = date(2026, 10, 12)
     assert Counter(resolve_plan(settings.config, start + timedelta(days=i))['category']
-                   for i in range(14)) == {'parenting': 8, 'origins': 2, 'exercise': 2, 'investment': 2}
+                   for i in range(14)) == {'parenting': 4, 'origins': 4, 'exercise': 2, 'investment': 4}
     for day in ['2026-10-19', '2026-11-02']:
         assert resolve_plan(settings.config, date.fromisoformat(day))['target'] == 1
 
@@ -158,7 +160,7 @@ def test_missing_planned_input_holds_without_paid_calls_or_filler(tmp_path, monk
 ])
 def test_legacy_investment_keeps_source_and_snapshot_freshness(tmp_path, monkeypatch, snapshot, source_day, status):
     settings = settings_on(tmp_path, monkeypatch, '2026-10-09')
-    settings.config['operating_plan'].pop('investment_mode')
+    settings.config['operating_plan']['previous'].pop('investment_mode')
     settings.config['daily_plan'] = resolve_plan(settings.config)
     record = {'id': 'source', 'kind': 'policy', 'facts': f'자료 기준일 {source_day}',
               'src': 'https://example.org/source', 'body': '공식 자료의 요약',

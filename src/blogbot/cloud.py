@@ -18,6 +18,7 @@ from .config import load_settings
 from .core import connect_db, today_kst
 from .images import atomic_json
 from .inputs import enqueue_file, managed_queue_photos
+from .investment import revalidation_reason
 from .pipeline import run_daily
 from .planning import (
     SaveDateRequired,
@@ -246,19 +247,19 @@ def pack(settings, destination: Path) -> None:
             if stale_settings or (plan and (plan.get('reservation') or uncertain or not matches_post(post, plan)
                                            or packet or used)):
                 continue
-            from .weekly_policy import validate_current_post
+            from .investment import validate_current_post
             try:
                 validate_current_post(settings, post)
             except (OSError, ValueError, KeyError, TypeError, RuntimeError):
                 weekly_holds.append({'id': row['id'], 'request_id': post.request_id,
                                      'category': 'investment',
-                                     'status': 'WEEKLY_POLICY_REVALIDATION_REQUIRED'})
+                                     'status': revalidation_reason(plan).upper()})
                 continue  # Preserve checkpoints while withholding unverified weekly output.
             packet.append({'id': row['id'], 'category_no': settings.config['categories'][post.category]['naver_category_no'],
                            'requires_fresh_review': post.as_of_date != today.isoformat(),
                            'post': post.__dict__, 'segments': [s.__dict__ for s in render_segments(
                                post, include_tags=post.provenance.get('content_style') != 'review')]})
-    hold = ('weekly_policy_revalidation_required' if weekly_holds else
+    hold = (revalidation_reason(plan) if weekly_holds else
             'kst_date_changed' if stale_settings else 'editorial_slot_reserved'
             if plan and plan.get('reservation') else None)
     atomic_json(directory / 'ready.json', {'date': today.isoformat(), 'posts': packet,
@@ -368,7 +369,7 @@ def filter_ready(directory: Path, receipts: dict, plan: dict | None = None, sett
             continue
         if plan and plan.get('investment_mode'):
             from .core import PostDraft
-            from .weekly_policy import validate_current_post
+            from .investment import validate_current_post
             if settings is None or not matches_post(PostDraft(**post), plan):
                 weekly_held = True
                 continue
@@ -388,7 +389,7 @@ def filter_ready(directory: Path, receipts: dict, plan: dict | None = None, sett
         eligible.append(item)
         blocked.add(identity)
     atomic_json(path, {**ready, 'posts': eligible,
-                       **({'hold': 'weekly_policy_revalidation_required'} if weekly_held else {})})
+                       **({'hold': revalidation_reason(plan)} if weekly_held else {})})
 
 
 def main():
@@ -509,8 +510,8 @@ def main():
                 telegram(json.loads(summary_path.read_text())['results'])
             except (OSError, RuntimeError, ValueError) as exc:
                 print(json.dumps({'notification': 'FAILED', 'error': type(exc).__name__}))
-        if delivery_hold == 'weekly_policy_revalidation_required':
-            raise PreparationFailed('Weekly policy revalidation blocked delivery')
+        if delivery_hold in {'weekly_policy_revalidation_required', 'life_economics_revalidation_required'}:
+            raise PreparationFailed('Investment source revalidation blocked delivery')
 
 
 if __name__ == '__main__':

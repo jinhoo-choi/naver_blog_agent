@@ -22,7 +22,8 @@ def assert_daily_prompt(prompt, config):
     for category in set(schedule):
         days = [name for name, selected in zip(weekday_names, schedule) if selected == category]
         label = '·'.join(days) + ('요일' if len(days) == 1 else '')
-        assert f"{label}은 {config['categories'][category]['display_name']}" in prompt
+        particle = "는" if label.endswith("토") else "은"
+        assert f"{label}{particle} {config['categories'][category]['display_name']}" in prompt
     for obsolete in ['평일 Cloud 운영', '평일 배분', '주말 심화', 'editorial.weekend',
                      '육아·운동·투자 각 1건']:
         assert obsolete not in prompt
@@ -45,7 +46,7 @@ def test_prompt_files_match_daily_plan_and_image_configuration(filename):
     ('2026-10-08', 'exercise', 'article'),
     ('2026-10-09', 'investment', 'article'),
     ('2026-10-10', 'parenting', 'article'),
-    ('2026-10-14', 'parenting', 'ai_tutorial'),
+    ('2026-10-17', 'parenting', 'ai_tutorial'),
 ])
 def test_all_model_paths_receive_consistent_daily_plan(
         tmp_path, monkeypatch, day, category, subtype):

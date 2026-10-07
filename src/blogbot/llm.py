@@ -113,6 +113,11 @@ def _checked_review(payload, response, request):
         verified.update(_source_identity(evidence[k]) for k in ['url', 'viewer_url'])
     verified.update(_source_identity(e['url'])
                     for e in request.provenance.get('reference_evidence', []) if e.get('text'))
+    if request.provenance.get('investment_mode') == 'life-economics-v1':
+        official = {_source_identity(e['url']) for e in request.provenance.get('life_economics_checks', [])
+                    if e.get('verified_date') == str(today_kst())}
+        verified.update(official)
+        verified.intersection_update(official)
     if (not checks or any(check.get('status') != 'SUPPORTED'
             or not check.get('evidence', '').strip()
             or _source_identity(check.get('source_url', '')) not in verified for check in checks)):
@@ -159,7 +164,7 @@ class BlogLLM:
         recent_titles: list[str],
         *, raw: bool = False,
     ):
-        category_info = routed_category_info(category_info, request.category, request.data.get('editorial_type'), request.data.get('content_style'))
+        category_info = routed_category_info(category_info, request.category, request.data.get('editorial_type'), request.data.get('content_style'), investment_mode=request.provenance.get('investment_mode'))
         category_key = request.category
         display = category_info["display_name"]
         subcats = ", ".join(category_info["subcategories"])
@@ -168,8 +173,8 @@ class BlogLLM:
         today = today_kst().isoformat()
 
         prompt = f"""
-{routed_prompt(self.writer_prompt, request.category, request.data.get('editorial_type'), request.data.get('content_style'))}
-{quality_guidance(request.category, request.data.get('editorial_type'), request.data.get('content_style'))}
+{routed_prompt(self.writer_prompt, request.category, request.data.get('editorial_type'), request.data.get('content_style'), investment_mode=request.provenance.get('investment_mode'))}
+{quality_guidance(request.category, request.data.get('editorial_type'), request.data.get('content_style'), investment_mode=request.provenance.get('investment_mode'))}
 
 오늘 날짜: {today}
 카테고리: {display} ({category_key})
@@ -182,7 +187,7 @@ class BlogLLM:
 원본 입력(JSON): {json.dumps(request.prompt_data(), ensure_ascii=False)}
 요리는 이 입력의 레시피만 사용한다. 사진은 따로 첨부되므로 캡션 밖의 모습을 추측하지 않는다.
 육아는 입력된 실제 질문에 답한다. 선우의 월령·증상·경험을 추정하지 않는다.
-투자는 기존 봇의 facts/src/body를 시작점으로 삼고 검색으로 근거를 확인한다.
+{('생활경제는 실제 소유자 질문과 등록된 공식 sources를 시작점으로 삼고 해당 원문으로 근거를 대조한다. source_urls는 등록된 sources URL만 쓴다.' if request.provenance.get('investment_mode') == 'life-economics-v1' else '투자는 기존 봇의 facts/src/body를 시작점으로 삼고 검색으로 근거를 확인한다.')}
 primary_evidence가 있으면 실제 공시 본문이다. 봇 요약과 충돌하면 원문을 우선한다.
 DART 표지·검색 요약만으로 계약 내용이나 정정 사유를 확정하지 않는다.
 정정 공시는 정정 전/후, 정정사유, 매출 기준의 회사·연도·별도/연결,
@@ -206,6 +211,9 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
         )
         evidence = request.provenance.get('primary_evidence', {})
         observed = _extract_urls(response) + [evidence[k] for k in ['url', 'viewer_url'] if k in evidence]
+        if request.provenance.get('investment_mode') == 'life-economics-v1':
+            observed = [s['url'] for s in request.provenance.get('life_economics_checks', [])
+                        if s.get('verified_date') == today]
         if raw:
             from .pre_review import DraftCandidate
             return DraftCandidate(payload, observed)
@@ -227,10 +235,10 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
     def correct_draft(self, candidate, category_info, issue_codes, request, *, cache_only=False):
         """One pre-review correction; no search or truncation retry, no new evidence."""
         from .pre_review import DraftCandidate
-        category_info = routed_category_info(category_info, request.category, request.data.get('editorial_type'), request.data.get('content_style'))
+        category_info = routed_category_info(category_info, request.category, request.data.get('editorial_type'), request.data.get('content_style'), investment_mode=request.provenance.get('investment_mode'))
         prompt = f"""
-{routed_prompt(self.writer_prompt, request.category, request.data.get('editorial_type'), request.data.get('content_style'))}
-{quality_guidance(request.category, request.data.get('editorial_type'), request.data.get('content_style'))}
+{routed_prompt(self.writer_prompt, request.category, request.data.get('editorial_type'), request.data.get('content_style'), investment_mode=request.provenance.get('investment_mode'))}
+{quality_guidance(request.category, request.data.get('editorial_type'), request.data.get('content_style'), investment_mode=request.provenance.get('investment_mode'))}
 
 정식 검수 전 1회 수정입니다. 아래 기계적 오류만 고치고 같은 주제·근거를 유지하세요.
 새로운 사실, 출처, 경험, 사진 관찰, 의학·투자 권고를 창작하지 마세요.
@@ -261,14 +269,14 @@ source_urls와 본문 URL은 아래 실제 관찰 URL 중에서만 선택하세�
         return {k: v for k, v in post.__dict__.items() if k != "photos"}
 
     def review(self, post: PostDraft, category_info: dict, request: ContentRequest) -> dict:
-        category_info = routed_category_info(category_info, request.category, request.data.get('editorial_type'), request.data.get('content_style'))
+        category_info = routed_category_info(category_info, request.category, request.data.get('editorial_type'), request.data.get('content_style'), investment_mode=request.provenance.get('investment_mode'))
         from .research import prepare_reference_evidence
         request = prepare_reference_evidence(
             self.journal.parent if self.journal else None, request, post.source_urls)
         rules = "\n".join(f"- {r}" for r in category_info.get("rules", []))
         prompt = f"""
-{routed_prompt(self.reviewer_prompt, request.category, request.data.get('editorial_type'), request.data.get('content_style'), role='reviewer')}
-{quality_guidance(request.category, request.data.get('editorial_type'), request.data.get('content_style'))}
+{routed_prompt(self.reviewer_prompt, request.category, request.data.get('editorial_type'), request.data.get('content_style'), role='reviewer', investment_mode=request.provenance.get('investment_mode'))}
+{quality_guidance(request.category, request.data.get('editorial_type'), request.data.get('content_style'), investment_mode=request.provenance.get('investment_mode'))}
 
 기계적 편집 관찰(오류 확정/추가 차단 기준 아님, 문맥으로 검토):
 {json.dumps(editorial_hints(post.body), ensure_ascii=False)}
@@ -297,7 +305,7 @@ source_urls와 본문 URL은 아래 실제 관찰 URL 중에서만 선택하세�
         self, post: PostDraft, category_info: dict, review: dict, request: ContentRequest,
         *, cache_only: bool = False, single_attempt: bool = False, raw: bool = False,
     ) -> PostDraft:
-        category_info = routed_category_info(category_info, request.category, request.data.get('editorial_type'), request.data.get('content_style'))
+        category_info = routed_category_info(category_info, request.category, request.data.get('editorial_type'), request.data.get('content_style'), investment_mode=request.provenance.get('investment_mode'))
         original_identity = json.dumps([self.model, self._draft_data(post), category_info,
                                         review, request.prompt_data()], sort_keys=True)
         if not cache_only:
@@ -306,8 +314,8 @@ source_urls와 본문 URL은 아래 실제 관찰 URL 중에서만 선택하세�
                 self.journal.parent if self.journal else None, request, post.source_urls)
         rules = "\n".join(f"- {r}" for r in category_info.get("rules", []))
         prompt = f"""
-{routed_prompt(self.writer_prompt, request.category, request.data.get('editorial_type'), request.data.get('content_style'))}
-{quality_guidance(request.category, request.data.get('editorial_type'), request.data.get('content_style'))}
+{routed_prompt(self.writer_prompt, request.category, request.data.get('editorial_type'), request.data.get('content_style'), investment_mode=request.provenance.get('investment_mode'))}
+{quality_guidance(request.category, request.data.get('editorial_type'), request.data.get('content_style'), investment_mode=request.provenance.get('investment_mode'))}
 
 오늘 한국시간 기준일: {today_kst().isoformat()}
 기존 초안을 심사 지적사항에 맞게 수정한다. 주제와 핵심 출처는 유지하되 오류·과장·중복을 제거한다.
@@ -352,10 +360,13 @@ source_urls와 본문 URL은 아래 실제 관찰 URL 중에서만 선택하세�
             # One read-only compatibility lookup for pre-topic-quality-v1 interrupted rewrites.
             # All other inputs stay byte-for-byte identical; never grant another paid attempt.
             legacy_prompt = prompt.replace(
-                self.writer_prompt + '\n' + quality_guidance(request.category, request.data.get('editorial_type'), request.data.get('content_style')) + '\n',
+                self.writer_prompt + '\n' + quality_guidance(request.category, request.data.get('editorial_type'), request.data.get('content_style'), investment_mode=request.provenance.get('investment_mode')) + '\n',
                 self.writer_prompt + '\n', 1)
             payload, response = request_json(self.client, input=legacy_prompt, **call)
         observed = post.source_urls + _extract_urls(response) + _historical_source_urls(self.journal, request.id)
+        if request.provenance.get('investment_mode') == 'life-economics-v1':
+            observed = [s['url'] for s in request.provenance.get('life_economics_checks', [])
+                        if s.get('verified_date') == str(today_kst())]
         if raw:
             from .pre_review import DraftCandidate
             return DraftCandidate(payload, observed)

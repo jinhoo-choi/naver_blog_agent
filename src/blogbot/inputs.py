@@ -47,6 +47,14 @@ class ContentRequest:
     provenance: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if self.category == 'investment' and self.data.get('investment_mode') == 'life-economics-v1':
+            from .life_economics import VERSION, validate_data
+            bundle = validate_data(self.data, fresh=False)
+            if (self.provenance.get('investment_mode', VERSION) != VERSION
+                    or self.provenance.get('life_economics', bundle) != bundle):
+                raise ValueError('Conflicting life-economics provenance')
+            self.provenance = {**self.provenance, 'investment_mode': VERSION,
+                               'life_economics': bundle}
         if self.category == 'origins':
             from .origins import validate_origin_data
             self.provenance = {**self.provenance, 'origins': validate_origin_data(self.data)}
@@ -140,6 +148,11 @@ def enqueue_file(settings: Settings, source: Path) -> str:
                 "benchmark_query": str(raw.get("benchmark_query", ""))}
         if 'editorial_type' in raw:
             data['editorial_type'] = editorial_type(category, raw)
+        photos = []
+    elif category == 'investment':
+        from .life_economics import validate_data
+        data = {**validate_data(raw), 'context': str(raw.get('context', '')),
+                'benchmark_query': str(raw.get('benchmark_query', ''))}
         photos = []
     elif category == "cooking":
         recipe = raw.get("recipe", {})
@@ -419,6 +432,10 @@ def collect_requests(settings: Settings) -> tuple[list[ContentRequest], list[dic
                 if not all(request.data.get(k) for k in ("name", "ingredients", "steps")):
                     raise ValueError("Recipe incomplete")
                 verify_photos(request.photos)
+            elif request.category == 'investment':
+                from .life_economics import request_contract
+                if not request_contract(request, fresh=False):
+                    raise ValueError('Investment queue accepts only owner life-economics questions')
             elif request.category not in {"parenting", "exercise", "origins"} or not request.data.get("question"):
                 raise ValueError("Question missing or unsupported category")
             editorial_type(request.category, request.data)
@@ -465,7 +482,8 @@ def collect_requests(settings: Settings) -> tuple[list[ContentRequest], list[dic
     plan = active_plan(settings)
     if plan:
         requests = [r for r in requests if matches_request(r, plan)]
-    if config.get("enabled", False) and (not plan or plan['category'] == 'investment'):
+    if config.get("enabled", False) and (not plan or (plan['category'] == 'investment'
+            and plan.get('investment_mode') != 'life-economics-v1')):
         try:
             records, provenance = fetch_community(config)
             from .weekly_policy import enabled

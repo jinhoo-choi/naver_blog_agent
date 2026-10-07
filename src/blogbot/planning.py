@@ -17,13 +17,23 @@ def resolve_plan(config: dict, day: date | None = None) -> dict | None:
     day = day or today_kst()
     if not policy.get('enabled') or day < date.fromisoformat(policy['start_date']):
         return None
-    selected = (policy['previous'] if policy.get('effective_date')
-                and day < date.fromisoformat(policy['effective_date']) else policy)
+    selected = policy
+    while selected.get('effective_date') and day < date.fromisoformat(selected['effective_date']):
+        selected = selected['previous']
     categories = selected['weekdays']
     if (len(categories) != 7 or any(c not in {'parenting', 'exercise', 'investment', 'origins'}
                                    for c in categories)):
         raise ValueError('Invalid weekly content plan')
+    modes = selected.get('investment_modes')
+    if modes is not None and (len(modes) != 7 or any(
+            mode not in {'', 'weekly-policy-v1', 'life-economics-v1'}
+            or bool(mode) != (category == 'investment')
+            for category, mode in zip(categories, modes))):
+        raise ValueError('Invalid weekly investment routes')
     category = categories[day.weekday()]
+    mode = modes[day.weekday()] if modes is not None else selected.get('investment_mode')
+    if mode and mode not in {'weekly-policy-v1', 'life-economics-v1'}:
+        raise ValueError('Unknown investment route')
     reservation = policy.get('reservations', {}).get(day.isoformat())
     if reservation and (not {'category', 'kind'} <= set(reservation)
                         or set(reservation) - {'category', 'kind', 'request_id'}
@@ -36,8 +46,7 @@ def resolve_plan(config: dict, day: date | None = None) -> dict | None:
             'category': category, 'editorial_types': (['article', 'ai_tutorial']
                                                    if category == 'parenting' else ['article']),
             'depth': 'short' if category == 'origins' else 'deep',
-            **({'investment_mode': 'weekly-policy-v1'} if category == 'investment'
-               and selected.get('investment_mode') == 'weekly-policy-v1' else {}), **({'reservation': dict(reservation)} if reservation else {})}
+            **({'investment_mode': mode} if category == 'investment' and mode else {}), **({'reservation': dict(reservation)} if reservation else {})}
 
 
 def active_plan(settings) -> dict | None:
@@ -65,18 +74,18 @@ def editorial_type(category: str, data: dict) -> str:
 
 
 def matches_request(request, plan: dict) -> bool:
+    from .investment import request_contract
     return (request.category == plan['category']
             and editorial_type(request.category, request.data) in plan['editorial_types']
-            and (not plan.get('investment_mode') or (request.data.get('kind') == 'policy'
-                 and request.provenance.get('investment_mode') == plan['investment_mode']
-                 and bool(request.provenance.get('policy_event_key')))))
+            and request_contract(request, plan))
 
 
 def matches_post(post, plan: dict) -> bool:
+    from .investment import post_contract
     return (post.as_of_date == plan['date'] and post.category == plan['category']
             and post.provenance.get('daily_plan') == plan
             and post.provenance.get('editorial_type', 'article') in plan['editorial_types']
-            and (not plan.get('investment_mode') or _weekly_post_matches(post, plan)))
+            and post_contract(post, plan))
 
 
 class SaveDateRequired(RuntimeError):
@@ -237,8 +246,3 @@ def record_verified_save(conn, post_id: int, record: dict) -> None:
                      (record.get('saved_at'), post_id))
         if row['request_id']:
             conn.execute("UPDATE attempts SET status='SAVED_NAVER' WHERE request_id=?", (identity,))
-
-
-def _weekly_post_matches(post, plan):
-    from .weekly_policy import post_contract
-    return post_contract(post, plan)

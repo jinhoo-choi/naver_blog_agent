@@ -52,10 +52,10 @@ jobs:
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       PYTHONUTF8: '1'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Install API preparer
@@ -66,7 +66,7 @@ jobs:
         run: python -m blogbot.cloud "$PREPARE_MODE"
       - name: Preserve encrypted checkpoints
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: blog-state-${{ github.run_id }}-${{ github.run_attempt }}
           path: handoff/bundle.enc

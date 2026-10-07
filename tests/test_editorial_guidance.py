@@ -21,7 +21,7 @@ def test_formal_style_keeps_quotations_and_safety(path):
 @pytest.mark.parametrize('name', ['writer', 'reviewer'])
 def test_prompts_require_results_and_concrete_prose_without_new_certainty(name):
     prompt = (ROOT / 'prompts' / f'{name}.md').read_text(encoding='utf-8')
-    for criterion in ['관찰 결과', '비교 대상', '한계를 같은 구역에서 한 번',
+    for criterion in ['관찰 결과', '비교 대상', '해당 사실 문장',
                       '방법입니다', '뜻합니다', '명사구', '구분해 읽어 주세요']:
         assert criterion in prompt
     assert '한계만' in prompt

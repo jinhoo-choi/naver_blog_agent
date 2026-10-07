@@ -30,7 +30,9 @@ def canonical_blog_url(url: str) -> str | None:
 def public_query(request) -> str:
     query = request.data.get("benchmark_query", "")
     if not query:
-        if request.category == "investment":
+        if request.provenance.get("investment_mode") == "life-economics-v1":
+            raise ResearchRequired('Life-economics requires an explicit public benchmark_query')
+        elif request.category == "investment":
             stock = request.data.get("stock_name", "")
             kind = {"research": "리포트", "disclosure": "공시", "policy": "정책"}.get(
                 request.data.get("kind"), "이슈")
@@ -194,7 +196,7 @@ def _dart_html(url):
 
 
 def prepare_primary_evidence(settings, request):
-    from .weekly_policy import verify_evidence
+    from .investment import verify_evidence
     request = verify_evidence(settings, request)
     url = request.data.get('src', '')
     parts = urlsplit(url)

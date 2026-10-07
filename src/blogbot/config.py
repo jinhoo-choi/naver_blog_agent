@@ -41,10 +41,14 @@ def load_settings() -> Settings:
         config['daily_plan'] = plan
         config['blog']['daily_max'] = plan['target']
         config['community']['enabled'] = (config['community'].get('enabled', False)
-                                           and plan['category'] == 'investment')
+                                           and plan['category'] == 'investment'
+                                           and plan.get('investment_mode') != 'life-economics-v1')
         for category, info in config['categories'].items():
             info['max_daily'] = int(category == plan['category'])
         info = config['categories'][plan['category']]
+        if plan.get('investment_mode') == 'life-economics-v1':
+            from .life_economics import RULES
+            info['rules'] = list(RULES)
         if plan['depth'] == 'deep':
             info['rules'].extend(config.get('editorial', {}).get('deep', {}).get('rules', []))
     elif config["blog"].get("weekend_feature", False) and weekday >= 5:

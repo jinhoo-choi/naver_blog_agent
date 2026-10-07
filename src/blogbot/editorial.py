@@ -110,7 +110,7 @@ def content_style(category: str, data: dict) -> str:
 
 
 def quality_guidance(category: str, editorial_type: str | None = None,
-                     style: str | None = None) -> str:
+                     style: str | None = None, *, investment_mode: str | None = None) -> str:
     """Select only the relevant form; unknown categories retain common safeguards."""
     key = 'ai_tutorial' if category == 'parenting' and editorial_type == 'ai_tutorial' else category
     selected = content_style(category, {'content_style': style or 'article',
@@ -118,6 +118,9 @@ def quality_guidance(category: str, editorial_type: str | None = None,
     if category == 'origins':
         from .origins import GUIDANCE
         return PUBLIC_COPY + '\n' + GUIDANCE
+    if investment_mode == 'life-economics-v1':
+        from .life_economics import GUIDANCE
+        return PUBLIC_COPY + '\n' + COMMON + '\n' + GUIDANCE
     return PUBLIC_COPY + '\n' + COMMON + '\n' + (REVIEW if selected == 'review' else TOPICS.get(key, ''))
 
 
@@ -141,8 +144,17 @@ def editorial_hints(body: str) -> list[str]:
 
 
 def routed_prompt(prompt: str, category: str, editorial_type: str | None = None,
-                  style: str | None = None, *, role: str = 'writer') -> str:
+                  style: str | None = None, *, role: str = 'writer',
+                  investment_mode: str | None = None) -> str:
     """Route explicit styles without changing ordinary article prompt bytes."""
+    if investment_mode == 'life-economics-v1':
+        # The Friday block is contiguous. Keep generic quality/safety checks intact.
+        prompt = re.sub(r'투자 편집 기준 weekly-policy-v1[^\n]*\n(?:- [^\n]*\n?)+', '', prompt)
+        prompt = '\n'.join(
+            '생활경제는 실제 질문·공식 자료의 사실·수치·단위·기간과 금융 조건을 대조한다. '
+            '공식 근거 밖 숫자·원인·매매 경험은 만들지 않는다.'
+            if line.startswith(('- 투자는 원본 봇의', '투자는 커뮤니티 봇 자료의')) else line
+            for line in prompt.splitlines())
     if category == 'origins':
         from .origins import PLAN, REVIEWER, WRITER
         return PLAN + (REVIEWER if role == 'reviewer' else WRITER)
@@ -176,7 +188,10 @@ def routed_prompt(prompt: str, category: str, editorial_type: str | None = None,
 
 
 def routed_category_info(info: dict, category: str, editorial_type: str | None = None,
-                         style: str | None = None) -> dict:
+                         style: str | None = None, *, investment_mode: str | None = None) -> dict:
+    if investment_mode == 'life-economics-v1':
+        from .life_economics import RULES
+        return info if all(r in info.get('rules', []) for r in RULES) else {**info, 'rules': list(RULES)}
     if content_style(category, {'content_style': style or 'article',
                                'editorial_type': editorial_type or 'article'}) == 'review':
         rules = [r for r in info.get('rules', []) if not r.startswith(

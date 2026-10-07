@@ -76,7 +76,7 @@ def test_weekend_waits_for_owner_input_before_all_cost_and_save_stages(tmp_path,
     assert (settings.inbox_dir/'old-parenting'/'request.json').exists()
 
 
-@pytest.mark.parametrize('day', ['2026-10-17','2026-10-18','2026-10-24','2026-10-25'])
+@pytest.mark.parametrize('day', ['2026-10-17','2026-10-24'])
 def test_waiting_does_not_extend_to_unrequested_future_weekends(tmp_path, monkeypatch, day):
     settings = settings_on(tmp_path, monkeypatch, day)
     plan = resolve_plan(settings.config, datetime.fromisoformat(day).date())

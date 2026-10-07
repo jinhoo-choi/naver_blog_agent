@@ -21,7 +21,13 @@ from .core import (
 from .images import atomic_json
 from .inputs import ContentRequest
 from .llm import BlogLLM, _checked_review, _historical_source_urls, _source_urls
-from .planning import active_plan, attempt_matches, reservation_result
+from .planning import (
+    active_plan,
+    attempt_matches,
+    matches_post,
+    matches_request,
+    reservation_result,
+)
 from .presentation import normalize_structure, validate_structure
 from .research import prepare_reference_evidence, prepare_request
 
@@ -43,11 +49,15 @@ def rejected_checkpoint(settings, request, *, raw=False):
     original = cached['writer']
     latest = cached.get('rewrite', original)
     data = latest['payload']
+    observed = _historical_source_urls(directory / 'usage.jsonl', request.id)
+    if request.provenance.get('investment_mode') == 'life-economics-v1':
+        observed = [s['url'] for s in request.provenance.get('life_economics_checks', [])
+                    if s.get('verified_date') == str(today_kst())]
     if raw:
         from .pre_review import DraftCandidate
-        return DraftCandidate(data, _historical_source_urls(directory / 'usage.jsonl', request.id))
+        return DraftCandidate(data, observed)
     reviewer = cached.get('reviewer', {})
-    sources = _source_urls(data, _historical_source_urls(directory / 'usage.jsonl', request.id))
+    sources = _source_urls(data, observed)
     request = prepare_reference_evidence(directory, request, sources)
     post = PostDraft(request.category, data['subcategory'], original['payload']['title'],
                      data['title'], data['body'], data['tags'], sources, str(today_kst()),
@@ -128,9 +138,14 @@ def recover_rejected(settings, conn, candidates):
                 request = prepare_request(settings, by_id[row['request_id']])
                 payload = rejected_checkpoint(settings, request)
             request = ContentRequest(**payload['input'])
-            from .weekly_policy import refresh_request
+            from .investment import refresh_request
             request = refresh_request(settings, request)
             post = PostDraft(**payload['post'])
+            if (request.id != row['request_id'] or post.request_id != request.id
+                    or request.category != category or post.category != category
+                    or (plan and (not matches_request(request, plan) or not matches_post(post, plan)
+                                  or request.provenance.get('daily_plan') != plan))):
+                raise ValueError('Recovery packet identity or plan mismatch')
             info = settings.config['categories'][category]
             validate_post(post, info)
             review = payload['review']

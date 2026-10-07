@@ -230,18 +230,28 @@ title_selector = ".se-documentTitle .se-text-paragraph"
 body_selector = ".se-main-container .se-component.se-text .se-text-paragraph"
 uploaded_image_selector = ".se-component.se-image img"
 
-# Measurement window only: continue one/day after October 18 until the owner decides.
+# Measurement window only: continue this plan until the owner decides; no automatic expiry.
 # No topic briefs or external schedules are created by this configuration.
 [operating_plan]
 enabled = true
+version = "weekly-2221-v1"
+start_date = "2026-10-05"
+effective_date = "2026-10-12"
+measurement_start = "2026-10-12"
+measurement_end = "2026-10-25"
+review_not_before = "2026-10-28"
+measurement_post_hours = 72
+weekdays = ["parenting", "origins", "investment", "exercise", "investment", "parenting", "origins"]
+investment_modes = ["", "", "life-economics-v1", "", "weekly-policy-v1", "", ""]
+
+[operating_plan.previous]
 version = "weekly-4111-v1"
 investment_mode = "weekly-policy-v1"
-start_date = "2026-10-05"
 effective_date = "2026-10-06"
 measurement_end = "2026-10-18"
 weekdays = ["parenting", "origins", "parenting", "exercise", "investment", "parenting", "parenting"]
 
-[operating_plan.previous]
+[operating_plan.previous.previous]
 version = "daily-deep-511-v1"
 weekdays = ["parenting", "parenting", "exercise", "parenting", "investment", "parenting", "parenting"]
 

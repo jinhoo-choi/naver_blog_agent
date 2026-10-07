@@ -166,7 +166,12 @@ class NaverDraftWriter:
 
     def preflight(self, post: PostDraft) -> None:
         self.editor_url(post.category)
-        if post.provenance.get('investment_mode') == 'weekly-policy-v1':
+        mode = (post.provenance.get('daily_plan') or {}).get('investment_mode') or post.provenance.get('investment_mode')
+        if mode == 'life-economics-v1':
+            raise RuntimeError('Life-economics requires Work official-source checks before saving')
+        if mode and mode != 'weekly-policy-v1':
+            raise RuntimeError('Unknown investment route')
+        if mode == 'weekly-policy-v1':
             raise RuntimeError('Weekly policy requires Work source and company-evidence checks before saving')
         if post.category == 'origins':
             from .inputs import origin_photo_metadata

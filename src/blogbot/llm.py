@@ -102,6 +102,7 @@ def _source_urls(payload: dict, observed: list[str], required: bool = True) -> l
 def _checked_review(payload, response, request):
     if request.category == 'cooking' or not payload:
         return payload
+    payload = dict(payload)  # Preserve the raw model decision for provenance/diagnostics.
     checks = payload.get('source_checks', [])
     evidence = request.provenance.get('primary_evidence', {})
     read_urls = [_get(_get(item, 'action'), 'url')
@@ -129,6 +130,26 @@ def _checked_review(payload, response, request):
     return payload
 
 
+def _review_context(request):
+    """Bind only evidence actually supplied to this reviewer to its cached response."""
+    return {'request_id': request.id, 'category': request.category,
+            'provenance': {key: request.provenance[key] for key in (
+                'primary_evidence', 'reference_evidence', 'life_economics_checks')
+                if key in request.provenance}}
+
+
+def _cached_review_request(request, cached):
+    """Legacy responses without a receipt may prove reads through their own tools only."""
+    context = cached.get('context', {})
+    provenance = {key: value for key, value in request.provenance.items()
+                  if key not in {'primary_evidence', 'reference_evidence', 'life_economics_checks'}}
+    if context:
+        if context.get('request_id') != request.id or context.get('category') != request.category:
+            raise ValueError('Cached review evidence identity mismatch')
+        provenance.update(context.get('provenance', {}))
+    return replace(request, provenance=provenance)
+
+
 def _historical_source_urls(journal, request_id):
     if journal is None or not journal.exists():
         return []
@@ -139,7 +160,7 @@ def _historical_source_urls(journal, request_id):
                 and not entry.get('error') and entry.get('response_id')):
             response_ids.add(entry['response_id'])
     urls = []
-    for path in (journal.parent / 'response-cache').glob(f'{today_kst()}-*.json'):
+    for path in sorted((journal.parent / 'response-cache').glob(f'{today_kst()}-*.json')):
         item = json.loads(path.read_text())
         if item.get('response', {}).get('id') in response_ids:
             urls.extend(_extract_urls(item['response']))
@@ -268,11 +289,21 @@ source_urls와 본문 URL은 아래 실제 관찰 URL 중에서만 선택하세�
     def _draft_data(post: PostDraft) -> dict:
         return {k: v for k, v in post.__dict__.items() if k != "photos"}
 
-    def review(self, post: PostDraft, category_info: dict, request: ContentRequest) -> dict:
+    def review(self, post: PostDraft, category_info: dict, request: ContentRequest,
+               *, cache_only: bool = False, single_attempt: bool = False) -> dict:
         category_info = routed_category_info(category_info, request.category, request.data.get('editorial_type'), request.data.get('content_style'), investment_mode=request.provenance.get('investment_mode'))
+        original_identity = json.dumps([self.review_model, self._draft_data(post), category_info,
+                                        request.prompt_data()], sort_keys=True)
         from .research import prepare_reference_evidence
-        request = prepare_reference_evidence(
-            self.journal.parent if self.journal else None, request, post.source_urls)
+        if not cache_only:
+            request = prepare_reference_evidence(
+                self.journal.parent if self.journal else None, request, post.source_urls)
+        supplied = {_source_identity(e['url'])
+                    for e in request.provenance.get('reference_evidence', []) if e.get('text')}
+        primary = request.provenance.get('primary_evidence', {})
+        if primary.get('text'):
+            supplied.update(_source_identity(primary[k]) for k in ('url', 'viewer_url') if k in primary)
+        sources_to_open = [u for u in post.source_urls if _source_identity(u) not in supplied]
         rules = "\n".join(f"- {r}" for r in category_info.get("rules", []))
         prompt = f"""
 {routed_prompt(self.reviewer_prompt, request.category, request.data.get('editorial_type'), request.data.get('content_style'), role='reviewer', investment_mode=request.provenance.get('investment_mode'))}
@@ -285,6 +316,8 @@ source_urls와 본문 URL은 아래 실제 관찰 URL 중에서만 선택하세�
 오늘 한국시간 기준일: {today_kst().isoformat()}
 작성 기준일은 위 날짜와 대조한다. UTC 날짜나 모델 내부 날짜로 어제/내일을 추정하지 않는다.
 카테고리 규칙:\n{rules}
+본문이 제공되지 않은 출처(핵심 주장에 쓰인 URL부터 직접 열기):
+{json.dumps(sources_to_open, ensure_ascii=False)}
 
 원본 입력 JSON:\n{json.dumps(request.prompt_data(), ensure_ascii=False)}
 초안 JSON:\n{json.dumps(self._draft_data(post), ensure_ascii=False)}
@@ -293,11 +326,30 @@ source_urls와 본문 URL은 아래 실제 관찰 URL 중에서만 선택하세�
             "tools": [{"type": "web_search"}], "tool_choice": "required",
             "max_tool_calls": 3,
         }
+        if single_attempt:
+            from .images import atomic_json
+            from .pre_review import checkpoint_path
+            path = checkpoint_path(self.journal.parent, request.id).with_suffix('.source-review-input.json')
+            path.parent.mkdir(parents=True, exist_ok=True)
+            digest = hashlib.sha256(original_identity.encode()).hexdigest()
+            if path.exists():
+                saved = json.loads(path.read_text())
+                if saved['identity'] != digest:
+                    raise ResponseFailure('reviewer', 'source_review_input_changed')
+                prompt = saved['prompt']
+                request = _cached_review_request(request, saved)
+            elif cache_only:
+                raise ResponseFailure('reviewer', 'cached_review_input_unavailable')
+            else:
+                atomic_json(path, {'identity': digest, 'prompt': prompt,
+                                   'context': _review_context(request)})
         payload, response = request_json(
             self.client, model=self.review_model, stage="reviewer", request_id=request.id,
             schema=REVIEW_SCHEMA, journal=self.journal, max_output_tokens=6000,
-            retry_output_tokens=10000, reasoning={"effort": "low"}, input=prompt, **search,
+            retry_output_tokens=None if single_attempt else 10000,
+            reasoning={"effort": "low"}, input=prompt, cache_only=cache_only, **search,
             include=["web_search_call.action.sources"] if search else [],
+            cache_context=_review_context(request),
         )
         return _checked_review(payload, response, request)
 

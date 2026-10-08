@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sqlite3
 from dataclasses import asdict, replace
 
@@ -42,6 +43,7 @@ from .presentation import normalize_structure, validate_structure
 from .research import prepare_request
 
 SOURCE_REVIEW_VERSION = 'source-review-once-v1'
+ATTRIBUTION_REVIEW_VERSION = 'source-review-attribution-once-v1'
 
 
 def source_review_hashes(post, request):
@@ -52,6 +54,42 @@ def source_review_hashes(post, request):
     return {'version': SOURCE_REVIEW_VERSION,
             'original_manuscript_sha256': digest(candidate_from_post(post).payload),
             'request_sha256': digest(request.prompt_data())}
+
+
+def attribution_review_hashes(previous_claim: bytes, previous_input: bytes, corrected_post):
+    """Bind one explicit attribution exception to immutable prior evidence and exact new text."""
+    packet = json.loads(previous_claim)
+    request = ContentRequest(**packet['input'])
+    identity = source_review_hashes(corrected_post, request)
+    return {'version': ATTRIBUTION_REVIEW_VERSION,
+            'request_sha256': identity['request_sha256'],
+            'previous_claim_sha256': hashlib.sha256(previous_claim).hexdigest(),
+            'previous_input_sha256': hashlib.sha256(previous_input).hexdigest(),
+            'previous_review_sha256': hashlib.sha256(json.dumps(
+                packet['review'], sort_keys=True, ensure_ascii=False).encode()).hexdigest(),
+            'corrected_manuscript_sha256': identity['original_manuscript_sha256']}
+
+
+def _attribution_correction(post, replacement):
+    """Replace one approved parenthesis in the final reference section, changing nothing else."""
+    if not isinstance(replacement, dict) or set(replacement) != {'old', 'new'}:
+        raise ValueError('Attribution correction requires one exact replacement')
+    old, new = replacement['old'], replacement['new']
+    if (any(not isinstance(value, str) or not re.fullmatch(r'\([^()\r\n]+\)', value)
+            for value in (old, new))
+            or old == new or post.body.count(old) != 1):
+        raise ValueError('Attribution correction must change one parenthetical clause')
+    sections = list(re.finditer(r'^#{2,3}\s*(?:참고\s*자료|참고\s*문헌|출처)\s*$',
+                                post.body, re.MULTILINE))
+    if not sections or old not in post.body[sections[-1].end():]:
+        raise ValueError('Attribution correction must stay in the final reference section')
+    if re.search(r'^#{2,3}\s', post.body[sections[-1].end():], re.MULTILINE):
+        raise ValueError('Attribution correction reference section must be last')
+    corrected = post.body.replace(old, new, 1)
+    urls = r'https?://[^\s<>\]\)]+'
+    if re.findall(urls, post.body, re.IGNORECASE) != re.findall(urls, corrected, re.IGNORECASE):
+        raise ValueError('Attribution correction cannot change body source URLs')
+    return replace(post, body=corrected)
 
 
 def rejected_checkpoint(settings, request, *, raw=False):
@@ -125,6 +163,7 @@ def editorial_patch(settings, post):
 
 def _finish_recovered_post(settings, conn, post, request, review):
     from .pipeline import complete_media
+    settings.artifact_dir.mkdir(parents=True, exist_ok=True)
     post.quality_score, post.status = review_result(review)[0], 'TEXT_APPROVED'
     existing = conn.execute('SELECT id FROM posts WHERE request_id=?', (post.request_id,)).fetchone()
     if existing:
@@ -246,6 +285,160 @@ def _recover_source_review_locked(settings, conn, row, candidate, plan):
             # A DB/media checkpoint may have completed before the attempt update.
             # Leave any media resume to its existing identity-bound path.
             result = {'status': existing[0], 'reason': 'source_review_post_already_prepared'}
+        else:
+            result = _finish_recovered_post(settings, conn, post, request, review)
+    with conn:
+        conn.execute('UPDATE attempts SET status=? WHERE id=?', (result['status'], row['id']))
+    return result
+
+
+def recover_attribution_review(settings, conn, request_id):
+    """Explicit recover-only target; never enumerate candidates or grant a third review."""
+    if not isinstance(request_id, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,79}', request_id):
+        raise ValueError('Attribution review requires one valid existing request ID')
+    result = {'request_id': request_id, 'stage': 'source_review_attribution'}
+    try:
+        plan = active_plan(settings)
+        if plan and plan.get('reservation'):
+            return {**result, **reservation_result(plan)}
+        with media_claim(settings.db_path.parent, 'source-review:' + str(today_kst())):
+            return {**result, **_recover_attribution_locked(settings, conn, request_id, plan)}
+    except MediaBusy:
+        return {**result, 'status': 'MANUAL_CHECK_REQUIRED', 'reason': 'source_review_in_progress'}
+    except (OpenAIError, OSError, RuntimeError, ValueError, TypeError, KeyError, sqlite3.Error) as exc:
+        return {**result, 'status': 'ERROR', 'error': type(exc).__name__,
+                'reason': getattr(exc, 'reason', 'attribution_review_recovery_failed')}
+
+
+def _recover_attribution_locked(settings, conn, request_id, plan):
+    from .core import load_post
+    from .editorial import routed_category_info
+    from .pipeline import complete_media
+    from .pre_review import candidate_from_post, checkpoint_path, inspect_candidate
+    directory = settings.db_path.parent
+    rows = conn.execute('SELECT * FROM attempts WHERE request_id=? AND day=?',
+                        (request_id, str(today_kst()))).fetchall()
+    if len(rows) != 1:
+        raise ValueError('Attribution review target is unknown or stale')
+    row = rows[0]
+    if row['status'] not in {'DROP_REVIEW', 'TEXT_APPROVED', 'IMAGES_PENDING', 'APPROVED', 'SAVED_NAVER'}:
+        raise ValueError('Attribution review target is not a completed review')
+    if plan and not attempt_matches(row, plan):
+        raise ValueError('Attribution review attempt plan mismatch')
+    checkpoint = checkpoint_path(directory, request_id)
+    previous_claim = checkpoint.with_suffix('.source-review.json').read_bytes()
+    previous_input = checkpoint.with_suffix('.source-review-input.json').read_bytes()
+    previous = json.loads(previous_claim)
+    frozen = json.loads(previous_input)
+    request, original = ContentRequest(**previous['input']), PostDraft(**previous['post'])
+    info = settings.config['categories'][request.category]
+    if (request.id != request_id or original.request_id != request_id
+            or request.category != row['category'] or original.category != request.category
+            or original.as_of_date != str(today_kst()) or info['max_daily'] == 0
+            or json.loads(checkpoint.read_text())['request'] != request.prompt_data()
+            or previous['authorization'].get('version') != SOURCE_REVIEW_VERSION
+            or (plan and (not matches_request(request, plan) or not matches_post(original, plan)
+                          or request.provenance.get('daily_plan') != plan))):
+        raise ValueError('Attribution review predecessor identity mismatch')
+    score, decision = review_result(previous['review'])
+    if (decision == 'PASS' or score < int(settings.config['blog']['review_pass_score'])
+            or previous['review']['scores'][0] < 4 or previous['review']['scores'][5] < 4
+            or previous['review'].get('blocking_issues') != [
+                '핵심 주장별 원문 열람·근거 대조가 완료되지 않았습니다.']):
+        raise ValueError('Attribution review requires a completed non-passing source review')
+    routed = routed_category_info(info, request.category, request.data.get('editorial_type'),
+                                  request.data.get('content_style'),
+                                  investment_mode=request.provenance.get('investment_mode'))
+    expected_input = hashlib.sha256(json.dumps(
+        [settings.review_model or settings.openai_model, BlogLLM._draft_data(original),
+         routed, request.prompt_data()],
+        sort_keys=True).encode()).hexdigest()
+    if (frozen.get('identity') != expected_input or not frozen.get('prompt')
+            or frozen.get('context', {}).get('request_id') != request_id
+            or frozen.get('context', {}).get('category') != request.category):
+        raise ValueError('Attribution review predecessor input mismatch')
+    key = hashlib.sha256(request_id.encode()).hexdigest()
+    manifest_path = (settings.root / 'editorial' / str(today_kst())
+                     / f'{key}-source-review-attribution.enc')
+    try:
+        manifest = json.loads(Fernet(os.environ['BLOG_BUNDLE_KEY']).decrypt(manifest_path.read_bytes()))
+    except InvalidToken as exc:
+        raise ValueError('Attribution authorization decryption failed') from exc
+    if (set(manifest) != {'request_id', 'as_of_date', 'replacement', 'review_attribution'}
+            or manifest['request_id'] != request_id or manifest['as_of_date'] != str(today_kst())):
+        raise ValueError('Attribution authorization identity mismatch')
+    corrected = _attribution_correction(original, manifest['replacement'])
+    post, issues, _ = inspect_candidate(
+        candidate_from_post(corrected), request, info,
+        settings.config.get('editorial', {}).get('require_structure', True))
+    if issues or post is None:
+        raise ValueError('Attribution correction failed manuscript checks')
+    if candidate_from_post(post).payload != candidate_from_post(corrected).payload:
+        raise ValueError('Attribution correction would change other manuscript content')
+    # Preserve topic, provenance and other non-manuscript fields from the first packet.
+    post = corrected
+    authorization = attribution_review_hashes(previous_claim, previous_input, post)
+    if manifest['review_attribution'] != authorization:
+        raise ValueError('Attribution authorization hashes do not match')
+    if conn.execute("SELECT 1 FROM posts WHERE status IN ('SAVING','SAVE_UNCERTAIN') LIMIT 1").fetchone():
+        return {'status': 'MANUAL_CHECK_REQUIRED', 'reason': 'save_outcome_requires_check'}
+    if plan:
+        try:
+            if saved_count(conn, plan):
+                return {'status': 'DAILY_PLAN_LIMIT', 'reason': 'source_review_daily_limit'}
+        except SaveDateRequired:
+            return {'status': 'MANUAL_CHECK_REQUIRED', 'reason': 'save_date_reconciliation_required'}
+    occupied = conn.execute(
+        "SELECT COUNT(*) FROM posts WHERE as_of_date=? AND request_id!=? AND status IN "
+        "('APPROVED','TEXT_APPROVED','IMAGES_PENDING','SAVED_NAVER','SAVING','SAVE_UNCERTAIN')",
+        (str(today_kst()), request_id)).fetchone()[0]
+    if occupied >= int(settings.config['blog']['daily_max']):
+        return {'status': 'DAILY_PLAN_LIMIT', 'reason': 'source_review_daily_limit'}
+    path = checkpoint.with_suffix('.source-review-attribution.json')
+    identity = {'authorization': authorization, 'replacement': manifest['replacement'],
+                'post': asdict(post), 'input': asdict(request)}
+    if path.exists():
+        packet = json.loads(path.read_text())
+        if any(packet.get(k) != value for k, value in identity.items()):
+            raise ValueError('Attribution review changed after claim')
+        resumed = True
+    else:
+        if row['status'] != 'DROP_REVIEW' or conn.execute(
+                'SELECT 1 FROM posts WHERE request_id=?', (request_id,)).fetchone():
+            raise ValueError('Attribution review cannot replace an existing prepared post')
+        packet = identity
+        with path.open('x', encoding='utf-8') as stream:
+            json.dump(packet, stream, ensure_ascii=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        resumed = False
+    if 'review' in packet:
+        review = packet['review']
+    else:
+        llm = BlogLLM(settings.openai_api_key, settings.openai_model, settings.root,
+                      settings.review_model, directory / 'usage.jsonl')
+        review = llm.review(post, info, request, cache_only=resumed, single_attempt=True,
+                            attribution_review=True)
+        atomic_json(path, {**packet, 'review': review})
+    score, decision = review_result(review)
+    result = {'status': 'DROP_REVIEW', 'score': score, 'reason': 'attribution_review_not_approved'}
+    other_titles = [item[0] for item in conn.execute(
+        'SELECT title FROM posts WHERE request_id!=?', (request_id,))]
+    if max_title_similarity(post.title, other_titles) >= float(settings.config['blog']['max_similarity']):
+        result['reason'] = 'duplicate_title'
+    elif decision == 'PASS' and score >= int(settings.config['blog']['review_pass_score']):
+        existing = conn.execute('SELECT * FROM posts WHERE request_id=?', (request_id,)).fetchone()
+        if existing:
+            ready = load_post(existing)
+            if (ready.fingerprint != post.fingerprint or ready.request_id != request_id
+                    or candidate_from_post(ready).payload != candidate_from_post(post).payload):
+                raise ValueError('Attribution media checkpoint identity mismatch')
+            if ready.status in {'APPROVED', 'SAVED_NAVER'}:
+                result = {'status': ready.status, 'post_id': existing['id']}
+            elif ready.status in {'TEXT_APPROVED', 'IMAGES_PENDING'}:
+                result = complete_media(settings, conn, existing['id'], ready, request, review)
+            else:
+                raise ValueError('Attribution media checkpoint status requires reconciliation')
         else:
             result = _finish_recovered_post(settings, conn, post, request, review)
     with conn:

@@ -104,6 +104,16 @@ KIS의 07:00·07:15·07:40 실제 실행 시각과 `community.snapshot_ready_hou
 - 심사에 실제 전달한 원문 증거를 해당 응답과 함께 보존합니다. 나중에 가져온 자료로 과거 검색-only 응답을 소급 승인하지 않습니다. NASM·NSCA·Cleveland Clinic 등 허용된 공식 HTML도 기존 3개·30,000자 제한을 유지하며, 본문을 제공하지 못한 URL은 검수자가 웹 도구로 직접 열어야 합니다.
 - 새 심사도 24점 이상, 정확성·안전성 각각 4점 이상과 원문 대조를 통과해야 합니다. 실패 시 그대로 보류합니다. 통과한 동일 ID만 기존 이미지·임시저장 경로로 넘기며, 실제 저장일 기준 하루 1편과 불확실한 저장 차단을 유지합니다. 사진 파일 경로가 바뀐 복원본은 입력 불일치로 보류하므로 자동으로 다른 경로를 허용하지 않습니다.
 
+#### 별도 승인된 참고자료 귀속 설명의 고정 1회 예외
+
+첫 명시적 심사가 원문 대조 문제로 반려된 뒤 소유자가 참고자료 괄호 설명의 최소 수정과 심사 1회를 추가 승인한 경우에만 사용합니다. 최초 심사 패킷·고정 입력·응답 캐시·비용 기록과 기존 원고 수정/자동 복구 한도는 덮어쓰거나 삭제하지 않습니다. 세 번째 슬롯이나 일반 재시도 횟수를 만들지 않습니다.
+
+- 새 암호화 파일은 `editorial/YYYY-MM-DD/<request_id SHA256>-source-review-attribution.enc`입니다. 최상위 필드는 `request_id`, `as_of_date`, `replacement`의 `old`/`new`, `review_attribution`뿐입니다. 수정은 마지막 참고자료 구역의 한 쌍 괄호 안 설명 1곳에 한정하며 다른 본문·제목·태그·출처 URL은 바뀔 수 없습니다.
+- `review_attribution`은 `attribution_review_hashes(최초 심사 패킷 bytes, 최초 고정 입력 bytes, 수정 PostDraft)`의 결과입니다. 버전은 `source-review-attribution-once-v1`이며 원래 요청, 이전 패킷/입력의 파일 바이트, 이전 비공개 검수 결과, 수정 원고를 각각 SHA256으로 고정합니다. JSON 값은 기존 `sort_keys=True, ensure_ascii=False` 직렬화를 유지합니다. 완료된 비통과 원문 심사가 없거나 해시가 달라지면 호출하지 않습니다.
+- 자동 `prepare`/일반 `recover`는 이 예외를 선택하지 않습니다. 별도 승인 후 `Blog API Prepare`를 수동 실행할 때 `mode=recover`와 `attribution_review_request_id=<기존 요청 ID>`를 함께 지정합니다. CLI는 `python -m blogbot.cloud recover --attribution-review-request-id <기존 요청 ID>`입니다. 기본값은 빈 문자열이며 다른 모드·잘못된 ID·과거 날짜·다른 계획은 거부합니다.
+- 선택 경로는 해당 기존 패킷만 처리하고 후보 수집·순위 산정·새 예약·작성·재작성·자동 복구 반복을 실행하지 않습니다. 최신 수동 저장 영수증은 기존 DB에 반영해 실제 저장일 기준 한도를 확인하되 질문 큐와 문맥은 새로 채우지 않습니다. 기존 workflow 동시 실행 잠금·권한·스케줄을 유지합니다.
+- 별도 `.source-review-attribution.json`과 `.source-review-attribution-input.json`에 호출 전 단일 사용을 기록합니다. 기존 심사 모델, 6,000 출력 토큰, 웹 도구 최대 3회, 잘림 재시도 없음, 불확실 결과의 정확한 캐시만 재사용하는 원칙을 유지합니다. 다시 반려되면 추가 호출 없이 중단하고, 통과한 동일 원고만 기존 미사용 이미지/임시저장 계획을 이어갑니다.
+
 설정: `OPENAI_API_KEY`(기존), `BLOG_BUNDLE_KEY`(새 키), `BLOG_SEED_JSON`(비공개 질문 큐) Secrets.
 준비 예약은 cron-job.org의 활성 스위치로 제어합니다. `BLOG_API_ENABLED`는 외부 dispatch를 중지하지 않습니다. 기존 `BLOG_SCHEDULE_ENABLED=false`를 유지합니다.
 최초 `bootstrap`은 모델 접근 확인과 암호화 상태 초기화만 하며 유료 콘텐츠를 생성하지 않습니다.

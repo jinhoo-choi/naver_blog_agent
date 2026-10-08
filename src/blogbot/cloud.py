@@ -398,7 +398,12 @@ def main():
     parser.add_argument('--file', type=Path)
     parser.add_argument('--destination', type=Path)
     parser.add_argument('--receipts', type=Path)
+    parser.add_argument('--attribution-review-request-id', default='')
     args = parser.parse_args()
+    if args.attribution_review_request_id and (
+            args.mode != 'recover' or not re.fullmatch(
+                r'[A-Za-z0-9][A-Za-z0-9_-]{0,79}', args.attribution_review_request_id)):
+        parser.error('attribution review selector requires recover and one valid existing request ID')
     if args.mode == 'unpack':
         if args.receipts is None:
             parser.error('unpack requires --receipts from the verified Work save ledger')
@@ -432,10 +437,13 @@ def main():
     try:
         plan = active_plan(settings)
         reserved = bool(args.mode in {'prepare', 'recover'} and plan and plan.get('reservation'))
-        if not reserved:
+        if not reserved and not args.attribution_review_request_id:
             seed_inputs(settings)
             from .weekly_policy import import_environment
             import_environment(settings, os.environ.get('BLOG_POLICY_EVIDENCE_JSON', ''))
+        elif not reserved and args.attribution_review_request_id:
+            # Import authoritative save receipts without seeding any candidates or context.
+            import_manual_saves(settings)
         if reserved:
             results = [reservation_result(plan)]
         elif args.mode == 'probe':
@@ -459,11 +467,13 @@ def main():
         else:
             daily_target = min(getattr(settings, 'daily_count', 3),
                                getattr(settings, 'config', {}).get('blog', {}).get('daily_max', 3))
+            explicit = ({'attribution_review_request_id': args.attribution_review_request_id}
+                        if args.attribution_review_request_id else {})
             results = run_daily(settings, count=daily_target, save_to_naver=False,
-                                retry_failed=args.mode == 'recover')
-            if getattr(settings, 'config', {}).get('categories'):
+                                retry_failed=args.mode == 'recover', **explicit)
+            if not explicit and getattr(settings, 'config', {}).get('categories'):
                 results = recover_preparation(settings, results, daily_target)
-        if args.mode != 'probe' and not reserved:
+        if args.mode != 'probe' and not reserved and not args.attribution_review_request_id:
             with closing(connect_db(settings.db_path)) as conn:
                 unresolved = conn.execute(
                     "SELECT COUNT(*) FROM attempts WHERE day=? AND status IN ('ERROR', 'STARTED')",
@@ -481,7 +491,7 @@ def main():
                                         'DROP_REVIEW', 'DROP_DUPLICATE'} for r in results)
         # A no-op/partial run must not report success when a category has no deliverable.
         categories = getattr(settings, 'config', {}).get('categories', {})
-        if categories and not reserved:
+        if categories and not reserved and not args.attribution_review_request_id:
             with closing(connect_db(settings.db_path)) as conn:
                 ready = ready_categories(settings, conn)
             expected = {key for key, info in categories.items()

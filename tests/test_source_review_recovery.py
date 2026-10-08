@@ -1,6 +1,7 @@
 """A dated operator correction can authorize one isolated review, never a rewrite."""
 import hashlib
 import json
+import os
 from dataclasses import asdict, replace
 from types import SimpleNamespace as NS
 
@@ -20,7 +21,13 @@ from blogbot.pre_review import (
     revision_path,
     run_pre_review,
 )
-from blogbot.recovery import recover_rejected, source_review_hashes
+from blogbot.recovery import (
+    _attribution_correction,
+    attribution_review_hashes,
+    recover_attribution_review,
+    recover_rejected,
+    source_review_hashes,
+)
 from blogbot.responses import ResponseFailure
 
 SOURCE = 'https://www.nsca.com/education/articles/kinetic-select/face-pull-machine/'
@@ -337,3 +344,278 @@ def test_finished_post_is_not_downgraded_after_attempt_update_interruption(state
     assert len(state.calls) == len(state.media) == 1
     with connect_db(state.settings.db_path) as conn:
         assert conn.execute('SELECT status FROM posts').fetchone()[0] == 'APPROVED'
+
+
+@pytest.fixture
+def attribution(state, monkeypatch):
+    from blogbot.editorial import routed_category_info
+    from blogbot.llm import _review_context
+    from blogbot.pre_review import candidate_from_post
+    activate_plan(state)
+    directory = state.settings.db_path.parent
+    previous = replace(state.post, body=state.post.body + '\n\n## 참고자료\n\n- Clinic (기존 출처 설명)')
+    previous, issues, _ = inspect_candidate(candidate_from_post(previous), state.request, INFO)
+    assert not issues
+    checked = review(pass_review=False)
+    checked['blocking_issues'] = ['핵심 주장별 원문 열람·근거 대조가 완료되지 않았습니다.']
+    checkpoint = checkpoint_path(directory, state.request.id)
+    prior_path = checkpoint.with_suffix('.source-review.json')
+    prior_input = checkpoint.with_suffix('.source-review-input.json')
+    atomic_json(prior_path, {'authorization': source_review_hashes(state.post, state.request),
+                            'post': asdict(previous), 'input': asdict(state.request), 'review': checked})
+    routed = routed_category_info(INFO, 'exercise', None, None, investment_mode=None)
+    identity = hashlib.sha256(json.dumps(
+        [state.settings.review_model, BlogLLM._draft_data(previous), routed, state.request.prompt_data()],
+        sort_keys=True).encode()).hexdigest()
+    atomic_json(prior_input, {'identity': identity, 'prompt': 'Original source review input',
+                              'context': _review_context(state.request)})
+    replacement = {'old': '(기존 출처 설명)', 'new': '(범위를 명확히 한 출처 설명)'}
+    corrected = _attribution_correction(previous, replacement)
+    manifest = {'request_id': state.request.id, 'as_of_date': str(today_kst()),
+                'replacement': replacement, 'review_attribution': attribution_review_hashes(
+                    prior_path.read_bytes(), prior_input.read_bytes(), corrected)}
+    path = state.patch_path.with_name(state.patch_path.stem + '-source-review-attribution.enc')
+    def save_manifest(value=manifest):
+        path.write_bytes(Fernet(os.environ['BLOG_BUNDLE_KEY']).encrypt(
+            json.dumps(value, ensure_ascii=False).encode()))
+    save_manifest()
+    calls = []
+    class Reviewer:
+        _draft_data = staticmethod(BlogLLM._draft_data)
+        def __init__(self, *args):
+            assert args[1] == state.settings.openai_model and args[3] == state.settings.review_model
+        def review(self, post, info, request, **options):
+            calls.append((post, request, options))
+            return review()
+        def rewrite(self, *args, **kwargs): pytest.fail('No extra writer/rewrite')
+    monkeypatch.setattr('blogbot.recovery.BlogLLM', Reviewer)
+    protected = {p: p.read_bytes() for p in (
+        prior_path, prior_input, state.patch_path, directory / 'usage.jsonl',
+        directory / 'auto-recovery.json', revision_path(directory, state.request.id))}
+    def recover():
+        with connect_db(state.settings.db_path) as conn:
+            return recover_attribution_review(state.settings, conn, state.request.id)
+    return NS(state=state, previous=previous, corrected=corrected, manifest=manifest,
+              save_manifest=save_manifest, path=path, calls=calls, recover=recover,
+              protected=protected, prior_path=prior_path, prior_input=prior_input,
+              claim=checkpoint.with_suffix('.source-review-attribution.json'))
+
+
+def test_explicit_attribution_once_preserves_predecessor_and_original_budgets(attribution):
+    a = attribution
+    assert a.recover()['status'] == 'APPROVED'
+    assert len(a.calls) == len(a.state.media) == 1
+    post, request, options = a.calls[0]
+    assert replace(post, quality_score=0, status=a.corrected.status) == a.corrected
+    assert request.id == a.state.request.id
+    assert options == {'cache_only': False, 'single_attempt': True, 'attribution_review': True}
+    assert a.recover()['status'] == 'APPROVED'
+    assert len(a.calls) == 1
+    for path, original in a.protected.items():
+        assert path.read_bytes() == original
+    with connect_db(a.state.settings.db_path) as conn:
+        assert conn.execute('SELECT COUNT(*) FROM attempts').fetchone()[0] == 1
+        assert conn.execute('SELECT COUNT(*) FROM posts').fetchone()[0] == 1
+
+
+@pytest.mark.parametrize('field', ['request_sha256', 'previous_claim_sha256', 'previous_input_sha256',
+                                  'previous_review_sha256', 'corrected_manuscript_sha256', 'version'])
+def test_attribution_manifest_binds_every_identity(attribution, field):
+    a = attribution
+    manifest = json.loads(json.dumps(a.manifest))
+    manifest['review_attribution'][field] = 'wrong'
+    a.save_manifest(manifest)
+    assert a.recover()['status'] == 'ERROR'
+    assert a.calls == [] and not a.claim.exists()
+
+
+@pytest.mark.parametrize('mutation', ['missing', 'request_id', 'date', 'extra', 'new_source'])
+def test_attribution_requires_exact_encrypted_scope(attribution, mutation):
+    a = attribution
+    manifest = json.loads(json.dumps(a.manifest))
+    if mutation == 'missing': a.path.unlink()
+    else:
+        if mutation == 'request_id': manifest['request_id'] = 'other'
+        if mutation == 'date': manifest['as_of_date'] = '2026-09-29'
+        if mutation == 'extra': manifest['another_review'] = True
+        if mutation == 'new_source': manifest['source_urls'] = ['https://new.example/source']
+        a.save_manifest(manifest)
+    assert a.recover()['status'] == 'ERROR'
+    assert a.calls == []
+
+
+@pytest.mark.parametrize('part', ['claim', 'input', 'review_missing', 'review_passed', 'unsafe'])
+def test_attribution_requires_completed_immutable_rejected_predecessor(attribution, part):
+    a = attribution
+    if part == 'input':
+        a.prior_input.write_bytes(a.prior_input.read_bytes() + b' ')
+    else:
+        packet = json.loads(a.prior_path.read_text())
+        if part == 'claim': packet['post']['body'] += '\nchanged'
+        if part == 'review_missing': packet.pop('review')
+        if part == 'review_passed': packet['review'] = review()
+        if part == 'unsafe': packet['review']['scores'] = [3, 5, 5, 5, 5, 5]
+        atomic_json(a.prior_path, packet)
+    assert a.recover()['status'] == 'ERROR'
+    assert a.calls == []
+
+
+def test_attribution_failure_never_buys_third_review(attribution, monkeypatch):
+    a = attribution
+    class Reject:
+        _draft_data = staticmethod(BlogLLM._draft_data)
+        def __init__(self, *args): pass
+        def review(self, *args, **options):
+            a.calls.append(options)
+            return review(pass_review=False)
+    monkeypatch.setattr('blogbot.recovery.BlogLLM', Reject)
+    for _ in range(3):
+        assert a.recover()['reason'] == 'attribution_review_not_approved'
+    assert len(a.calls) == 1 and a.state.media == []
+    for path, original in a.protected.items():
+        assert path.read_bytes() == original
+
+
+def test_attribution_uncertainty_is_cache_only_and_changed_patch_cannot_reset_it(attribution, monkeypatch):
+    a = attribution
+    class Uncertain:
+        _draft_data = staticmethod(BlogLLM._draft_data)
+        def __init__(self, *args): pass
+        def review(self, *args, cache_only, **kwargs):
+            a.calls.append(cache_only)
+            if not cache_only: raise TimeoutError('uncertain')
+            raise ResponseFailure('reviewer', 'cached_response_unavailable')
+    monkeypatch.setattr('blogbot.recovery.BlogLLM', Uncertain)
+    assert a.recover()['status'] == 'ERROR'
+    assert a.recover()['reason'] == 'cached_response_unavailable'
+    assert a.calls == [False, True]
+    manifest = json.loads(json.dumps(a.manifest))
+    manifest['replacement']['new'] = '(다른 출처 설명)'
+    corrected = _attribution_correction(a.previous, manifest['replacement'])
+    manifest['review_attribution'] = attribution_review_hashes(
+        a.prior_path.read_bytes(), a.prior_input.read_bytes(), corrected)
+    a.save_manifest(manifest)
+    assert a.recover()['status'] == 'ERROR'
+    assert a.calls == [False, True]
+
+
+def test_attribution_response_before_checkpoint_interrupt_uses_exact_cache(attribution, monkeypatch):
+    import blogbot.recovery as module
+    a = attribution
+    atomic = module.atomic_json
+    def interrupt(path, payload):
+        if path == a.claim and 'review' in payload: raise OSError('disk interruption')
+        atomic(path, payload)
+    monkeypatch.setattr(module, 'atomic_json', interrupt)
+    assert a.recover()['status'] == 'ERROR'
+    monkeypatch.setattr(module, 'atomic_json', atomic)
+    assert a.recover()['status'] == 'APPROVED'
+    assert [call[2]['cache_only'] for call in a.calls] == [False, True]
+    assert len(a.state.media) == 1
+
+
+@pytest.mark.parametrize('status', ['SAVING', 'SAVE_UNCERTAIN'])
+def test_attribution_holds_uncertain_save_before_review(attribution, status):
+    a = attribution
+    with connect_db(a.state.settings.db_path) as conn:
+        save_post(conn, replace(a.previous, request_id='other', as_of_date='2026-09-29', status=status))
+    assert a.recover()['reason'] == 'save_outcome_requires_check'
+    assert a.calls == []
+
+
+@pytest.mark.parametrize('kind', ['receipt_only', 'older_saved_today', 'unknown_save_day'])
+def test_attribution_keeps_actual_save_day_quota(attribution, kind):
+    a = attribution
+    with connect_db(a.state.settings.db_path) as conn, conn:
+        if kind == 'receipt_only':
+            conn.execute('INSERT INTO save_receipts(request_id,day,category) VALUES(?,?,?)',
+                         ('other', str(today_kst()), 'parenting'))
+        else:
+            post_id = save_post(conn, replace(a.previous, request_id='other',
+                                              as_of_date='2026-09-29', status='SAVED_NAVER'))
+            if kind == 'older_saved_today':
+                conn.execute('UPDATE posts SET draft_saved_at=? WHERE id=?',
+                             (str(today_kst()) + 'T10:00:00+09:00', post_id))
+    assert a.recover()['reason'] == ('save_date_reconciliation_required' if kind == 'unknown_save_day'
+                                    else 'source_review_daily_limit')
+    assert a.calls == []
+
+
+@pytest.mark.parametrize('change', ['stale_attempt', 'unknown_id', 'wrong_plan', 'pending_attempt'])
+def test_attribution_never_adopts_another_or_unfinished_candidate(attribution, change):
+    a = attribution
+    with connect_db(a.state.settings.db_path) as conn, conn:
+        if change == 'stale_attempt': conn.execute("UPDATE attempts SET day='2026-09-29'")
+        if change == 'wrong_plan': conn.execute("UPDATE attempts SET plan_json='{}'")
+        if change == 'pending_attempt': conn.execute("UPDATE attempts SET status='STARTED'")
+        if change == 'unknown_id':
+            result = recover_attribution_review(a.state.settings, conn, 'missing-request')
+        else:
+            result = recover_attribution_review(a.state.settings, conn, a.state.request.id)
+    assert result['status'] == 'ERROR' and a.calls == []
+
+
+def test_attribution_shares_daily_process_lock(attribution):
+    a = attribution
+    with media_claim(a.state.settings.db_path.parent, 'source-review:' + str(today_kst())):
+        assert a.recover()['reason'] == 'source_review_in_progress'
+    assert a.calls == []
+
+
+@pytest.mark.parametrize('old,new,tail', [
+    ('', '(수정)', ''), ('(기존 출처 설명)', '다른 설명', ''),
+    ('(기존 출처 설명)', '(여러\n문장)', ''), ('(기존 출처 설명)', '(기존 출처 설명)', ''),
+    ('(기존 출처 설명)', '(수정)', '\n(기존 출처 설명)'),
+    ('(기존 출처 설명)', '(수정)', '\n## 다른 구역\n본문'),
+    ('(기존 출처 설명)', '(첫째) 다른 내용 (둘째)', ''),
+    ('(기존 출처 설명)', '(안쪽 (둘째))', ''),
+])
+def test_attribution_replacement_is_one_parenthesis_in_final_reference(attribution, old, new, tail):
+    with pytest.raises(ValueError):
+        _attribution_correction(replace(attribution.previous, body=attribution.previous.body + tail),
+                                {'old': old, 'new': new})
+
+
+def test_attribution_frozen_prompt_is_separate_and_keeps_call_caps(attribution, monkeypatch):
+    from blogbot import llm as module
+    a = attribution
+    client = BlogLLM.__new__(BlogLLM)
+    client.client = None
+    client.journal = a.state.settings.db_path.parent / 'usage.jsonl'
+    client.review_model, client.reviewer_prompt = a.state.settings.review_model, 'review instructions'
+    calls, reads = [], []
+    def enrich(directory, request, urls):
+        reads.append(urls)
+        return replace(request, provenance={**request.provenance, 'reference_evidence': [
+            {'url': SOURCE, 'text': 'Direct original source body ' * 20}]})
+    monkeypatch.setattr('blogbot.research.prepare_reference_evidence', enrich)
+    monkeypatch.setattr(module, 'request_json', lambda *args, **kw:
+                        (calls.append(kw) or review(), {'output': []}))
+    for cache_only in (False, True):
+        assert client.review(a.corrected, INFO, a.state.request, cache_only=cache_only,
+                             single_attempt=True, attribution_review=True)['decision'] == 'PASS'
+    assert len(reads) == 1 and calls[0]['input'] == calls[1]['input']
+    assert calls[0]['stage'] == 'reviewer' and calls[0]['request_id'] == a.state.request.id
+    assert calls[0]['max_output_tokens'] == 6000 and calls[0]['retry_output_tokens'] is None
+    assert calls[0]['max_tool_calls'] == 3 and calls[1]['cache_only'] is True
+    assert a.prior_input.read_bytes() == a.protected[a.prior_input]
+    assert a.claim.with_name(a.claim.name.replace('.json', '-input.json')).exists()
+    with pytest.raises(ValueError):
+        client.review(a.corrected, INFO, a.state.request, attribution_review=True)
+
+
+@pytest.mark.parametrize('scheme', ['https', 'HTTPS'])
+def test_attribution_cannot_change_even_already_observed_body_urls(attribution, scheme):
+    post = replace(attribution.previous, body=attribution.previous.body.replace(
+        '(기존 출처 설명)', f'({scheme}://example.org/original)'))
+    with pytest.raises(ValueError, match='body source URLs'):
+        _attribution_correction(post, {'old': f'({scheme}://example.org/original)',
+                                       'new': f'({scheme}://example.org/other)'})
+
+
+def test_attribution_prepares_missing_artifact_directory(attribution):
+    a = attribution
+    a.state.settings.artifact_dir.rmdir()
+    assert a.recover()['status'] == 'APPROVED'
+    assert a.state.settings.artifact_dir.is_dir()
+    assert len(list(a.state.settings.artifact_dir.glob('*.json'))) == 1

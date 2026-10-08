@@ -8,6 +8,11 @@ on:
         type: choice
         options: [prepare, recover, bootstrap, probe]
         default: prepare
+      attribution_review_request_id:
+        description: 'Recover only: explicitly approved existing request with a one-use attribution manifest'
+        type: string
+        required: false
+        default: ''
   # Target: daily 09:00 Asia/Seoul, after the verified >=07:00 community export.
   # cron-job.org job 8527289 must match; a comment does not change its live schedule.
   # No native schedule: avoid duplicate preparation after external cutover.
@@ -63,7 +68,8 @@ jobs:
       - name: Prepare or resume
         env:
           PREPARE_MODE: ${{ inputs.mode || 'prepare' }}
-        run: python -m blogbot.cloud "$PREPARE_MODE"
+          ATTRIBUTION_REVIEW_REQUEST_ID: ${{ inputs.attribution_review_request_id || '' }}
+        run: python -m blogbot.cloud "$PREPARE_MODE" --attribution-review-request-id "$ATTRIBUTION_REVIEW_REQUEST_ID"
       - name: Preserve encrypted checkpoints
         if: always()
         uses: actions/upload-artifact@v4

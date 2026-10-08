@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from contextlib import closing
 from dataclasses import asdict, replace
@@ -133,7 +134,14 @@ def save_pending(settings: Settings) -> list[dict]:
 
 
 def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool = False,
-              retry_failed: bool = False) -> list[dict]:
+              retry_failed: bool = False, attribution_review_request_id: str = '') -> list[dict]:
+    if attribution_review_request_id != '':
+        if (not retry_failed or save_to_naver or not isinstance(attribution_review_request_id, str)
+                or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,79}', attribution_review_request_id)):
+            raise ValueError('Attribution review selector requires recover-only preparation')
+        from .recovery import recover_attribution_review
+        with closing(connect_db(settings.db_path)) as conn:
+            return [recover_attribution_review(settings, conn, attribution_review_request_id)]
     plan = active_plan(settings)
     if plan and plan.get('reservation'):
         return [reservation_result(plan)]

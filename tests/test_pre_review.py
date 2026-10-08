@@ -64,6 +64,31 @@ def test_verified_source_alignment_is_lossless_and_free(tmp_path, req):
     assert not report['model_correction_used']
 
 
+@pytest.mark.parametrize('claimed', [FDA, TRACKED_FDA])
+@pytest.mark.parametrize('reverse', [False, True])
+def test_exact_observed_source_spelling_survives_historical_alias_order(req, claimed, reverse):
+    raw = candidate(source_urls=[claimed], body=candidate().payload['body'] + '\n' + claimed)
+    raw.observed = [FDA, TRACKED_FDA, FDA + '?utm_source=openai']
+    if reverse:
+        raw.observed.reverse()
+    post, issues, changes = inspect_candidate(raw, req, INFO)
+    assert not issues and changes == []
+    assert post.source_urls == [claimed] and post.body == raw.payload['body']
+
+
+def test_alias_fallback_and_recovery_hash_are_independent_of_history_order(req):
+    from blogbot.recovery import source_review_hashes
+    raw = candidate(source_urls=[FDA], body=candidate().payload['body'] + '\n' + FDA)
+    raw.observed = [FDA + '?utm_source=z', FDA + '?utm_source=a']
+    first, issues, changes = inspect_candidate(raw, req, INFO)
+    assert not issues and changes == ['observed_source_alignment']
+    raw.observed.reverse()
+    second, issues, _ = inspect_candidate(raw, req, INFO)
+    assert not issues and first == second
+    assert first.source_urls == [FDA + '?utm_source=a']
+    assert source_review_hashes(first, req) == source_review_hashes(second, req)
+
+
 @pytest.mark.parametrize('other', [
     FDA + '?linkId=100000002918350', FDA + '?linkId=100000002918349&document=2',
     FDA.replace('/sunscreen-', '/other-') + '?linkId=100000002918349',

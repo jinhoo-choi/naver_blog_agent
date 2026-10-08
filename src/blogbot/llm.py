@@ -160,7 +160,7 @@ def _historical_source_urls(journal, request_id):
                 and not entry.get('error') and entry.get('response_id')):
             response_ids.add(entry['response_id'])
     urls = []
-    for path in (journal.parent / 'response-cache').glob(f'{today_kst()}-*.json'):
+    for path in sorted((journal.parent / 'response-cache').glob(f'{today_kst()}-*.json')):
         item = json.loads(path.read_text())
         if item.get('response', {}).get('id') in response_ids:
             urls.extend(_extract_urls(item['response']))

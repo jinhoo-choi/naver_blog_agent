@@ -290,7 +290,10 @@ source_urls와 본문 URL은 아래 실제 관찰 URL 중에서만 선택하세�
         return {k: v for k, v in post.__dict__.items() if k != "photos"}
 
     def review(self, post: PostDraft, category_info: dict, request: ContentRequest,
-               *, cache_only: bool = False, single_attempt: bool = False) -> dict:
+               *, cache_only: bool = False, single_attempt: bool = False,
+               attribution_review: bool = False) -> dict:
+        if attribution_review and not single_attempt:
+            raise ValueError('Attribution review requires its fixed single-attempt slot')
         category_info = routed_category_info(category_info, request.category, request.data.get('editorial_type'), request.data.get('content_style'), investment_mode=request.provenance.get('investment_mode'))
         original_identity = json.dumps([self.review_model, self._draft_data(post), category_info,
                                         request.prompt_data()], sort_keys=True)
@@ -329,7 +332,9 @@ source_urls와 본문 URL은 아래 실제 관찰 URL 중에서만 선택하세�
         if single_attempt:
             from .images import atomic_json
             from .pre_review import checkpoint_path
-            path = checkpoint_path(self.journal.parent, request.id).with_suffix('.source-review-input.json')
+            suffix = ('.source-review-attribution-input.json' if attribution_review
+                      else '.source-review-input.json')
+            path = checkpoint_path(self.journal.parent, request.id).with_suffix(suffix)
             path.parent.mkdir(parents=True, exist_ok=True)
             digest = hashlib.sha256(original_identity.encode()).hexdigest()
             if path.exists():

@@ -262,7 +262,8 @@ def test_bounded_editorial_rewrite_replays_enriched_prompt_exactly(tmp_path, req
 def test_new_prechecked_rejection_cannot_enter_legacy_paid_recovery(tmp_path, req, monkeypatch):
     from blogbot.recovery import recover_rejected
     run_pre_review(tmp_path, NoRepair(), candidate(), req, INFO)
-    settings = NS(db_path=tmp_path/'blog.db', config={'categories': {'investment': {'max_daily': 1}}})
+    settings = NS(root=tmp_path, db_path=tmp_path/'blog.db',
+                  config={'categories': {'investment': {'max_daily': 1}}})
     with connect_db(settings.db_path) as conn:
         conn.execute('INSERT INTO attempts(day,category,request_id,status) VALUES(?,?,?,?)',
                      (str(today_kst()), req.category, req.id, 'DROP_REVIEW'))

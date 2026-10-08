@@ -20,16 +20,38 @@ from .core import (
 )
 from .images import atomic_json
 from .inputs import ContentRequest
-from .llm import BlogLLM, _checked_review, _historical_source_urls, _source_urls
+from .llm import (
+    BlogLLM,
+    _cached_review_request,
+    _checked_review,
+    _historical_source_urls,
+    _source_urls,
+)
 from .planning import (
+    MediaBusy,
+    SaveDateRequired,
     active_plan,
     attempt_matches,
     matches_post,
     matches_request,
+    media_claim,
     reservation_result,
+    saved_count,
 )
 from .presentation import normalize_structure, validate_structure
-from .research import prepare_reference_evidence, prepare_request
+from .research import prepare_request
+
+SOURCE_REVIEW_VERSION = 'source-review-once-v1'
+
+
+def source_review_hashes(post, request):
+    """Operator manifest pins the normalized original text and original request input."""
+    from .pre_review import candidate_from_post
+    def digest(value):
+        return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    return {'version': SOURCE_REVIEW_VERSION,
+            'original_manuscript_sha256': digest(candidate_from_post(post).payload),
+            'request_sha256': digest(request.prompt_data())}
 
 
 def rejected_checkpoint(settings, request, *, raw=False):
@@ -58,28 +80,28 @@ def rejected_checkpoint(settings, request, *, raw=False):
         return DraftCandidate(data, observed)
     reviewer = cached.get('reviewer', {})
     sources = _source_urls(data, observed)
-    request = prepare_reference_evidence(directory, request, sources)
     post = PostDraft(request.category, data['subcategory'], original['payload']['title'],
                      data['title'], data['body'], data['tags'], sources, str(today_kst()),
                      request_id=request.id, photos=request.photos, provenance=request.provenance)
     reviewed_latest = positions.get('reviewer', -1) > max(
         positions.get('writer', -1), positions.get('rewrite', -1))
     return {'post': asdict(post), 'input': asdict(request),
-            'review': _checked_review(reviewer.get('payload', {}), reviewer.get('response', {}), request)
+            'raw_review': reviewer.get('payload', {}) if reviewed_latest else {},
+            'review': _checked_review(reviewer.get('payload', {}), reviewer.get('response', {}),
+                                      _cached_review_request(request, reviewer))
             if reviewed_latest else {}}
 
 
-def editorial_patch(settings, post):
-    """Apply an explicit dated operator correction; never confer approval."""
+def _editorial_patch_data(settings, post):
     key = hashlib.sha256(post.request_id.encode()).hexdigest()
     path = settings.root / 'editorial' / post.as_of_date / f'{key}.enc'
     if not path.exists():
-        return post
+        return {}
     try:
         data = json.loads(Fernet(os.environ['BLOG_BUNDLE_KEY']).decrypt(path.read_bytes()))
     except InvalidToken as exc:
         raise ValueError('Editorial correction decryption failed') from exc
-    if (set(data) - {'request_id', 'as_of_date', 'title', 'body', 'source_urls'}
+    if (set(data) - {'request_id', 'as_of_date', 'title', 'body', 'source_urls', 'review_recovery'}
             or data.get('request_id') != post.request_id
             or data.get('as_of_date') != post.as_of_date):
         raise ValueError('Editorial correction identity mismatch')
@@ -90,12 +112,148 @@ def editorial_patch(settings, post):
     if (not isinstance(sources, list) or not sources
             or any(url not in post.source_urls for url in sources)):
         raise ValueError('Editorial correction cannot add unobserved sources')
-    return replace(post, title=data.get('title', post.title), body=data.get('body', post.body),
-                   source_urls=sources)
+    return data
+
+
+def editorial_patch(settings, post):
+    """Apply an explicit dated operator correction; never confer approval."""
+    data = _editorial_patch_data(settings, post)
+    if data.get('review_recovery'):
+        raise ValueError('Source review authorization requires its bounded recovery path')
+    return replace(post, **{k: data[k] for k in ('title', 'body', 'source_urls') if k in data})
+
+
+def _finish_recovered_post(settings, conn, post, request, review):
+    from .pipeline import complete_media
+    post.quality_score, post.status = review_result(review)[0], 'TEXT_APPROVED'
+    existing = conn.execute('SELECT id FROM posts WHERE request_id=?', (post.request_id,)).fetchone()
+    if existing:
+        post_id = existing[0]
+        with conn:
+            conn.execute('UPDATE posts SET subcategory=?,topic=?,title=?,body=?,tags_json=?, '
+                         'sources_json=?,quality_score=?,status=?,fingerprint=?,provenance_json=? WHERE id=?',
+                         (post.subcategory, post.topic, post.title, post.body, json.dumps(post.tags),
+                          json.dumps(post.source_urls), post.quality_score, post.status, post.fingerprint,
+                          json.dumps(post.provenance), post_id))
+    else:
+        post_id = save_post(conn, post)
+    stem = settings.artifact_dir / f'{post.as_of_date}-{post_id:05d}.json'
+    atomic_json(stem, {'post': asdict(post), 'input': asdict(request), 'review': review})
+    return complete_media(settings, conn, post_id, post, request, review)
+
+
+def _recover_source_review(settings, conn, row, candidate, plan):
+    """Explicit encrypted opt-in: one reviewer, unchanged quota, never another rewrite."""
+    try:
+        # Serialize this opt-in path across all request IDs for the same daily slot.
+        # The durable packet, not the process lock, remains the paid-call boundary.
+        with media_claim(settings.db_path.parent, 'source-review:' + str(today_kst())):
+            status = conn.execute('SELECT status FROM attempts WHERE id=?', (row['id'],)).fetchone()
+            if status is None or status[0] != 'DROP_REVIEW':
+                return {'status': status[0] if status else 'MANUAL_CHECK_REQUIRED'}
+            return _recover_source_review_locked(settings, conn, row, candidate, plan)
+    except MediaBusy:
+        return {'status': 'MANUAL_CHECK_REQUIRED', 'reason': 'source_review_in_progress'}
+
+
+def _recover_source_review_locked(settings, conn, row, candidate, plan):
+    from .pre_review import DraftCandidate, checkpoint_path, inspect_candidate
+    directory = settings.db_path.parent
+    checkpoint = json.loads(checkpoint_path(directory, row['request_id']).read_text())
+    request = replace(candidate, provenance=checkpoint['request']['provenance'])
+    if request.prompt_data() != checkpoint['request']:
+        raise ValueError('Source review original input changed')
+    info = settings.config['categories'][request.category]
+    latest = rejected_checkpoint(settings, request)
+    raw = (DraftCandidate(**checkpoint['corrected']) if checkpoint.get('correction_attempted')
+           else rejected_checkpoint(settings, request, raw=True))
+    original, issues, _ = inspect_candidate(
+        raw, request, info, settings.config.get('editorial', {}).get('require_structure', True))
+    if issues:
+        raise ValueError('Source review original manuscript is invalid')
+    patch = _editorial_patch_data(settings, original)
+    authorization = patch.get('review_recovery')
+    if authorization is None:
+        return None
+    if authorization != source_review_hashes(original, request):
+        raise ValueError('Source review authorization identity mismatch')
+    if (request.id != row['request_id'] or request.category != row['category']
+            or original.as_of_date != str(today_kst())
+            or (plan and (not matches_request(request, plan) or not matches_post(original, plan)
+                          or request.provenance.get('daily_plan') != plan))):
+        raise ValueError('Source review request or plan mismatch')
+    post = replace(original, **{k: patch[k] for k in ('title', 'body', 'source_urls') if k in patch})
+    from .pre_review import candidate_from_post
+    post, issues, _ = inspect_candidate(
+        candidate_from_post(post), request, info,
+        settings.config.get('editorial', {}).get('require_structure', True))
+    if issues:
+        raise ValueError('Source review correction is invalid')
+    if conn.execute("SELECT 1 FROM posts WHERE status IN ('SAVING','SAVE_UNCERTAIN') LIMIT 1").fetchone():
+        return {'status': 'MANUAL_CHECK_REQUIRED', 'reason': 'save_outcome_requires_check'}
+    if plan:
+        try:
+            if saved_count(conn, plan):
+                return {'status': 'DAILY_PLAN_LIMIT', 'reason': 'source_review_daily_limit'}
+        except SaveDateRequired:
+            return {'status': 'MANUAL_CHECK_REQUIRED', 'reason': 'save_date_reconciliation_required'}
+    occupied = conn.execute(
+        "SELECT COUNT(*) FROM posts WHERE as_of_date=? AND request_id!=? AND status IN "
+        "('APPROVED','TEXT_APPROVED','IMAGES_PENDING','SAVED_NAVER','SAVING','SAVE_UNCERTAIN')",
+        (str(today_kst()), request.id)).fetchone()[0]
+    if occupied >= int(settings.config['blog']['daily_max']):
+        return {'status': 'DAILY_PLAN_LIMIT', 'reason': 'source_review_daily_limit'}
+    path = checkpoint_path(directory, request.id).with_suffix('.source-review.json')
+    identity = {'authorization': authorization, 'post': asdict(post), 'input': asdict(request)}
+    if path.exists():
+        packet = json.loads(path.read_text())
+        if any(packet.get(k) != v for k, v in identity.items()):
+            raise ValueError('Source review correction changed after claim')
+        resumed = True
+    else:
+        # Only source-reading failure after an otherwise passing formal review qualifies.
+        # A new evidence fetch must never reinterpret that old response as a new review.
+        raw_score, raw_decision = review_result(latest['raw_review'])
+        if (raw_decision != 'PASS' or raw_score < int(settings.config['blog']['review_pass_score'])
+                or latest['review'].get('blocking_issues') != [
+                    '핵심 주장별 원문 열람·근거 대조가 완료되지 않았습니다.']):
+            raise ValueError('Source review recovery requires an isolated source-reading failure')
+        packet = identity
+        try:
+            with path.open('x', encoding='utf-8') as stream:
+                json.dump(packet, stream, ensure_ascii=False)
+                stream.flush()
+                os.fsync(stream.fileno())
+            resumed = False
+        except FileExistsError:
+            raise ValueError('Source review recovery already claimed') from None
+    if 'review' in packet:
+        review = packet['review']
+    else:
+        llm = BlogLLM(settings.openai_api_key, settings.openai_model, settings.root,
+                      settings.review_model, directory / 'usage.jsonl')
+        review = llm.review(post, info, request, cache_only=resumed, single_attempt=True)
+        atomic_json(path, {**packet, 'review': review})
+    score, decision = review_result(review)
+    result = {'status': 'DROP_REVIEW', 'score': score, 'reason': 'source_review_not_approved'}
+    other_titles = [r[0] for r in conn.execute(
+        'SELECT title FROM posts WHERE request_id!=?', (request.id,))]
+    if max_title_similarity(post.title, other_titles) >= float(settings.config['blog']['max_similarity']):
+        result['reason'] = 'duplicate_title'
+    elif decision == 'PASS' and score >= int(settings.config['blog']['review_pass_score']):
+        existing = conn.execute('SELECT status FROM posts WHERE request_id=?', (request.id,)).fetchone()
+        if existing and existing[0] in {'APPROVED', 'SAVED_NAVER', 'TEXT_APPROVED', 'IMAGES_PENDING'}:
+            # A DB/media checkpoint may have completed before the attempt update.
+            # Leave any media resume to its existing identity-bound path.
+            result = {'status': existing[0], 'reason': 'source_review_post_already_prepared'}
+        else:
+            result = _finish_recovered_post(settings, conn, post, request, review)
+    with conn:
+        conn.execute('UPDATE attempts SET status=? WHERE id=?', (result['status'], row['id']))
+    return result
 
 
 def recover_rejected(settings, conn, candidates):
-    from .pipeline import complete_media
     results, handled = [], set()
     plan = active_plan(settings)
     if plan and plan.get('reservation'):
@@ -118,11 +276,24 @@ def recover_rejected(settings, conn, candidates):
         from .pre_review import checkpoint_path, revision_path
         if checkpoint_path(settings.db_path.parent, row['request_id']).exists():
             # New automatic drafts share a durable single-correction budget.
-            # Explicit legacy recovery must not silently grant them extra rewrites.
-            results.append({**result, 'status': 'DROP_REVIEW',
-                            'reason': ('manuscript_correction_limit' if revision_path(
-                                settings.db_path.parent, row['request_id']).exists()
-                                       else 'review_rejected_after_pre_review')})
+            # Only a separate identity-bound operator manifest can buy one review,
+            # never a rewrite or another automatic recovery allowance.
+            guarded = {'status': 'DROP_REVIEW',
+                       'reason': ('manuscript_correction_limit' if revision_path(
+                           settings.db_path.parent, row['request_id']).exists()
+                                  else 'review_rejected_after_pre_review')}
+            key = hashlib.sha256(row['request_id'].encode()).hexdigest()
+            patch_path = settings.root / 'editorial' / str(today_kst()) / f'{key}.enc'
+            if patch_path.exists() and row['request_id'] in by_id:
+                try:
+                    guarded = _recover_source_review(
+                        settings, conn, row, by_id[row['request_id']], plan) or guarded
+                except (OpenAIError, OSError, RuntimeError, ValueError, TypeError, KeyError,
+                        sqlite3.Error) as exc:
+                    guarded = {'status': 'ERROR', 'stage': 'source_review_recovery',
+                               'error': type(exc).__name__,
+                               'reason': getattr(exc, 'reason', 'source_review_recovery_failed')}
+            results.append({**result, **guarded})
             continue
         key = hashlib.sha256(row['request_id'].encode()).hexdigest()
         path = settings.db_path.parent / 'response-cache' / f'{today_kst()}-recovery-{key}.json'
@@ -184,21 +355,7 @@ def recover_rejected(settings, conn, candidates):
             if decision != 'PASS' or score < int(settings.config['blog']['review_pass_score']):
                 result.update(status='DROP_REVIEW', score=score, reason='editorial_revision_not_approved')
             else:
-                post.quality_score, post.status = score, 'TEXT_APPROVED'
-                existing = conn.execute('SELECT id FROM posts WHERE request_id=?', (post.request_id,)).fetchone()
-                if existing:
-                    post_id = existing[0]
-                    with conn:
-                        conn.execute('UPDATE posts SET subcategory=?,topic=?,title=?,body=?,tags_json=?, '
-                                     'sources_json=?,quality_score=?,status=?,fingerprint=?,provenance_json=? WHERE id=?',
-                                     (post.subcategory, post.topic, post.title, post.body, json.dumps(post.tags),
-                                      json.dumps(post.source_urls), score, post.status, post.fingerprint,
-                                      json.dumps(post.provenance), post_id))
-                else:
-                    post_id = save_post(conn, post)
-                stem = settings.artifact_dir / f'{post.as_of_date}-{post_id:05d}.json'
-                atomic_json(stem, {'post': asdict(post), 'input': asdict(request), 'review': review})
-                result.update(complete_media(settings, conn, post_id, post, request, review))
+                result.update(_finish_recovered_post(settings, conn, post, request, review))
             with conn:
                 conn.execute('UPDATE attempts SET status=? WHERE id=?', (result['status'], row['id']))
         except (OpenAIError, OSError, RuntimeError, ValueError, TypeError, KeyError, sqlite3.Error) as exc:

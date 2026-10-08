@@ -104,7 +104,8 @@ def _payload(response, stage: str) -> dict:
 
 def request_json(client, *, model: str, stage: str, request_id: str, schema: dict,
                  journal: Path, max_output_tokens: int, retry_output_tokens: int | None = None,
-                 cache_only: bool = False, validate_required: bool = True, **kwargs):
+                 cache_only: bool = False, validate_required: bool = True,
+                 cache_context: dict | None = None, **kwargs):
     """One retry only for an explicitly truncated response; no timeout blind retry."""
     cache = None
     if stage in {'benchmark', 'writer', 'reviewer', 'rewrite', 'pre_review_correction'}:
@@ -139,7 +140,10 @@ def request_json(client, *, model: str, stage: str, request_id: str, schema: dic
             if missing and validate_required:
                 raise ResponseFailure(stage, 'missing_fields')
             if cache is not None and hasattr(response, 'model_dump'):
-                atomic_json(cache, {'payload': payload, 'response': response.model_dump()})
+                saved = {'payload': payload, 'response': response.model_dump()}
+                if cache_context is not None:
+                    saved['context'] = cache_context
+                atomic_json(cache, saved)
             return payload, response
         except ResponseFailure as exc:
             error = exc.reason

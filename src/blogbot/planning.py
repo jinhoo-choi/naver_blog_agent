@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-from .core import KST, PUBLICATION_FINISHED, PUBLICATION_PENDING, today_kst
+from .core import KST, PUBLICATION_PENDING, today_kst
 
 
 def resolve_plan(config: dict, day: date | None = None) -> dict | None:
@@ -244,19 +244,21 @@ def record_verified_save(conn, post_id: int, record: dict) -> None:
     day = receipt_day(record)
     if date.fromisoformat(day) > today_kst():
         raise ValueError('Save receipt cannot be future-dated')
-    row = conn.execute('SELECT id,request_id,category,status FROM posts WHERE id=?', (post_id,)).fetchone()
-    if row is None or row['status'] in PUBLICATION_PENDING | PUBLICATION_FINISHED:
-        raise ValueError('Publication state cannot be resolved as an unstarted save')
-    identity = row['request_id'] or f"post:{row['id']}"
-    old = conn.execute('SELECT day,status FROM save_receipts WHERE request_id=?', (identity,)).fetchone()
-    if old and old['status'] in PUBLICATION_PENDING | PUBLICATION_FINISHED:
-        raise ValueError('Publication receipt cannot be downgraded to a saved draft')
-    if old and old['day'] != day:
-        raise ValueError('Conflicting save day requires reconciliation')
     with conn:
-        conn.execute('INSERT OR IGNORE INTO save_receipts(request_id,day,category) VALUES(?,?,?)',
+        conn.execute('BEGIN IMMEDIATE')
+        row = conn.execute('SELECT id,request_id,category,status FROM posts WHERE id=?', (post_id,)).fetchone()
+        if row is None or row['status'] not in {'SAVING', 'SAVE_UNCERTAIN', 'STALE_REVIEW_REQUIRED', 'SAVED_NAVER'}:
+            raise ValueError('Only uncertain or stale work can be resolved as saved')
+        identity = row['request_id'] or f"post:{row['id']}"
+        old = conn.execute('SELECT day,category,status FROM save_receipts WHERE request_id=?', (identity,)).fetchone()
+        if old and old['status'] not in {'SAVING', 'SAVE_UNCERTAIN', 'SAVED_NAVER'}:
+            raise ValueError('Publication or resolved receipt cannot be downgraded to a saved draft')
+        if old and (old['day'] != day or old['category'] != row['category']):
+            raise ValueError('Conflicting save day or category requires reconciliation')
+        conn.execute("INSERT INTO save_receipts(request_id,day,category,status) VALUES(?,?,?,'SAVED_NAVER') "
+                     "ON CONFLICT(request_id) DO UPDATE SET status='SAVED_NAVER'",
                      (identity, day, row['category']))
-        conn.execute("UPDATE posts SET status='SAVED_NAVER',draft_saved_at=? WHERE id=?",
+        conn.execute("UPDATE posts SET status='SAVED_NAVER',draft_saved_at=COALESCE(?,draft_saved_at) WHERE id=?",
                      (record.get('saved_at'), post_id))
         if row['request_id']:
             conn.execute("UPDATE attempts SET status='SAVED_NAVER' WHERE request_id=?", (identity,))

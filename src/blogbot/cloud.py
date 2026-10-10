@@ -209,6 +209,7 @@ def import_manual_saves(settings) -> None:
         return
     payload = json.loads(path.read_text())
     with closing(connect_db(settings.db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
         for record in payload['records']:
             day = receipt_day(record)
             if (record.get('status') != 'SAVED_NAVER' or not record.get('request_id')
@@ -219,10 +220,17 @@ def import_manual_saves(settings) -> None:
                                    (record['request_id'],)).fetchone()
             if receipt and (receipt['day'] != day or receipt['category'] != record['category']):
                 raise ValueError('Conflicting manual-save receipt; reconcile without resetting budgets')
-            if receipt and receipt['status'] in PUBLICATION_PENDING | PUBLICATION_FINISHED:
+            if receipt and receipt['status'] in PUBLICATION_PENDING | PUBLICATION_FINISHED | {'SAVE_NOT_SAVED'}:
                 continue  # A legacy saved-only ledger cannot erase observed publication state.
-            conn.execute('INSERT OR IGNORE INTO save_receipts(request_id,day,category) VALUES(?,?,?)',
+            post = conn.execute('SELECT category,status FROM posts WHERE request_id=?',
+                                (record['request_id'],)).fetchone()
+            if post and (post['category'] != record['category'] or post['status'] in
+                         PUBLICATION_PENDING | PUBLICATION_FINISHED | {'SAVE_NOT_SAVED'}):
+                raise ValueError('Saved-only receipt conflicts with observed post state')
+            conn.execute("INSERT INTO save_receipts(request_id,day,category,status) VALUES(?,?,?,'SAVED_NAVER') "
+                         "ON CONFLICT(request_id) DO UPDATE SET status='SAVED_NAVER'",
                          (record['request_id'], day, record['category']))
+            conn.execute("UPDATE posts SET status='SAVED_NAVER' WHERE request_id=?", (record['request_id'],))
             existing = conn.execute('SELECT id,category FROM attempts WHERE request_id=?',
                                     (record['request_id'],)).fetchone()
             if existing:
@@ -383,7 +391,7 @@ def filter_ready(directory: Path, receipts: dict, plan: dict | None = None, sett
     for record in records:
         if not record.get('request_id') or record.get('status') not in WORK_RECEIPT_STATES:
             raise ValueError('Invalid Work save receipt')
-        if record['status'] in PUBLICATION_PENDING | PUBLICATION_FINISHED:
+        if record['status'] in PUBLICATION_PENDING | PUBLICATION_FINISHED | {'SAVE_NOT_SAVED'}:
             owner = (getattr(settings, 'naver_blog_id', '') or
                      getattr(settings, 'config', {}).get('creator_advisor', {}).get('channel_id', ''))
             record = validate_work_receipt(record, owner)

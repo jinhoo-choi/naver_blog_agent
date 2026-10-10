@@ -12,7 +12,8 @@ from urllib.parse import urlsplit
 
 KST = timezone(timedelta(hours=9))
 WORK_RECEIPT_STATES = frozenset({'SAVING', 'SAVE_UNCERTAIN', 'SAVED_NAVER',
-                               'PUBLISHING', 'PUBLISH_UNCERTAIN', 'PUBLISHED', 'PUBLICATION_NOT_PUBLISHED'})
+                               'SAVE_NOT_SAVED', 'PUBLISHING', 'PUBLISH_UNCERTAIN', 'PUBLISHED',
+                               'PUBLICATION_NOT_PUBLISHED'})
 PUBLICATION_PENDING = frozenset({'PUBLISHING', 'PUBLISH_UNCERTAIN'})
 PUBLICATION_FINISHED = frozenset({'PUBLISHED', 'PUBLICATION_NOT_PUBLISHED'})
 
@@ -87,6 +88,7 @@ def connect_db(path: Path) -> sqlite3.Connection:
                           "published_at": "TEXT NOT NULL DEFAULT ''",
                           "published_at_precision": "TEXT NOT NULL DEFAULT 'second'",
                           "publication_check_json": "TEXT NOT NULL DEFAULT '{}'",
+                          "save_check_json": "TEXT NOT NULL DEFAULT '{}'",
                           "publish_attempted_at": "TEXT NOT NULL DEFAULT ''"},
     }.items():
         present = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
@@ -115,6 +117,24 @@ def validate_work_receipt(record: dict, blog_id: str = '') -> dict:
     if date.fromisoformat(result['day']) > today_kst():
         raise ValueError('Receipt cannot be future-dated')
     status = result['status']
+    if status == 'SAVE_NOT_SAVED':
+        check = record.get('save_check') or json.loads(record.get('save_check_json', '{}'))
+        if (not isinstance(check, dict) or check.get('resolution') not in {'not-saved', 'discard'}
+                or any(check.get(key) is not True for key in
+                       ('draft_list_checked', 'published_list_checked', 'draft_absent', 'published_absent'))
+                or not isinstance(check.get('evidence_ref'), str) or not 1 <= len(check['evidence_ref']) <= 500):
+            raise ValueError('Not-saved resolution requires actual draft and publication absence evidence')
+        attempted = datetime.fromisoformat(check.get('attempted_at', ''))
+        checked = datetime.fromisoformat(check.get('checked_at', ''))
+        parsed = urlsplit(check.get('blog_url', ''))
+        match = re.fullmatch(r'/([A-Za-z0-9_-]+)/?', parsed.path)
+        if (attempted.tzinfo is None or checked.tzinfo is None or checked < attempted
+                or checked > datetime.now(KST) or attempted.astimezone(KST).date().isoformat() != result['day']
+                or parsed.scheme != 'https' or parsed.netloc not in {'blog.naver.com', 'm.blog.naver.com'}
+                or parsed.query or parsed.fragment or not match or (blog_id and match[1] != blog_id)
+                or record.get('publish_attempted_at')):
+            raise ValueError('Not-saved resolution must observe the owner after the original save attempt')
+        result['save_check_json'] = json.dumps(check, sort_keys=True, ensure_ascii=False)
     stamps = {}
     for stamp_key in ('published_at', 'publish_attempted_at'):
         value = record.get(stamp_key)
@@ -194,6 +214,12 @@ def merge_work_receipts(conn: sqlite3.Connection, records: list[dict], *, blog_i
             old = conn.execute('SELECT * FROM save_receipts WHERE request_id=?', (identity,)).fetchone()
             if old and (old['day'] != record['day'] or old['category'] != record['category']):
                 raise ValueError('Conflicting save identity or actual day requires reconciliation')
+            if old and old['status'] == 'SAVE_NOT_SAVED' and (
+                    status != 'SAVE_NOT_SAVED' or old['save_check_json'] != record.get('save_check_json')):
+                raise ValueError('A resolved save attempt cannot be reset or retried')
+            if status == 'SAVE_NOT_SAVED' and old and old['status'] not in {
+                    'SAVING', 'SAVE_UNCERTAIN', 'SAVE_NOT_SAVED'}:
+                raise ValueError('Only an uncertain save can be resolved as not saved')
             if old and old['status'] == 'PUBLISHED' and (status != 'PUBLISHED' or any(
                     old[k] != record.get(k, '') for k in
                     ('published_url', 'post_id', 'published_at', 'published_at_precision'))):
@@ -211,20 +237,25 @@ def merge_work_receipts(conn: sqlite3.Connection, records: list[dict], *, blog_i
                 record['publish_attempted_at'] = old['publish_attempted_at']
                 record = validate_work_receipt(record, blog_id)
             for table in ('posts', 'attempts'):
-                original = conn.execute(f'SELECT category FROM {table} WHERE request_id=?', (identity,)).fetchone()
+                original = conn.execute(f'SELECT category,status FROM {table} WHERE request_id=?', (identity,)).fetchone()
                 if original and original['category'] != record['category']:
                     raise ValueError('Receipt category does not match the original request')
+                if status == 'SAVE_NOT_SAVED' and original and original['status'] in {
+                        'SAVED_NAVER', *PUBLICATION_PENDING, *PUBLICATION_FINISHED}:
+                    raise ValueError('Observed saved or published work cannot be declared absent')
             conn.execute('INSERT INTO save_receipts(request_id,day,category,status,published_url,post_id,'
-                         'published_at,published_at_precision,publish_attempted_at,publication_check_json) '
-                         'VALUES(?,?,?,?,?,?,?,?,?,?) '
+                         'published_at,published_at_precision,publish_attempted_at,publication_check_json,save_check_json) '
+                         'VALUES(?,?,?,?,?,?,?,?,?,?,?) '
                          'ON CONFLICT(request_id) DO UPDATE SET status=excluded.status,'
                          'published_url=excluded.published_url,post_id=excluded.post_id,'
                          'published_at=excluded.published_at,published_at_precision=excluded.published_at_precision,'
-                         'publish_attempted_at=excluded.publish_attempted_at,publication_check_json=excluded.publication_check_json',
+                         'publish_attempted_at=excluded.publish_attempted_at,publication_check_json=excluded.publication_check_json,'
+                         'save_check_json=excluded.save_check_json',
                          (identity, record['day'], record['category'], status,
                           *(record.get(k, '') for k in ('published_url', 'post_id', 'published_at')),
                           record.get('published_at_precision', 'second'), record.get('publish_attempted_at', ''),
-                          record.get('publication_check_json', old['publication_check_json'] if old else '{}')))
+                          record.get('publication_check_json', old['publication_check_json'] if old else '{}'),
+                          record.get('save_check_json', old['save_check_json'] if old else '{}')))
             conn.execute('UPDATE posts SET status=? WHERE request_id=?', (status, identity))
             conn.execute('UPDATE attempts SET status=? WHERE request_id=?', (status, identity))
             conn.execute('INSERT OR IGNORE INTO attempts(day,category,request_id,status) VALUES(?,?,?,?)',

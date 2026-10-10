@@ -77,6 +77,7 @@ def test_legacy_schema_migrates_without_fabricating_publication(tmp_path):
         assert row['status'] == 'SAVED_NAVER'
         assert row['published_url'] == row['post_id'] == row['published_at'] == ''
         assert row['published_at_precision'] == 'second'
+        assert row['save_check_json'] == '{}'
 
 
 @pytest.mark.parametrize('changes', [
@@ -193,14 +194,28 @@ def test_old_published_receipt_without_evidence_is_held(setup):
                      'records': [record(status='PUBLISHED')]}, setup.config['daily_plan'])
 
 
-def test_legacy_saved_import_never_downgrades_published(setup, tmp_path):
+@pytest.mark.parametrize('terminal', ['PUBLISHED', 'SAVE_NOT_SAVED'])
+def test_legacy_saved_import_never_downgrades_finished_delivery(setup, tmp_path, terminal):
     with connect_db(setup.db_path) as conn:
-        ingest(conn, published())
+        ingest(conn, published() if terminal == 'PUBLISHED' else not_saved())
     (tmp_path / 'config').mkdir()
     (tmp_path / 'config' / 'manual-saves.json').write_text(json.dumps({'records': [record()]}))
     import_manual_saves(replace(setup, root=tmp_path))
     with connect_db(setup.db_path) as conn:
-        assert conn.execute('SELECT status FROM attempts').fetchone()[0] == 'PUBLISHED'
+        assert conn.execute('SELECT status FROM attempts').fetchone()[0] == terminal
+
+
+@pytest.mark.parametrize('status', ['SAVING', 'SAVE_UNCERTAIN'])
+def test_legacy_confirmed_save_resolves_uncertain_receipt(setup, tmp_path, status):
+    with connect_db(setup.db_path) as conn:
+        ingest(conn, record(status=status))
+    (tmp_path / 'config').mkdir()
+    (tmp_path / 'config' / 'manual-saves.json').write_text(json.dumps({'records': [record()]}))
+    import_manual_saves(replace(setup, root=tmp_path))
+    with connect_db(setup.db_path) as conn:
+        for table in ('posts', 'attempts', 'save_receipts'):
+            assert conn.execute(f'SELECT status FROM {table}').fetchone()[0] == 'SAVED_NAVER'
+        assert saved_count(conn, setup.config['daily_plan']) == 1
 
 
 def test_batch_conflict_rolls_back_and_attempt_generation_day_is_preserved(setup):
@@ -293,7 +308,7 @@ def test_new_unpack_preserves_saved_publication_candidate_but_never_repeats_clai
         claim_publication(conn, 'question', restored)
 
 
-@pytest.mark.parametrize('state', ['SAVING', 'SAVE_UNCERTAIN', 'SAVED_NAVER', 'PUBLISHING',
+@pytest.mark.parametrize('state', ['SAVING', 'SAVE_UNCERTAIN', 'SAVED_NAVER', 'SAVE_NOT_SAVED', 'PUBLISHING',
                                   'PUBLISH_UNCERTAIN', 'PUBLISHED', 'PUBLICATION_NOT_PUBLISHED'])
 def test_restore_preserves_every_existing_work_receipt(setup, tmp_path, monkeypatch, state):
     key = Fernet.generate_key().decode()
@@ -302,7 +317,7 @@ def test_restore_preserves_every_existing_work_receipt(setup, tmp_path, monkeypa
     pack(setup, archive)
     target = tmp_path / 'work'
     extract_bundle(archive.read_bytes(), target, key)
-    evidence = (published() if state == 'PUBLISHED' else not_published()
+    evidence = (not_saved() if state == 'SAVE_NOT_SAVED' else published() if state == 'PUBLISHED' else not_published()
                 if state == 'PUBLICATION_NOT_PUBLISHED' else record(status=state,
                     **({'publish_attempted_at': '2026-10-12T10:00:00+09:00'}
                        if state.startswith('PUBLISH') else {})))
@@ -414,3 +429,96 @@ def test_failed_publication_cannot_reset_attempt_or_downgrade_published(setup):
         ingest(conn, published())
         with pytest.raises(ValueError):
             ingest(conn, not_published())
+
+
+def not_saved(**changes):
+    return record(status='SAVE_NOT_SAVED', save_check={
+        'resolution': 'not-saved', 'attempted_at': '2026-10-12T10:00:00+09:00',
+        'checked_at': '2026-10-12T11:00:00+09:00', 'blog_url': 'https://blog.naver.com/test_owner',
+        'draft_list_checked': True, 'published_list_checked': True, 'draft_absent': True,
+        'published_absent': True, 'evidence_ref': 'private-save-observation-123', **changes})
+
+
+@pytest.mark.parametrize('state', ['SAVING', 'SAVE_UNCERTAIN'])
+def test_verified_saved_resolution_updates_receipt_atomically(setup, state):
+    with connect_db(setup.db_path) as conn:
+        ingest(conn, record(status=state))
+        ident = conn.execute('SELECT id FROM posts').fetchone()[0]
+        conn.execute("CREATE TRIGGER reject_post_update BEFORE UPDATE ON posts BEGIN SELECT RAISE(ABORT,'offline failure'); END")
+        conn.commit()
+        with pytest.raises(sqlite3.IntegrityError):
+            record_verified_save(conn, ident, {'day': '2026-10-12'})
+        assert conn.execute('SELECT status FROM save_receipts').fetchone()[0] == state
+        conn.execute('DROP TRIGGER reject_post_update'); conn.commit()
+        record_verified_save(conn, ident, {'day': '2026-10-12'})
+        assert conn.execute('SELECT status FROM save_receipts').fetchone()[0] == 'SAVED_NAVER'
+        assert conn.execute('SELECT status FROM posts').fetchone()[0] == 'SAVED_NAVER'
+        assert conn.execute('SELECT status FROM attempts').fetchone()[0] == 'SAVED_NAVER'
+        assert saved_count(conn, setup.config['daily_plan']) == 1
+        claim_publication(conn, 'question', setup)
+
+
+@pytest.mark.parametrize('outcome', ['not-saved', 'discard'])
+def test_cli_absence_resolution_releases_only_global_hold(setup, monkeypatch, outcome):
+    from blogbot.cli import main
+    with connect_db(setup.db_path) as conn:
+        ingest(conn, record(status='SAVE_UNCERTAIN'))
+        ident = conn.execute('SELECT id FROM posts').fetchone()[0]
+    base = ['blogbot', 'resolve', '--id', str(ident), '--outcome', outcome]
+    monkeypatch.setattr('sys.argv', base)
+    with pytest.raises(SystemExit):
+        main()  # No evidence must leave the hold intact.
+    evidence = not_saved(resolution=outcome)
+    proof = setup.db_path.parent / 'absence.json'
+    proof.write_text(json.dumps({'verified_date': '2026-10-12', 'day': evidence['day'],
+                                 'save_check': evidence['save_check']}))
+    monkeypatch.setattr('sys.argv', base + ['--evidence-file', str(proof)])
+    main()
+    with connect_db(setup.db_path) as conn:
+        terminal = dict(conn.execute('SELECT * FROM save_receipts').fetchone())
+        assert terminal['status'] == 'SAVE_NOT_SAVED'
+        assert conn.execute('SELECT status FROM posts').fetchone()[0] == 'SAVE_NOT_SAVED'
+        assert conn.execute('SELECT status FROM attempts').fetchone()[0] == 'SAVE_NOT_SAVED'
+        assert saved_count(conn, setup.config['daily_plan']) == 1
+        assert saved_count(conn, {**setup.config['daily_plan'], 'date': '2026-10-13'}) == 0
+        for old in [record(), record(status='SAVING'), published()]:
+            with pytest.raises(ValueError):
+                ingest(conn, old)
+        with pytest.raises(ValueError):
+            record_verified_save(conn, ident, {'day': '2026-10-12'})
+        with pytest.raises(ValueError):
+            claim_publication(conn, 'question', setup)
+    with connect_db(setup.db_path.parent / 'recreated.db') as conn:
+        ingest(conn, terminal)
+        assert saved_count(conn, setup.config['daily_plan']) == 1
+    filter_ready(setup.db_path.parent, {'verified_date': '2026-10-12', 'records': [terminal]},
+                 setup.config['daily_plan'], setup)
+    ready = json.loads((setup.db_path.parent / 'ready.json').read_text())
+    assert ready['posts'] == ready['publication_ready'] == []
+
+
+@pytest.mark.parametrize('changes', [
+    {'attempted_at': ''}, {'checked_at': '2026-10-12T09:00:00+09:00'},
+    {'attempted_at': '2026-10-11T10:00:00+09:00'}, {'checked_at': '2026-10-12T13:00:00+09:00'},
+    {'draft_list_checked': False}, {'published_list_checked': False}, {'draft_absent': False},
+    {'published_absent': False}, {'evidence_ref': ''}, {'blog_url': 'https://blog.naver.com/wrong_owner'},
+])
+def test_absence_resolution_requires_actual_owner_observation(setup, changes):
+    with connect_db(setup.db_path) as conn:
+        ingest(conn, record(status='SAVE_UNCERTAIN'))
+        with pytest.raises(ValueError):
+            ingest(conn, not_saved(**changes))
+        assert conn.execute('SELECT status FROM save_receipts').fetchone()[0] == 'SAVE_UNCERTAIN'
+
+
+@pytest.mark.parametrize('prior', ['SAVED_NAVER', 'PUBLISHING', 'PUBLISH_UNCERTAIN', 'PUBLISHED', 'PUBLICATION_NOT_PUBLISHED'])
+def test_absence_resolution_never_downgrades_observed_delivery(setup, prior):
+    with connect_db(setup.db_path) as conn:
+        evidence = (published() if prior == 'PUBLISHED' else not_published()
+                    if prior == 'PUBLICATION_NOT_PUBLISHED' else record(status=prior,
+                        **({'publish_attempted_at': '2026-10-12T10:00:00+09:00'}
+                           if prior.startswith('PUBLISH') else {})))
+        ingest(conn, evidence)
+        with pytest.raises(ValueError):
+            ingest(conn, not_saved())
+        assert conn.execute('SELECT status FROM save_receipts').fetchone()[0] == prior

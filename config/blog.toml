@@ -209,6 +209,19 @@ context = "사용자가 목요일 운동 주제로 페이스풀을 선택했습�
 source = "owner_input"
 editorial_intent = "dated_owner_face_pull_selection"
 
+[topics.scheduled."2026-10-11"]
+id = "owner-20261011-100day-baby-play"
+category = "parenting"
+
+[topics.scheduled."2026-10-11".data]
+question = "100일 아기, 깨어 있을 때 뭐 하고 놀아줄까?"
+benchmark_query = "100일 아기 놀아주는 법"
+context = "주제는 100일 아기 놀아주는 법이며 제목 후보는 '100일 아기, 깨어 있을 때 뭐 하고 놀아줄까?'입니다. 일반 정보 글로 작성하고 개인 경험·아이의 반응·발달 효과를 창작하지 않습니다. AAP 놀이 안내 https://www.healthychildren.org/English/ages-stages/baby/Pages/How-Active-is-Your-Baby.aspx 등 공식 원문을 작성 시 확인하여 적용 조건과 안전한 놀이·중단 신호를 설명합니다. 100일은 주제의 연령 범위이며 특정 아이의 생년월일·병력·발달 상태를 추정하거나 추가하지 않습니다."
+
+[topics.scheduled."2026-10-11".provenance]
+source = "owner_input"
+editorial_intent = "dated_owner_100day_baby_play_selection"
+
 [images]
 mode = "generate"
 model = "gpt-image-2.5-flare"
@@ -284,6 +297,4 @@ kind = "owner_preparation_pending"
 category = "parenting"
 kind = "owner_input_pending"
 
-[operating_plan.reservations."2026-10-11"]
-category = "parenting"
-kind = "owner_input_pending"
+# 2026-10-11 owner_input_pending resolved by the dated topic above; prior hold remains in Git history.

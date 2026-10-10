@@ -55,6 +55,7 @@ ChatGPT의 새 대화·첨부 파일을 상시 읽는 연결은 없으며, 실�
 
 | 문서 | 내용 |
 |---|---|
+| [MANUAL_REQUESTS](docs/MANUAL_REQUESTS.md) | 명시적으로 요청한 추가 유래 초안의 승인·예산·중복 방지 |
 | [AUTOMATION](docs/AUTOMATION.md) | 승인된 실행 권한·시간·발행·교류·측정 |
 | [STATE](docs/STATE.md) | 최신 대화 맥락·구현 상태·남은 연결 |
 | [DAILY_PLAN](docs/DAILY_PLAN.md) | 날짜별 계획·하루 1편·요일/하위유형·과거 원고 보류 |

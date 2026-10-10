@@ -174,6 +174,16 @@ def generate_images(settings, request: ContentRequest, post: PostDraft, *,
         key = hashlib.sha256(json.dumps(params, sort_keys=True).encode()).hexdigest()
         plans.append((params, key))
         placements.append({} if thumbnail else {'section_heading': section.splitlines()[0]})
+    photos = execute_image_plans(settings, folder, plans, placements,
+                                 allow_uncertain_recovery=allow_uncertain_recovery)
+    return replace(post, photos=photos)
+
+
+def execute_image_plans(settings, folder, plans, placements, *,
+                        allow_uncertain_recovery=True, before_submit=None, max_attempts=None):
+    """Common existing image engine, also used by an explicitly approved one-image job."""
+    config = settings.config.get('images', {})
+    folder.mkdir(parents=True, exist_ok=True)
     # Prompt edits must not reset existing per-image paid-call budgets.
     # Store only identities; all parameters can be reconstructed from the approved post.
     plan_path = folder / '.image-plan'
@@ -212,6 +222,8 @@ def generate_images(settings, request: ContentRequest, post: PostDraft, *,
                     'role': 'thumbnail' if thumbnail else 'section', **placements[index]}
         attempts = int(state.get('attempts', 0))
         maximum = min(2, int(config.get('max_attempts', 2)))
+        if max_attempts is not None:
+            maximum = min(maximum, max_attempts)
         if (not allow_uncertain_recovery and manifest.exists()
                 and (state.get('state') != 'RATE_LIMITED'
                      or type(state.get('attempts')) is not int or attempts < 1)):
@@ -236,6 +248,8 @@ def generate_images(settings, request: ContentRequest, post: PostDraft, *,
             started = time.monotonic()
             checkpoint(state='STARTED', attempts=attempts, cache_key=key)
             try:
+                if before_submit is not None:
+                    before_submit(params)
                 result = client.images.generate(**params)
                 encoded = result.data[0].b64_json
                 if not encoded:
@@ -270,7 +284,7 @@ def generate_images(settings, request: ContentRequest, post: PostDraft, *,
         raise ImagePending('Image retry budget reached')
 
     with ThreadPoolExecutor(max_workers=min(2, max(1, int(config.get('concurrency', 2))))) as pool:
-        futures = [pool.submit(one, i) for i in range(count)]
+        futures = [pool.submit(one, i) for i in range(len(plans))]
         photos, errors = [], []
         for future in futures:
             try:
@@ -279,4 +293,4 @@ def generate_images(settings, request: ContentRequest, post: PostDraft, *,
                 errors.append(exc)
         if errors:
             raise ImagePending('Some images are pending; completed files retained') from errors[0]
-    return replace(post, photos=photos)
+    return photos

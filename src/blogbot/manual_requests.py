@@ -236,7 +236,7 @@ def _run_identity() -> str:
 def reservation_name(run_id: str, packet: dict, stage: str = 'manual') -> str:
     parts = [packet['request_id'], packet['approval_reference'],
              re.sub(r'\s+', '', packet['question']).casefold()]
-    if stage not in {'manual', 'thumbnail'}:
+    if stage not in {'manual', 'thumbnail', 'review'}:
         raise ValueError('Invalid reservation stage')
     return f'blog-state-{run_id}-{stage}-' + '-'.join(
         hashlib.sha256(value.encode()).hexdigest() for value in parts)
@@ -267,6 +267,20 @@ def _workflow_outputs(*, cached: bool, artifact_name: str = '') -> None:
     if path:
         with open(path, 'a', encoding='utf-8') as stream:
             stream.write(f'cached={str(cached).lower()}\nartifact_name={artifact_name}\n')
+
+
+def approved_source_evidence(packet: dict) -> list[dict]:
+    """Attribute owner-approved excerpts as supplied evidence, never as model browsing.
+
+    This runs only for a fresh authenticated packet, not retroactively on cached
+    reviewer contexts. The actual excerpt is included in that reviewer's prompt.
+    """
+    return [{'url': source['url'], 'text': source['excerpt'],
+             'sha256': hashlib.sha256(source['excerpt'].encode()).hexdigest(),
+             'verified_by': 'operator_verified_owner_approved_packet',
+             'approval_reference': packet['approval_reference'],
+             'supplied_date': packet['date']}
+            for source in packet['sources']]
 
 
 def reserve_manual_request(settings, ciphertext: str, request_id: str, packet_sha256: str) -> dict:
@@ -365,7 +379,8 @@ def run_manual_request(settings, ciphertext: str, request_id: str, packet_sha256
                                      {'question': packet['question'], 'context': packet['context'],
                                       'sources': packet['sources']}, [photo],
                                      {'manual_request': {'version': VERSION, 'date': packet['date'],
-                                                         'scope': 'draft_only'}})
+                                                         'scope': 'draft_only'},
+                                      'reference_evidence': approved_source_evidence(packet)})
             verify_photos(request.photos)
             info = settings.config['categories']['origins']
             llm = BlogLLM(settings.openai_api_key, settings.openai_model, settings.root,

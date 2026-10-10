@@ -198,3 +198,32 @@ article saved after midnight does not replace the next ordinary selected topic.
 Uncertain additional saves still block a subsequent Work write until reconciled;
 empty later input cannot erase that state. Original actual dates and terminal
 saved status cannot be downgraded. Publishing remains outside this route.
+
+## Supplied original-source evidence and one review-only recovery
+
+Fresh authenticated origin packets now attribute their verified source excerpts
+as `reference_evidence` in the actual reviewer prompt and cached review context.
+The attribution is `operator_verified_owner_approved_packet`, not a claim that
+the model browsed the page. Cached earlier responses never acquire later evidence.
+
+`manual-review` is an explicit, separately approved, one-use recovery for an
+existing HELD origin request whose four original writer/reviewer/rewrite/reviewer
+responses all returned and whose final raw review passed but direct-source
+verification did not. It cannot generate another manuscript or image. A new
+Fernet envelope pins the original claim and paid journal, exact cached final
+rewrite payload and response ID, verified official source text and its hashes,
+current date, original approval and a distinct review-only approval.
+
+The workflow persists a separate `review` reservation artifact before the one
+allowed review submission. The new slot allows only the existing GPT-5 reviewer,
+6000 output tokens, no SDK retry and no retry of uncertain outcomes. Its cost
+check includes the retained thumbnail and all four earlier text submissions.
+The USD3 contract remains an estimate with call limits, never a billing ceiling.
+Original paid journals and caches are retained byte-for-byte. The original HELD
+claim is archived before a successfully reviewed result can update the current
+claim. The normal fact, source, duplicate and safety gates remain mandatory.
+A failed fifth review stays HELD; an owner approval does not make it PASS.
+
+The operator must separately verify the owner's new one-review approval before
+encrypting this envelope. The earlier four-call approval does not authorize it.
+It has no effect on automatic scheduling, ordinary daily quotas or publication.

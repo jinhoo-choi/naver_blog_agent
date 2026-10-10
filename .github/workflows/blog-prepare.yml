@@ -6,7 +6,7 @@ on:
       mode:
         description: 'prepare resumes media; recover retries failed inputs; bootstrap/probe diagnose setup'
         type: choice
-        options: [prepare, recover, bootstrap, probe, manual-images, manual-request, manual-thumbnail]
+        options: [prepare, recover, bootstrap, probe, manual-images, manual-request, manual-thumbnail, manual-review]
         default: prepare
       attribution_review_request_id:
         description: 'Recover only: explicitly approved existing request with a one-use attribution manifest'
@@ -92,15 +92,15 @@ jobs:
         run: python -m pip install -e .
       - name: Reserve explicitly approved manual request
         id: manual_reservation
-        if: inputs.mode == 'manual-request' || inputs.mode == 'manual-thumbnail'
+        if: inputs.mode == 'manual-request' || inputs.mode == 'manual-thumbnail' || inputs.mode == 'manual-review'
         env:
-          MANUAL_RESERVE_MODE: ${{ inputs.mode == 'manual-thumbnail' && 'manual-thumbnail-reserve' || 'manual-request-reserve' }}
+          MANUAL_RESERVE_MODE: ${{ inputs.mode == 'manual-thumbnail' && 'manual-thumbnail-reserve' || inputs.mode == 'manual-review' && 'manual-review-reserve' || 'manual-request-reserve' }}
           BLOG_MANUAL_REQUEST_PACKET: ${{ inputs.manual_request_packet || '' }}
           MANUAL_REQUEST_ID: ${{ inputs.manual_request_id || '' }}
           MANUAL_REQUEST_SHA256: ${{ inputs.manual_request_sha256 || '' }}
         run: python -m blogbot.cloud "$MANUAL_RESERVE_MODE" --manual-request-id "$MANUAL_REQUEST_ID" --manual-request-sha256 "$MANUAL_REQUEST_SHA256"
       - name: Persist manual reservation before paid work
-        if: (inputs.mode == 'manual-request' || inputs.mode == 'manual-thumbnail') && steps.manual_reservation.outputs.cached != 'true'
+        if: (inputs.mode == 'manual-request' || inputs.mode == 'manual-thumbnail' || inputs.mode == 'manual-review') && steps.manual_reservation.outputs.cached != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.manual_reservation.outputs.artifact_name }}
@@ -108,7 +108,7 @@ jobs:
           if-no-files-found: error
           retention-days: 90
       - name: Prepare or resume
-        if: (inputs.mode != 'manual-request' && inputs.mode != 'manual-thumbnail') || steps.manual_reservation.outputs.cached != 'true'
+        if: (inputs.mode != 'manual-request' && inputs.mode != 'manual-thumbnail' && inputs.mode != 'manual-review') || steps.manual_reservation.outputs.cached != 'true'
         env:
           PREPARE_MODE: ${{ inputs.mode || 'prepare' }}
           BLOG_MANUAL_IMAGE_PACKET: ${{ inputs.manual_image_packet || '' }}

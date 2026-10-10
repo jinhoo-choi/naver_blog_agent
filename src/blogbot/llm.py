@@ -99,6 +99,23 @@ def _source_urls(payload: dict, observed: list[str], required: bool = True) -> l
     return list(dict.fromkeys(claimed))[:10]
 
 
+def _reference_urls(request):
+    """Origins accepts supplied text only with intact hash and explicit attribution."""
+    urls = []
+    for item in request.provenance.get('reference_evidence', []):
+        if request.category == 'origins':
+            url, text = item.get('url'), item.get('text')
+            if (not isinstance(url, str) or urlsplit(url).scheme != 'https'
+                    or not urlsplit(url).hostname or not isinstance(text, str) or not text.strip()
+                    or item.get('sha256') != hashlib.sha256(text.encode()).hexdigest()
+                    or item.get('verified_by') not in {
+                        'operator', 'repository_owner', 'operator_verified_owner_approved_packet'}):
+                raise ValueError('Origins supplied original-source evidence is incomplete or altered')
+        if item.get('text'):
+            urls.append(item['url'])
+    return urls
+
+
 def _checked_review(payload, response, request):
     if request.category == 'cooking' or not payload:
         return payload
@@ -112,8 +129,7 @@ def _checked_review(payload, response, request):
     verified = {_source_identity(u) for u in read_urls if u}
     if evidence:
         verified.update(_source_identity(evidence[k]) for k in ['url', 'viewer_url'])
-    verified.update(_source_identity(e['url'])
-                    for e in request.provenance.get('reference_evidence', []) if e.get('text'))
+    verified.update(_source_identity(url) for url in _reference_urls(request))
     if request.provenance.get('investment_mode') == 'life-economics-v1':
         official = {_source_identity(e['url']) for e in request.provenance.get('life_economics_checks', [])
                     if e.get('verified_date') == str(today_kst())}
@@ -301,8 +317,7 @@ source_urls와 본문 URL은 아래 실제 관찰 URL 중에서만 선택하세�
         if not cache_only:
             request = prepare_reference_evidence(
                 self.journal.parent if self.journal else None, request, post.source_urls)
-        supplied = {_source_identity(e['url'])
-                    for e in request.provenance.get('reference_evidence', []) if e.get('text')}
+        supplied = {_source_identity(url) for url in _reference_urls(request)}
         primary = request.provenance.get('primary_evidence', {})
         if primary.get('text'):
             supplied.update(_source_identity(primary[k]) for k in ('url', 'viewer_url') if k in primary)
@@ -326,7 +341,9 @@ source_urls와 본문 URL은 아래 실제 관찰 URL 중에서만 선택하세�
 초안 JSON:\n{json.dumps(self._draft_data(post), ensure_ascii=False)}
 """.strip()
         search = {} if post.category == "cooking" else {
-            "tools": [{"type": "web_search"}], "tool_choice": "required",
+            "tools": [{"type": "web_search"}],
+            "tool_choice": ("auto" if post.category == "origins" and post.source_urls
+                            and not sources_to_open else "required"),
             "max_tool_calls": 3,
         }
         if single_attempt:

@@ -5,12 +5,16 @@ import json
 import re
 import sqlite3
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
 KST = timezone(timedelta(hours=9))
+WORK_RECEIPT_STATES = frozenset({'SAVING', 'SAVE_UNCERTAIN', 'SAVED_NAVER',
+                               'PUBLISHING', 'PUBLISH_UNCERTAIN', 'PUBLISHED', 'PUBLICATION_NOT_PUBLISHED'})
+PUBLICATION_PENDING = frozenset({'PUBLISHING', 'PUBLISH_UNCERTAIN'})
+PUBLICATION_FINISHED = frozenset({'PUBLISHED', 'PUBLICATION_NOT_PUBLISHED'})
 
 
 def today_kst() -> date:
@@ -77,6 +81,13 @@ def connect_db(path: Path) -> sqlite3.Connection:
                   "provenance_json": "TEXT NOT NULL DEFAULT '{}'"},
         "attempts": {"request_id": "TEXT", "plan_json": "TEXT NOT NULL DEFAULT '{}'",
                      "event_key": "TEXT"},
+        "save_receipts": {"status": "TEXT NOT NULL DEFAULT 'SAVED_NAVER'",
+                          "published_url": "TEXT NOT NULL DEFAULT ''",
+                          "post_id": "TEXT NOT NULL DEFAULT ''",
+                          "published_at": "TEXT NOT NULL DEFAULT ''",
+                          "published_at_precision": "TEXT NOT NULL DEFAULT 'second'",
+                          "publication_check_json": "TEXT NOT NULL DEFAULT '{}'",
+                          "publish_attempted_at": "TEXT NOT NULL DEFAULT ''"},
     }.items():
         present = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
         for name, definition in columns.items():
@@ -86,8 +97,198 @@ def connect_db(path: Path) -> sqlite3.Connection:
                  "ON attempts(request_id) WHERE request_id IS NOT NULL")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_attempt_per_event "
                  "ON attempts(event_key) WHERE event_key IS NOT NULL")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_receipt_per_publication "
+                 "ON save_receipts(published_url) WHERE published_url != ''")
     conn.commit()
     return conn
+
+
+def validate_work_receipt(record: dict, blog_id: str = '') -> dict:
+    """Validate observed Work evidence; this never checks a site or publishes a post."""
+    from .planning import receipt_day
+
+    if (not isinstance(record, dict) or not isinstance(record.get('request_id'), str)
+            or not record['request_id'] or record.get('status') not in WORK_RECEIPT_STATES):
+        raise ValueError('Invalid Work receipt')
+    result = dict(record)
+    result['day'] = receipt_day(record)
+    if date.fromisoformat(result['day']) > today_kst():
+        raise ValueError('Receipt cannot be future-dated')
+    status = result['status']
+    stamps = {}
+    for stamp_key in ('published_at', 'publish_attempted_at'):
+        value = record.get(stamp_key)
+        if value:
+            stamp = datetime.fromisoformat(value)
+            if (stamp.tzinfo is None or stamp > datetime.now(KST)
+                    or stamp.astimezone(KST).date().isoformat() < result['day']):
+                raise ValueError('Publication timestamps require an observed nonfuture time and timezone')
+            stamps[stamp_key] = stamp
+            result[stamp_key] = stamp.isoformat()
+    if status in PUBLICATION_PENDING | {'PUBLICATION_NOT_PUBLISHED'} and 'publish_attempted_at' not in stamps:
+        raise ValueError('Publication attempt time is required')
+    if status == 'PUBLICATION_NOT_PUBLISHED':
+        check = record.get('publication_check') or json.loads(record.get('publication_check_json', '{}'))
+        if (not isinstance(check, dict) or check.get('published_list_checked') is not True
+                or check.get('draft_still_saved') is not True
+                or not isinstance(check.get('evidence_ref'), str) or not 1 <= len(check['evidence_ref']) <= 500):
+            raise ValueError('Not-published resolution requires actual list and saved-draft observation evidence')
+        observed = datetime.fromisoformat(check.get('checked_at', ''))
+        parsed = urlsplit(check.get('published_list_url', ''))
+        match = re.fullmatch(r'/([A-Za-z0-9_-]+)/?', parsed.path)
+        if (observed.tzinfo is None or observed < stamps['publish_attempted_at'] or observed > datetime.now(KST)
+                or parsed.scheme != 'https' or parsed.netloc not in {'blog.naver.com', 'm.blog.naver.com'}
+                or parsed.query or parsed.fragment or not match or (blog_id and match[1] != blog_id)):
+            raise ValueError('Not-published resolution must observe the owner after the attempted publication')
+        result['publication_check_json'] = json.dumps(check, sort_keys=True, ensure_ascii=False)
+    if status == 'PUBLISHED':
+        precision = record.get('published_at_precision', 'second')
+        if precision not in {'second', 'minute'}:
+            raise ValueError('Unknown observed publication timestamp precision')
+        result['published_at_precision'] = precision
+        url = record.get('published_url', '')
+        post_id = record.get('post_id', '')
+        if not isinstance(url, str) or not isinstance(post_id, str):
+            raise ValueError('Publication URL and post ID must be strings')
+        parsed = urlsplit(url)
+        match = re.fullmatch(r'/([A-Za-z0-9_-]+)/([1-9][0-9]*)', parsed.path)
+        if (parsed.scheme != 'https' or parsed.netloc not in {'blog.naver.com', 'm.blog.naver.com'}
+                or parsed.query or parsed.fragment or not match or match[2] != post_id
+                or (blog_id and match[1] != blog_id) or 'published_at' not in stamps):
+            raise ValueError('Published evidence must identify the observed owner post and publication time')
+        result['published_url'] = 'https://blog.naver.com' + parsed.path
+        published = stamps['published_at']
+        if precision == 'minute' and (published.second or published.microsecond):
+            raise ValueError('Minute publication evidence cannot invent seconds')
+        attempted = stamps.get('publish_attempted_at', published)
+        if ((precision == 'second' and attempted > published)
+                or (precision == 'minute' and attempted >= published + timedelta(minutes=1))):
+            raise ValueError('Publication cannot precede its attempt')
+    elif any(record.get(key) for key in ('published_url', 'post_id', 'published_at')):
+        raise ValueError('Only an observed PUBLISHED receipt can assert publication')
+    return result
+
+
+def import_work_receipts(conn: sqlite3.Connection, payload: dict, *, blog_id: str,
+                         categories: Iterable[str]) -> dict:
+    """Persist a fresh private Work ledger atomically, without generating or clicking."""
+    if (payload.get('verified_date') != today_kst().isoformat()
+            or not isinstance(payload.get('records'), list) or not blog_id):
+        raise ValueError('A freshly verified owner Work ledger is required')
+    return merge_work_receipts(conn, payload['records'], blog_id=blog_id, categories=categories)
+
+
+def merge_work_receipts(conn: sqlite3.Connection, records: list[dict], *, blog_id: str = '',
+                        categories: Iterable[str]) -> dict:
+    """Merge persisted evidence without claiming a new observation or permitting a rewind."""
+    records = [validate_work_receipt(r, blog_id) for r in records]
+    if len({r['request_id'] for r in records}) != len(records):
+        raise ValueError('Duplicate request identities in Work ledger')
+    counts = {}
+    with conn:
+        conn.execute('BEGIN IMMEDIATE')
+        for record in records:
+            identity, status = record['request_id'], record['status']
+            if record.get('category') not in categories:
+                raise ValueError('Unknown Work receipt category')
+            old = conn.execute('SELECT * FROM save_receipts WHERE request_id=?', (identity,)).fetchone()
+            if old and (old['day'] != record['day'] or old['category'] != record['category']):
+                raise ValueError('Conflicting save identity or actual day requires reconciliation')
+            if old and old['status'] == 'PUBLISHED' and (status != 'PUBLISHED' or any(
+                    old[k] != record.get(k, '') for k in
+                    ('published_url', 'post_id', 'published_at', 'published_at_precision'))):
+                raise ValueError('Published receipt cannot be downgraded or reassigned')
+            if old and old['status'] in PUBLICATION_PENDING and status not in PUBLICATION_PENDING | PUBLICATION_FINISHED:
+                raise ValueError('Publication outcome must be reconciled before any retry')
+            if old and old['status'] == 'PUBLICATION_NOT_PUBLISHED' and status not in PUBLICATION_FINISHED:
+                raise ValueError('A verified failed attempt cannot grant a repeat publication')
+            if old and ((old['status'] == 'SAVED_NAVER' and status in {'SAVING', 'SAVE_UNCERTAIN'})
+                        or (old['status'] == 'PUBLISH_UNCERTAIN' and status == 'PUBLISHING')):
+                raise ValueError('Observed delivery state cannot be rewound')
+            if old and old['publish_attempted_at']:
+                if record.get('publish_attempted_at', old['publish_attempted_at']) != old['publish_attempted_at']:
+                    raise ValueError('Publication attempt identity cannot be reset')
+                record['publish_attempted_at'] = old['publish_attempted_at']
+                record = validate_work_receipt(record, blog_id)
+            for table in ('posts', 'attempts'):
+                original = conn.execute(f'SELECT category FROM {table} WHERE request_id=?', (identity,)).fetchone()
+                if original and original['category'] != record['category']:
+                    raise ValueError('Receipt category does not match the original request')
+            conn.execute('INSERT INTO save_receipts(request_id,day,category,status,published_url,post_id,'
+                         'published_at,published_at_precision,publish_attempted_at,publication_check_json) '
+                         'VALUES(?,?,?,?,?,?,?,?,?,?) '
+                         'ON CONFLICT(request_id) DO UPDATE SET status=excluded.status,'
+                         'published_url=excluded.published_url,post_id=excluded.post_id,'
+                         'published_at=excluded.published_at,published_at_precision=excluded.published_at_precision,'
+                         'publish_attempted_at=excluded.publish_attempted_at,publication_check_json=excluded.publication_check_json',
+                         (identity, record['day'], record['category'], status,
+                          *(record.get(k, '') for k in ('published_url', 'post_id', 'published_at')),
+                          record.get('published_at_precision', 'second'), record.get('publish_attempted_at', ''),
+                          record.get('publication_check_json', old['publication_check_json'] if old else '{}')))
+            conn.execute('UPDATE posts SET status=? WHERE request_id=?', (status, identity))
+            conn.execute('UPDATE attempts SET status=? WHERE request_id=?', (status, identity))
+            conn.execute('INSERT OR IGNORE INTO attempts(day,category,request_id,status) VALUES(?,?,?,?)',
+                         (record['day'], record['category'], identity, status))
+            counts[status] = counts.get(status, 0) + 1
+    return {'status': 'WORK_RECEIPTS_IMPORTED', 'records': len(records), 'states': counts}
+
+
+def claim_publication(conn: sqlite3.Connection, request_id: str, settings) -> dict:
+    """Claim once before Work clicks Publish. Repeating this is never a retry permit."""
+    from .inputs import verify_photos
+    from .investment import validate_current_post
+    from .planning import active_plan, matches_post, saved_identities
+
+    plan = active_plan(settings)
+    if not plan or plan.get('reservation'):
+        raise ValueError('Automatic publication requires an active unreserved editorial slot')
+    ready = json.loads((settings.db_path.parent / 'ready.json').read_text())
+    if ready.get('date') != today_kst().isoformat() or ready.get('daily_plan') != plan or ready.get('hold'):
+        raise ValueError('Publication requires the current approved handoff')
+    items = [item for item in ready.get('posts', []) + ready.get('publication_ready', [])
+             if item.get('post', {}).get('request_id') == request_id]
+    if len(items) != 1 or items[0].get('requires_fresh_review'):
+        raise ValueError('Publication requires one current approved handoff item')
+    approved = PostDraft(**items[0]['post'])
+    if approved.status != 'APPROVED' or not matches_post(approved, plan):
+        raise ValueError('Publication requires the approved post in the active editorial slot')
+    packet = json.loads((settings.artifact_dir / f"{approved.as_of_date}-{items[0]['id']:05d}.json").read_text())
+    score, decision = review_result(packet.get('review', {}))
+    checks = packet.get('review', {}).get('source_checks', [])
+    if (packet.get('post') != asdict(approved) or decision != 'PASS'
+            or score < settings.config['blog']['review_pass_score'] or score != approved.quality_score
+            or not approved.photos
+            or (approved.category != 'cooking' and (not isinstance(checks, list) or not checks or any(
+                not isinstance(check, dict) or check.get('status') != 'SUPPORTED' for check in checks)))):
+        raise ValueError('Publication requires matching approved text and supported review evidence')
+    validate_current_post(settings, approved)
+    verify_photos(approved.photos)
+    with conn:
+        conn.execute('BEGIN IMMEDIATE')
+        row = conn.execute('SELECT * FROM save_receipts WHERE request_id=?', (request_id,)).fetchone()
+        if not row or row['status'] != 'SAVED_NAVER' or row['day'] != today_kst().isoformat():
+            raise ValueError('Only a verified saved draft can begin publication once')
+        if plan and (plan.get('reservation') or plan['date'] != today_kst().isoformat()
+                     or row['category'] != plan['category']):
+            raise ValueError('Saved draft does not match the active editorial slot')
+        stored = conn.execute('SELECT * FROM posts WHERE request_id=?', (request_id,)).fetchall()
+        if len(stored) != 1 or stored[0]['status'] != 'SAVED_NAVER':
+            raise ValueError('A saved receipt alone cannot authorize an unapproved publication')
+        post = load_post(stored[0])
+        post.status = 'APPROVED'
+        if asdict(post) != asdict(approved):
+            raise ValueError('Saved draft differs from the approved handoff')
+        if conn.execute("SELECT 1 FROM save_receipts WHERE status IN "
+                        "('SAVING','SAVE_UNCERTAIN','PUBLISHING','PUBLISH_UNCERTAIN')").fetchone():
+            raise ValueError('Reconcile the uncertain publication before another attempt')
+        if saved_identities(conn, today_kst().isoformat()) - {request_id}:
+            raise ValueError('Another delivery already occupies the daily slot')
+        stamp = datetime.now(KST).isoformat()
+        conn.execute("UPDATE save_receipts SET status='PUBLISHING',publish_attempted_at=? WHERE request_id=?",
+                     (stamp, request_id))
+        conn.execute("UPDATE posts SET status='PUBLISHING' WHERE request_id=?", (request_id,))
+        conn.execute("UPDATE attempts SET status='PUBLISHING' WHERE request_id=?", (request_id,))
+    return {'status': 'PUBLICATION_CLAIMED', 'request_id': request_id, 'publish_attempted_at': stamp}
 
 
 def recent_titles(conn: sqlite3.Connection, limit: int = 100) -> list[str]:
@@ -170,6 +371,8 @@ def reserve_attempt(conn: sqlite3.Connection, config: dict, daily_target: int, c
     """Consume a real source once; empty categories never cause invented topics."""
     with conn:
         conn.execute("BEGIN IMMEDIATE")
+        if conn.execute("SELECT 1 FROM save_receipts WHERE status IN ('PUBLISHING','PUBLISH_UNCERTAIN')").fetchone():
+            return None
         rows = conn.execute(
             "SELECT category, status, COUNT(*) FROM attempts WHERE day=? GROUP BY category, status",
             (today_kst().isoformat(),),

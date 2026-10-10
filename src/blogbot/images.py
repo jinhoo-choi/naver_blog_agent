@@ -93,8 +93,16 @@ Show the actual topic, not a generic thinking/checking/preparation scene. Do not
 
 
 def section_contexts(body: str) -> list[str]:
-    """Keep the heading and its actual explanation together for image planning."""
-    return [part.strip() for part in re.split(r'^##\s+', body, flags=re.MULTILINE)[1:]]
+    """Keep distinct, nonempty explanations with their headings for image planning."""
+    sections, seen = [], set()
+    for part in re.split(r'^##\s+', body, flags=re.MULTILINE)[1:]:
+        _, _, explanation = part.partition('\n')
+        identity = re.sub(r'\s+', ' ', re.sub(r'^#{3,6} .+$', '', explanation,
+                                              flags=re.MULTILINE)).strip()
+        if identity and identity not in seen:
+            sections.append(part.strip())
+            seen.add(identity)
+    return sections
 
 
 def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostDraft:
@@ -139,11 +147,12 @@ def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostD
     ):
         count = int(config.get('investment_extended_count', count))
     sections = section_contexts(post.body)
-    if len(sections) < max(1, count - 1):
-        raise ValueError('Not enough sections to place images')
+    # Category counts are ceilings, not quotas that make short answers grow.
+    # Existing plan identity checks below still prevent changed plans resetting budgets.
+    count = min(max(1, count), 1 + len(sections))
     folder = settings.artifact_dir / 'generated-images' / post.request_id
     folder.mkdir(parents=True, exist_ok=True)
-    plans = []
+    plans, placements = [], []
     for index in range(count):
         thumbnail = index == 0
         section = '글 전체 핵심 요약' if thumbnail else sections[
@@ -156,6 +165,7 @@ def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostD
                   'output_format': str(config.get('output_format', 'jpeg'))}
         key = hashlib.sha256(json.dumps(params, sort_keys=True).encode()).hexdigest()
         plans.append((params, key))
+        placements.append({} if thumbnail else {'section_heading': section.splitlines()[0]})
     # Prompt edits must not reset existing per-image paid-call budgets.
     # Store only identities; all parameters can be reconstructed from the approved post.
     plan_path = folder / '.image-plan'
@@ -191,7 +201,7 @@ def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostD
             checkpoint(state='READY', sha256=digest)
             return {'file': str(path.resolve()), 'sha256': digest, 'caption': '',
                     'generated': True, 'cache_key': key, 'policy_version': 'category-scene-v2',
-                    'role': 'thumbnail' if thumbnail else 'section'}
+                    'role': 'thumbnail' if thumbnail else 'section', **placements[index]}
         attempts = int(state.get('attempts', 0))
         maximum = min(2, int(config.get('max_attempts', 2)))
         if state.get('recovery_attempted'):
@@ -230,7 +240,7 @@ def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostD
                     usage=usage.model_dump() if usage else None)
                 return {'file': str(path.resolve()), 'sha256': digest, 'caption': '',
                         'generated': True, 'cache_key': key, 'policy_version': 'category-scene-v2',
-                        'role': 'thumbnail' if thumbnail else 'section'}
+                        'role': 'thumbnail' if thumbnail else 'section', **placements[index]}
             except APIStatusError as exc:
                 # Only explicit rate-limit rejection is safe for one bounded retry.
                 retryable = exc.status_code == 429

@@ -1,4 +1,4 @@
-"""API-only preparation and authenticated encrypted handoff to the Work saver."""
+"""API-only preparation and encrypted handoff; Work records saving/publication separately."""
 from __future__ import annotations
 
 import argparse
@@ -6,6 +6,8 @@ import io
 import json
 import os
 import re
+import sqlite3
+import tempfile
 import zipfile
 from contextlib import closing
 from datetime import date, timedelta
@@ -15,7 +17,17 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from cryptography.fernet import Fernet
 
 from .config import load_settings
-from .core import connect_db, today_kst
+from .core import (
+    KST,
+    PUBLICATION_FINISHED,
+    PUBLICATION_PENDING,
+    WORK_RECEIPT_STATES,
+    connect_db,
+    import_work_receipts,
+    merge_work_receipts,
+    today_kst,
+    validate_work_receipt,
+)
 from .images import atomic_json
 from .inputs import enqueue_file, managed_queue_photos
 from .investment import revalidation_reason
@@ -101,12 +113,35 @@ def github_get(path: str) -> bytes:
 def extract_bundle(encrypted: bytes, directory: Path, key: str) -> None:
     data = Fernet(key.encode()).decrypt(encrypted)
     directory.mkdir(parents=True, exist_ok=True)
+    db_path = directory / 'blog.db'
+    preserved = []
+    if db_path.exists():
+        # Read before extracting anything. Corrupt/missing tables are errors, never an empty ledger.
+        with closing(sqlite3.connect(db_path.resolve().as_uri() + '?mode=ro', uri=True)) as conn:
+            conn.row_factory = sqlite3.Row
+            if conn.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
+                raise ValueError('Existing Work database is damaged; reconcile before restoring')
+            preserved = [dict(row) for row in conn.execute('SELECT * FROM save_receipts')]
+            for record in preserved:
+                record.setdefault('status', 'SAVED_NAVER')  # Existing saved-only schema.
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         for info in archive.infolist():
             target = (directory / info.filename).resolve()
             if not target.is_relative_to(directory.resolve()) or info.file_size > 25_000_000:
                 raise ValueError('Invalid bundle member')
-        archive.extractall(directory)
+            if target == db_path.resolve() and info.filename != 'blog.db':
+                raise ValueError('Invalid database bundle member')
+        if archive.namelist().count('blog.db') != 1:
+            raise ValueError('Bundle requires exactly one database')
+        # Reconcile in a temporary DB first so stale bundles or conflicting evidence cannot
+        # erase a local publication claim, even when the external Work ledger is replayed.
+        with tempfile.TemporaryDirectory(prefix='.restore-', dir=directory) as temporary:
+            staged = Path(temporary) / 'blog.db'
+            staged.write_bytes(archive.read('blog.db'))
+            with closing(connect_db(staged)) as conn:
+                merge_work_receipts(conn, preserved, categories={r['category'] for r in preserved})
+            archive.extractall(directory, members=[name for name in archive.namelist() if name != 'blog.db'])
+            os.replace(staged, db_path)
     metadata = json.loads((directory / 'bundle-info.json').read_text())
     old_root = Path(metadata['data_root'])
     def rebase(photos):
@@ -142,7 +177,7 @@ def extract_bundle(encrypted: bytes, directory: Path, key: str) -> None:
     ready_path = directory / 'ready.json'
     if ready_path.exists():
         ready = json.loads(ready_path.read_text())
-        for item in ready.get('posts', []):
+        for item in ready.get('posts', []) + ready.get('publication_ready', []):
             rebase(item['post']['photos'])
             for segment in item['segments']:
                 if segment.get('photo'):
@@ -180,10 +215,12 @@ def import_manual_saves(settings) -> None:
                     or record.get('category') not in settings.config['categories']
                     or date.fromisoformat(day) > today_kst()):
                 raise ValueError('Invalid manual-save receipt')
-            receipt = conn.execute('SELECT day,category FROM save_receipts WHERE request_id=?',
+            receipt = conn.execute('SELECT day,category,status FROM save_receipts WHERE request_id=?',
                                    (record['request_id'],)).fetchone()
             if receipt and (receipt['day'] != day or receipt['category'] != record['category']):
                 raise ValueError('Conflicting manual-save receipt; reconcile without resetting budgets')
+            if receipt and receipt['status'] in PUBLICATION_PENDING | PUBLICATION_FINISHED:
+                continue  # A legacy saved-only ledger cannot erase observed publication state.
             conn.execute('INSERT OR IGNORE INTO save_receipts(request_id,day,category) VALUES(?,?,?)',
                          (record['request_id'], day, record['category']))
             existing = conn.execute('SELECT id,category FROM attempts WHERE request_id=?',
@@ -338,11 +375,23 @@ def filter_ready(directory: Path, receipts: dict, plan: dict | None = None, sett
     blocked = set()
     used = set()
     uncertain = False
-    for record in receipts['records']:
-        if not record.get('request_id') or record.get('status') not in {
-            'SAVING', 'SAVE_UNCERTAIN', 'SAVED_NAVER', 'PUBLISHED',
-        }:
+    records = list(receipts['records'])
+    if settings is not None:
+        with closing(connect_db(settings.db_path)) as conn:
+            # Empty/replayed input cannot erase a locally recorded publication attempt.
+            records.extend(dict(r) for r in conn.execute('SELECT * FROM save_receipts'))
+    for record in records:
+        if not record.get('request_id') or record.get('status') not in WORK_RECEIPT_STATES:
             raise ValueError('Invalid Work save receipt')
+        if record['status'] in PUBLICATION_PENDING | PUBLICATION_FINISHED:
+            owner = (getattr(settings, 'naver_blog_id', '') or
+                     getattr(settings, 'config', {}).get('creator_advisor', {}).get('channel_id', ''))
+            record = validate_work_receipt(record, owner)
+            uncertain |= record['status'] in PUBLICATION_PENDING
+            from datetime import datetime
+            for field in ('published_at', 'publish_attempted_at'):
+                if record.get(field) and datetime.fromisoformat(record[field]).astimezone(KST).date() == today:
+                    used.add(record['request_id'])
         blocked.add(record['request_id'])
         if plan:
             try:
@@ -360,10 +409,19 @@ def filter_ready(directory: Path, receipts: dict, plan: dict | None = None, sett
         raise ValueError('Stale handoff')
     if ready.get('daily_plan') != plan or (plan and plan['date'] != today.isoformat()):
         raise ValueError('Handoff does not match the current daily plan')
-    eligible, weekly_held = [], False
-    for item in ready['posts']:
+    eligible, publication_ready, weekly_held = [], [], False
+    observed_saved = {r['request_id'] for r in records if r['status'] == 'SAVED_NAVER'
+                      and (not plan or receipt_day(r) == plan['date'])}
+    observed_saved -= {r['request_id'] for r in records if r['status'] != 'SAVED_NAVER'}
+    for item in ready['posts'] + ready.get('publication_ready', []):
         post = item['post']
-        if plan and (plan.get('reservation') or uncertain or used or eligible or post['as_of_date'] != plan['date']
+        identity = post['request_id']
+        publication_candidate = (plan and identity in observed_saved and not publication_ready
+                                 and used <= {identity})
+        if uncertain and any(r.get('status') in PUBLICATION_PENDING for r in records):
+            continue
+        if plan and (plan.get('reservation') or uncertain or (used and not publication_candidate)
+                     or eligible or post['as_of_date'] != plan['date']
                      or post['category'] != plan['category']
                      or post.get('provenance', {}).get('daily_plan') != plan):
             continue
@@ -378,9 +436,11 @@ def filter_ready(directory: Path, receipts: dict, plan: dict | None = None, sett
             except (OSError, ValueError, KeyError, TypeError, RuntimeError):
                 weekly_held = True
                 continue
-        identity = post['request_id']
         if not identity:
             raise ValueError('Missing request identity')
+        if publication_candidate and post['status'] == 'APPROVED':
+            publication_ready.append(item)
+            continue  # Saved once already: expose only to the separate publication claim.
         if identity in blocked or post['status'] != 'APPROVED':
             continue
         if not (today-timedelta(days=3)).isoformat() <= post['as_of_date'] <= today.isoformat():
@@ -388,7 +448,7 @@ def filter_ready(directory: Path, receipts: dict, plan: dict | None = None, sett
         item['requires_fresh_review'] = post['as_of_date'] != today.isoformat()
         eligible.append(item)
         blocked.add(identity)
-    atomic_json(path, {**ready, 'posts': eligible,
+    atomic_json(path, {**ready, 'posts': eligible, 'publication_ready': publication_ready,
                        **({'hold': revalidation_reason(plan)} if weekly_held else {})})
 
 
@@ -413,6 +473,9 @@ def main():
         settings = load_settings()
         restored = replace(settings, db_path=args.destination / 'blog.db',
                            artifact_dir=args.destination / 'drafts', inbox_dir=args.destination / 'inbox')
+        owner = settings.naver_blog_id or settings.config.get('creator_advisor', {}).get('channel_id', '')
+        with closing(connect_db(restored.db_path)) as conn:
+            import_work_receipts(conn, receipts, blog_id=owner, categories=settings.config['categories'])
         filter_ready(args.destination, receipts, active_plan(settings), restored)
         # Recreate packet segments with local image paths after relocation.
         print(json.dumps({'status': 'UNPACKED', 'directory': str(args.destination)}))

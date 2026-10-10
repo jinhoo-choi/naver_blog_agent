@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-from .core import KST, today_kst
+from .core import KST, PUBLICATION_FINISHED, PUBLICATION_PENDING, today_kst
 
 
 def resolve_plan(config: dict, day: date | None = None) -> dict | None:
@@ -94,14 +94,21 @@ class SaveDateRequired(RuntimeError):
 
 def saved_count(conn, plan: dict) -> int:
     """Use authoritative receipts or aware save timestamps; never generation dates."""
-    receipts = {r['request_id']: r['day'] for r in conn.execute('SELECT * FROM save_receipts')}
-    identities = {identity for identity, day in receipts.items() if day == plan['date']}
+    records = conn.execute('SELECT * FROM save_receipts').fetchall()
+    if any(r['status'] in PUBLICATION_PENDING | {'SAVING', 'SAVE_UNCERTAIN'} for r in records):
+        raise SaveDateRequired('Reconcile the actual publication outcome before another delivery')
+    receipts = {r['request_id']: r['day'] for r in records}
+    identities = saved_identities(conn, plan['date'])
     known = set(receipts)
     unknown = set()
-    for row in conn.execute("SELECT id,request_id,draft_saved_at FROM posts WHERE status='SAVED_NAVER'"):
+    for row in conn.execute("SELECT id,request_id,draft_saved_at,status FROM posts WHERE status IN "
+                            "('SAVED_NAVER','PUBLISHING','PUBLISH_UNCERTAIN','PUBLISHED')"):
         identity = row['request_id'] or f"post:{row['id']}"
         if identity in receipts:
             continue  # Verified actual day overrides legacy resolution/generation timestamps.
+        if row['status'] != 'SAVED_NAVER':
+            unknown.add(identity)
+            continue
         stamp = row['draft_saved_at']
         try:
             parsed = datetime.fromisoformat(stamp) if stamp else None
@@ -115,7 +122,7 @@ def saved_count(conn, plan: dict) -> int:
         if saved_day == plan['date']:
             identities.add(identity)
     unknown.update(r['request_id'] or f"attempt:{r['id']}" for r in conn.execute(
-        "SELECT id,request_id FROM attempts WHERE status='SAVED_NAVER'")
+        "SELECT id,request_id FROM attempts WHERE status IN ('SAVED_NAVER','PUBLISHING','PUBLISH_UNCERTAIN','PUBLISHED')")
         if r['request_id'] not in known)
     if unknown:
         raise SaveDateRequired('Reconcile saved records with verified actual save dates')
@@ -143,7 +150,7 @@ def ready_categories(settings, conn) -> set[str]:
     if count:
         # A verified Work receipt can acknowledge an API post still marked APPROVED.
         saved = saved_identities(conn, plan['date'])
-        rows = conn.execute("SELECT * FROM posts WHERE status IN ('APPROVED','SAVED_NAVER')").fetchall()
+        rows = conn.execute("SELECT * FROM posts WHERE status IN ('APPROVED','SAVED_NAVER','PUBLISHED')").fetchall()
         matched = any(matches_post(load_post(r), plan) and (
             (r['request_id'] or f"post:{r['id']}") in saved) for r in rows)
         return {plan['category']} if matched else set()
@@ -153,8 +160,11 @@ def ready_categories(settings, conn) -> set[str]:
 
 def saved_identities(conn, day: str) -> set[str]:
     # attempts.day always remains generation/reservation day, never save evidence.
-    receipts = {r['request_id']: r['day'] for r in conn.execute('SELECT * FROM save_receipts')}
-    identities = {identity for identity, actual in receipts.items() if actual == day}
+    records = conn.execute('SELECT * FROM save_receipts').fetchall()
+    receipts = {r['request_id']: r['day'] for r in records}
+    identities = {r['request_id'] for r in records if r['day'] == day or any(
+        r[field] and datetime.fromisoformat(r[field]).astimezone(KST).date().isoformat() == day
+        for field in ('published_at', 'publish_attempted_at'))}
     for row in conn.execute("SELECT id,request_id,draft_saved_at FROM posts WHERE status='SAVED_NAVER'"):
         identity = row['request_id'] or f"post:{row['id']}"
         if identity in receipts or not row['draft_saved_at']:
@@ -234,9 +244,13 @@ def record_verified_save(conn, post_id: int, record: dict) -> None:
     day = receipt_day(record)
     if date.fromisoformat(day) > today_kst():
         raise ValueError('Save receipt cannot be future-dated')
-    row = conn.execute('SELECT id,request_id,category FROM posts WHERE id=?', (post_id,)).fetchone()
+    row = conn.execute('SELECT id,request_id,category,status FROM posts WHERE id=?', (post_id,)).fetchone()
+    if row is None or row['status'] in PUBLICATION_PENDING | PUBLICATION_FINISHED:
+        raise ValueError('Publication state cannot be resolved as an unstarted save')
     identity = row['request_id'] or f"post:{row['id']}"
-    old = conn.execute('SELECT day FROM save_receipts WHERE request_id=?', (identity,)).fetchone()
+    old = conn.execute('SELECT day,status FROM save_receipts WHERE request_id=?', (identity,)).fetchone()
+    if old and old['status'] in PUBLICATION_PENDING | PUBLICATION_FINISHED:
+        raise ValueError('Publication receipt cannot be downgraded to a saved draft')
     if old and old['day'] != day:
         raise ValueError('Conflicting save day requires reconciliation')
     with conn:

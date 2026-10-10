@@ -212,14 +212,13 @@ def test_failed_reference_fetch_is_not_evidence_and_is_not_retried_today(tmp_pat
     assert len(calls) == 1
 
 
-def test_extra_major_sections_are_demoted_without_changing_facts():
+def test_meaningful_section_titles_are_preserved_without_count_quota():
     from blogbot.presentation import normalize_structure
     body = '요약\n\n' + '\n\n'.join(f'## 구역{i}\n내용{i}' for i in range(8))
     post = PostDraft('exercise', '등', '주제', '제목', body, [], [], '2026-10-01')
     normalized = normalize_structure(post)
-    assert sum(line.startswith('## ') for line in normalized.body.splitlines()) == 6
-    assert '### 구역6\n내용6' in normalized.body and '### 구역7\n내용7' in normalized.body
-    assert normalized.body.replace('### ', '## ') == body
+    assert normalized.body == body
+    validate_structure(normalized)
 
 
 def test_structure_repair_preserves_text_and_existing_titles():
@@ -227,7 +226,7 @@ def test_structure_repair_preserves_text_and_existing_titles():
     post = PostDraft('investment', '시장·산업', 'topic', 'title', body, [], [], '2026-09-30')
     fixed = normalize_structure(post)
     validate_structure(fixed)
-    assert fixed.body == body.replace('## Existing 4', '### Existing 4')
+    assert fixed.body == body
     assert normalize_structure(fixed) == fixed
 
 
@@ -295,8 +294,8 @@ def test_daily_image_counts_use_summary_cover_and_reuse_cache(tmp_path, monkeypa
     settings = SimpleNamespace(config=config, artifact_dir=tmp_path, openai_api_key='placeholder')
     for category in ['parenting', 'exercise', 'investment']:
         post = PostDraft(category, '정보', 'topic', '주제 핵심',
-                         '글의 핵심 답변입니다.\n\n## 원인\n본문\n\n## 방법\n본문'
-                         '\n\n## 실천\n본문\n\n## 주의\n본문',
+                         '글의 핵심 답변입니다.\n\n## 원인\n원인을 설명합니다.\n\n## 방법\n수행 방법입니다.'
+                         '\n\n## 실천\n실천 순서입니다.\n\n## 주의\n중단 신호입니다.',
                          [], [], '2026-09-30', request_id=category)
         if category == 'investment' and long_investment:
             post.body += '\n' + '확인된 설명입니다. ' * 250

@@ -54,6 +54,18 @@ def test_good_draft_has_free_check_and_no_extra_call(tmp_path, req, capsys):
     assert '확인된 사실' not in json.dumps(events, ensure_ascii=False)
 
 
+@pytest.mark.parametrize('category', ['parenting', 'exercise', 'investment'])
+def test_short_complete_answer_passes_structure_without_paid_padding(tmp_path, category):
+    request = ContentRequest('short-' + category, category, {'question': '기준과 방법은?'})
+    body = ('공식 자료의 적용 조건을 확인한 뒤 안내된 순서로 진행합니다.\n\n'
+            '## 적용 조건과 순서\n\n자료에 명시된 대상과 조건을 먼저 대조합니다. '
+            '해당하는 절차만 따르며 안전 중단 조건은 각 단계에서 확인합니다.')
+    raw = candidate(body=body)
+    post, report = run_pre_review(tmp_path, NoRepair(), raw, request, INFO)
+    assert post.body == body and len(body) < 1800
+    assert report['model_correction_used'] is False and report['changes'] == []
+
+
 def test_verified_source_alignment_is_lossless_and_free(tmp_path, req):
     raw = candidate(source_urls=[FDA], body=candidate().payload['body'] + '\n' + FDA)
     raw.observed = [TRACKED_FDA]
@@ -147,6 +159,7 @@ def test_missing_fields_are_not_coerced_or_silently_defaulted(tmp_path, req):
 @pytest.mark.parametrize('body,code', [
     ('작성일: 2026-10-04\n\n' + candidate().payload['body'], 'invalid_preview'),
     ('본문만 있습니다.', 'missing_headings'),
+    ('핵심 답변입니다.\n\n## 조건\n\n### 하위 제목만 있음', 'missing_headings'),
     (candidate().payload['body'] + '\n![image](file.png)', 'inline_image_markup'),
     (candidate().payload['body'] + '\n저는 이 방법을 사용했더니 효과를 느꼈어요.', 'unsupported_personal_experience'),
     (candidate().payload['body'] + '\n선우는 9개월입니다.', 'unsupported_child_age'),

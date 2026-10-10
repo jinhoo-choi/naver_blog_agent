@@ -1,5 +1,7 @@
 # 후기형 편집·저장 기준
 
+현재 편성은 [DAILY_PLAN](DAILY_PLAN.md), 실행·공개 권한은 [AUTOMATION](AUTOMATION.md)이 우선합니다. 아래 날짜별 승인 기록은 당시 이력이며 일반 정보 글의 이미지 수량 강제로 확대하지 않습니다.
+
 버전: `review-editorial-v1` (2026-10-05). 사용자가 제공한 사진과 경험을 읽기 쉬운
 후기로 배치하는 추가 기준입니다. [CONTENT_QUALITY](CONTENT_QUALITY.md)의 공통 품질·
 안전·출처 기준과 [INPUTS](INPUTS.md)의 실제 자료·권한 확인을 함께 적용합니다.

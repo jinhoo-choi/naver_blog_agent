@@ -1,4 +1,4 @@
-"""Owner's Oct 8 choice and this weekend-only input holds; no external calls."""
+"""Dated owner choices and explicit input-pending holds; no external calls."""
 import json
 from datetime import datetime
 from types import SimpleNamespace
@@ -52,6 +52,11 @@ def test_face_pull_replaces_older_exercise_candidates_only_on_owner_date(tmp_pat
 def test_weekend_waits_for_owner_input_before_all_cost_and_save_stages(tmp_path, monkeypatch, day):
     from blogbot.cloud import recover_preparation
     settings = settings_on(tmp_path, monkeypatch, day)
+    # Model the unselected state independently of later owner-approved date inputs.
+    settings.config['topics']['scheduled'].pop(day, None)
+    settings.config['operating_plan']['reservations'][day] = {
+        'category': 'parenting', 'kind': 'owner_input_pending'}
+    settings.config['daily_plan'] = resolve_plan(settings.config)
     enqueue_question(settings, tmp_path, 'parenting', 'old-parenting', '이전 실제 육아 질문입니다.')
     plan = active_plan(settings)
     assert plan['reservation'] == {'category': 'parenting', 'kind': 'owner_input_pending'}
@@ -74,6 +79,31 @@ def test_weekend_waits_for_owner_input_before_all_cost_and_save_stages(tmp_path,
         assert conn.execute('SELECT COUNT(*) FROM attempts').fetchone()[0] == 0
         assert conn.execute('SELECT COUNT(*) FROM save_receipts').fetchone()[0] == 0
     assert (settings.inbox_dir/'old-parenting'/'request.json').exists()
+
+
+def test_manual_sunday_choice_replaces_only_selected_date_and_preserves_pending_saturday(
+        tmp_path, monkeypatch):
+    settings = settings_on(tmp_path, monkeypatch, '2026-10-11')
+    enqueue_question(settings, tmp_path, 'parenting', 'old-parenting', '이전 실제 육아 질문입니다.')
+    monkeypatch.setattr('blogbot.inputs.fetch_community', lambda _: pytest.fail('No KIS on Sunday'))
+    requests, notices = collect_requests(settings)
+    assert not notices and len(requests) == 1
+    chosen = requests[0]
+    assert chosen.id == 'owner-20261011-100day-baby-play'
+    assert chosen.category == 'parenting'
+    assert chosen.data['question'] == '100일 아기, 깨어 있을 때 뭐 하고 놀아줄까?'
+    assert chosen.provenance['source'] == 'owner_input'
+    assert active_plan(settings)['target'] == 1
+    assert 'reservation' not in active_plan(settings)
+    assert (settings.inbox_dir/'old-parenting'/'request.json').exists()
+
+    saturday = settings_on(tmp_path, monkeypatch, '2026-10-10')
+    assert active_plan(saturday)['reservation'] == {
+        'category': 'parenting', 'kind': 'owner_input_pending'}
+    assert '2026-10-10' not in saturday.config['topics']['scheduled']
+    future = settings_on(tmp_path, monkeypatch, '2026-10-17')
+    assert [r.id for r in collect_requests(future)[0]] == ['old-parenting']
+    assert '2026-10-17' not in future.config['topics']['scheduled']
 
 
 @pytest.mark.parametrize('day', ['2026-10-17','2026-10-24'])

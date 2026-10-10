@@ -6,10 +6,20 @@ on:
       mode:
         description: 'prepare resumes media; recover retries failed inputs; bootstrap/probe diagnose setup'
         type: choice
-        options: [prepare, recover, bootstrap, probe]
+        options: [prepare, recover, bootstrap, probe, manual-images]
         default: prepare
       attribution_review_request_id:
         description: 'Recover only: explicitly approved existing request with a one-use attribution manifest'
+        type: string
+        required: false
+        default: ''
+      manual_image_request_id:
+        description: 'Manual images only: exact approved existing request ID'
+        type: string
+        required: false
+        default: ''
+      manual_image_packet:
+        description: 'Manual images only: Fernet ciphertext of the pinned reviewed packet; never plaintext'
         type: string
         required: false
         default: ''
@@ -68,8 +78,10 @@ jobs:
       - name: Prepare or resume
         env:
           PREPARE_MODE: ${{ inputs.mode || 'prepare' }}
+          BLOG_MANUAL_IMAGE_PACKET: ${{ inputs.manual_image_packet || '' }}
+          MANUAL_IMAGE_REQUEST_ID: ${{ inputs.manual_image_request_id || '' }}
           ATTRIBUTION_REVIEW_REQUEST_ID: ${{ inputs.attribution_review_request_id || '' }}
-        run: python -m blogbot.cloud "$PREPARE_MODE" --attribution-review-request-id "$ATTRIBUTION_REVIEW_REQUEST_ID"
+        run: python -m blogbot.cloud "$PREPARE_MODE" --attribution-review-request-id "$ATTRIBUTION_REVIEW_REQUEST_ID" --manual-image-request-id "$MANUAL_IMAGE_REQUEST_ID"
       - name: Preserve encrypted checkpoints
         if: always()
         uses: actions/upload-artifact@v4

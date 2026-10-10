@@ -105,7 +105,9 @@ def section_contexts(body: str) -> list[str]:
     return sections
 
 
-def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostDraft:
+def generate_images(settings, request: ContentRequest, post: PostDraft, *,
+                    allow_uncertain_recovery: bool = True,
+                    section_headings: list[str] | None = None) -> PostDraft:
     if request.category == 'origins':
         folder = settings.artifact_dir / 'generated-images' / post.request_id
         if folder.exists() and any(folder.iterdir()):
@@ -147,6 +149,12 @@ def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostD
     ):
         count = int(config.get('investment_extended_count', count))
     sections = section_contexts(post.body)
+    if section_headings is not None:
+        indexed = {section.splitlines()[0]: section for section in sections}
+        if (len(set(section_headings)) != len(section_headings)
+                or any(heading not in indexed for heading in section_headings)):
+            raise ImagePending('Selected image sections do not match the approved manuscript')
+        sections = [indexed[heading] for heading in section_headings]
     # Category counts are ceilings, not quotas that make short answers grow.
     # Existing plan identity checks below still prevent changed plans resetting budgets.
     count = min(max(1, count), 1 + len(sections))
@@ -204,9 +212,15 @@ def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostD
                     'role': 'thumbnail' if thumbnail else 'section', **placements[index]}
         attempts = int(state.get('attempts', 0))
         maximum = min(2, int(config.get('max_attempts', 2)))
+        if (not allow_uncertain_recovery and manifest.exists()
+                and (state.get('state') != 'RATE_LIMITED'
+                     or type(state.get('attempts')) is not int or attempts < 1)):
+            raise ImagePending('Manual image outcome requires reconciliation; no resubmission')
         if state.get('recovery_attempted'):
             raise ImagePending('Image recovery budget reached')
         if state.get('state') in {'STARTED', 'UNCERTAIN', 'FAILED'} or attempts >= maximum:
+            if not allow_uncertain_recovery:
+                raise ImagePending('Manual image attempt budget reached; no recovery extension')
             updated = state.get('updated_at')
             if not isinstance(updated, (int, float)) or not 0 < updated <= time.time():
                 # Legacy checkpoints have no reliable age after artifact extraction.

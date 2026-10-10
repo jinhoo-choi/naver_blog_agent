@@ -327,7 +327,8 @@ def pack(settings, destination: Path) -> None:
         for path in settings.artifact_dir.glob('*.json'):
             try:
                 payload = json.loads(path.read_text())
-                keep = payload['post']['as_of_date'] >= cutoff
+                keep = (payload['post']['as_of_date'] >= cutoff
+                        or path.name.startswith('manual-images-'))
                 request_id = payload['post']['request_id']
                 if not isinstance(request_id, str):
                     raise TypeError('Invalid packet request id')
@@ -462,12 +463,15 @@ def filter_ready(directory: Path, receipts: dict, plan: dict | None = None, sett
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('mode', choices=['bootstrap', 'prepare', 'recover', 'unpack', 'probe'])
+    parser.add_argument('mode', choices=['bootstrap', 'prepare', 'recover', 'unpack', 'probe', 'manual-images'])
     parser.add_argument('--file', type=Path)
     parser.add_argument('--destination', type=Path)
     parser.add_argument('--receipts', type=Path)
     parser.add_argument('--attribution-review-request-id', default='')
+    parser.add_argument('--manual-image-request-id', default='')
     args = parser.parse_args()
+    if bool(args.manual_image_request_id) != (args.mode == 'manual-images'):
+        parser.error('manual image mode requires its explicit request selector')
     if args.attribution_review_request_id and (
             args.mode != 'recover' or not re.fullmatch(
                 r'[A-Za-z0-9][A-Za-z0-9_-]{0,79}', args.attribution_review_request_id)):
@@ -506,6 +510,14 @@ def main():
         return
     restore(directory)
     try:
+        if args.mode == 'manual-images':
+            from .manual_images import run_manual_images
+            result = run_manual_images(settings, os.environ.get('BLOG_MANUAL_IMAGE_PACKET', ''),
+                                       args.manual_image_request_id)
+            print(json.dumps(result))
+            if result['status'] != 'MANUAL_IMAGES_READY':
+                raise PreparationFailed('Manual images pending; reconcile private checkpoints')
+            return
         plan = active_plan(settings)
         reserved = bool(args.mode in {'prepare', 'recover'} and plan and plan.get('reservation'))
         if not reserved and not args.attribution_review_request_id:
@@ -584,7 +596,7 @@ def main():
         # Checkpoints survive handled API errors; no raw files are uploaded to the public repository.
         delivery_hold = pack(settings, destination)
         summary_path = directory / 'run-summary.json'
-        if (args.mode != 'probe' and summary_path.exists()
+        if (args.mode not in {'probe', 'manual-images'} and summary_path.exists()
                 and json.loads(summary_path.read_text()).get('date') == today_kst().isoformat()):
             from .notify import telegram
             try:

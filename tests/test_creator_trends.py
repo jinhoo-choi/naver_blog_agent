@@ -4,6 +4,7 @@ import io
 import json
 import zipfile
 from contextlib import closing
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -33,7 +34,7 @@ def settings(tmp_path, monkeypatch):
     monkeypatch.delenv('BLOG_CREATOR_TRENDS_JSON', raising=False)
     monkeypatch.delenv('NAVER_API_HUB_CLIENT_ID', raising=False)
     monkeypatch.delenv('NAVER_API_HUB_CLIENT_SECRET', raising=False)
-    result = load_settings()
+    result = replace(load_settings(), root=tmp_path / 'repository')
     result.config['community']['enabled'] = False
     result.config['topics']['enabled'] = False
     return result
@@ -90,14 +91,97 @@ def test_unavailable_preserves_queue_and_records_truth_even_single_candidate(set
     ({'captured_at': (NOW + timedelta(hours=1)).isoformat()}, 'FUTURE_CAPTURE'),
     ({'channel_id': 'different'}, 'INVALID'),  # URL and channel mismatch.
 ])
-def test_invalid_environment_never_silently_uses_cached_evidence(settings, monkeypatch, bad, expected):
-    atomic_json(settings.db_path.parent / SNAPSHOT, snapshot())
+def test_invalid_environment_without_valid_alternative_is_reported(settings, monkeypatch, bad, expected):
     evidence = snapshot()
     evidence['groups'][0]['data_date'] = '2026-10-04'
     raw = bad if isinstance(bad, str) else json.dumps({**evidence, **bad})
     monkeypatch.setenv('BLOG_CREATOR_TRENDS_JSON', raw)
     result = run(settings, [request('one', '수면시간')])
     assert result[0].provenance['creator_trends']['status'] == expected
+
+
+@pytest.mark.parametrize('source', ['environment', 'private_snapshot', 'repository_snapshot'])
+def test_newest_valid_source_wins_and_preserves_observation_time(
+        settings, monkeypatch, capsys, source):
+    (settings.root / 'config').mkdir(parents=True)
+    for index, name in enumerate(['environment', 'private_snapshot', 'repository_snapshot']):
+        evidence = snapshot()
+        captured = NOW if name == source else NOW - timedelta(hours=index + 1)
+        evidence['captured_at'] = captured.isoformat()
+        evidence['groups'][0]['entries'][0]['title'] = f'수면시간 {name}'
+        if name == 'environment':
+            monkeypatch.setenv('BLOG_CREATOR_TRENDS_JSON', json.dumps(evidence))
+        else:
+            path = (settings.db_path.parent if name == 'private_snapshot'
+                    else settings.root / 'config') / SNAPSHOT
+            atomic_json(path, evidence)
+    decision = run(settings, [request('one', '수면시간')])[0].provenance['creator_trends']
+    assert decision['status'] == 'CONSULTED'
+    assert decision['captured_at'] == NOW.isoformat()
+    assert decision['matches'][0]['title'] == f'수면시간 {source}'
+    assert json.loads((settings.db_path.parent / SNAPSHOT).read_text())['captured_at'] == NOW.isoformat()
+    assert f'CREATOR_TRENDS_SOURCE_SELECTED source={source}' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('bad,reason', [
+    ('bad json', 'INVALID'),
+    ({'captured_at': (NOW - timedelta(hours=37)).isoformat()}, 'EXPIRED'),
+    ({'captured_at': (NOW + timedelta(hours=1)).isoformat()}, 'FUTURE_CAPTURE'),
+])
+@pytest.mark.parametrize('source', ['private_snapshot', 'repository_snapshot'])
+def test_invalid_environment_does_not_shadow_valid_observed_file(
+        settings, monkeypatch, capsys, source, bad, reason):
+    directory = settings.db_path.parent if source == 'private_snapshot' else settings.root / 'config'
+    directory.mkdir(parents=True, exist_ok=True)
+    evidence = snapshot()
+    atomic_json(directory / SNAPSHOT, evidence)
+    invalid = snapshot()
+    invalid['groups'][0]['data_date'] = '2026-10-04'
+    raw = bad if isinstance(bad, str) else json.dumps({**invalid, **bad})
+    monkeypatch.setenv('BLOG_CREATOR_TRENDS_JSON', raw)
+    decision = run(settings, [request('one', '수면시간')])[0].provenance['creator_trends']
+    assert decision['status'] == 'CONSULTED'
+    assert decision['captured_at'] == evidence['captured_at']
+    assert f'source=environment status={reason}' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('change,reason', [
+    (lambda s: s.update(enabled=False), 'INVALID'),
+    (lambda s: s.update(captured_at=(NOW + timedelta(hours=1)).isoformat()), 'FUTURE_CAPTURE'),
+    (lambda s: s['groups'][0].update(data_date='2026-10-01'), 'EXPIRED_DATA'),
+    (lambda s: (s.update(channel_id='other'), s['groups'][0].update(
+        source_url='https://creator-advisor.naver.com/naver_blog/other/trends')), 'WRONG_CHANNEL'),
+])
+def test_invalid_repository_source_cannot_replace_valid_evidence(
+        settings, monkeypatch, capsys, change, reason):
+    (settings.root / 'config').mkdir(parents=True)
+    valid = snapshot()
+    valid['captured_at'] = (NOW - timedelta(hours=1)).isoformat()
+    monkeypatch.setenv('BLOG_CREATOR_TRENDS_JSON', json.dumps(valid))
+    invalid = snapshot()
+    change(invalid)
+    atomic_json(settings.root / 'config' / SNAPSHOT, invalid)
+    decision = run(settings, [request('one', '수면시간')])[0].provenance['creator_trends']
+    assert decision['status'] == 'CONSULTED'
+    assert decision['captured_at'] == valid['captured_at']
+    assert f'source=repository_snapshot status={reason}' in capsys.readouterr().out
+
+
+def test_repository_snapshot_keeps_each_group_data_date_and_never_adds_inputs(settings):
+    (settings.root / 'config').mkdir(parents=True)
+    evidence = snapshot()
+    old = copy.deepcopy(evidence['groups'][0])
+    old['data_date'] = '2026-10-01'
+    old['keyword'] = '기저귀'
+    old['entries'][0]['title'] = '기저귀 오래된 근거'
+    evidence['groups'].append(old)
+    atomic_json(settings.root / 'config' / SNAPSHOT, evidence)
+    assert run(settings, []) == []
+    decision = run(settings, [request('one', '기저귀')])[0].provenance['creator_trends']
+    assert decision['matches'] == []
+    assert decision['status'] == 'NO_RELEVANT_MATCH'
+    cached = json.loads((settings.db_path.parent / SNAPSHOT).read_text())
+    assert [group['data_date'] for group in cached['groups']] == ['2026-10-05', '2026-10-01']
 
 
 def test_refreshing_capture_does_not_refresh_old_data(settings, monkeypatch):

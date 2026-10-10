@@ -84,6 +84,10 @@ def test_pack_and_work_receipts_across_dates(settings, monkeypatch, tmp_path):
         {'request_id': f'question-{age}', 'status': status}
         for age, status in [(1, 'SAVED_NAVER'), (2, 'SAVE_UNCERTAIN'), (3, 'PUBLISHED')]
     ]}
+    receipts['records'][-1].update(
+        day=str(today_kst() - timedelta(days=3)), post_id='123',
+        published_url='https://blog.naver.com/test_owner/123',
+        published_at=str(today_kst() - timedelta(days=3)) + 'T10:00:00+09:00')
     filter_ready(directory, receipts)
     assert [p['post']['request_id'] for p in json.loads(path.read_text())['posts']] == [
         'question-0',

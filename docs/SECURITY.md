@@ -1,11 +1,11 @@
 # 실행 경계
 
 - 사용자가 지정한 공개 저장소에 키·PAT·쿠키·원고·브라우저 프로필을 커밋하지 않는다.
-- 네이버는 소유자의 Windows 실행기, CI는 GitHub-hosted 실행기로 분리한다.
+- 현재 네이버 저장·공개·교류는 승인된 Work 브라우저, API 준비·CI는 GitHub-hosted 실행기로 분리한다. Windows 실행기는 비활성 대안이다.
 - 로컬 workflow는 PR/push를 받지 않고 main과 owner 수동/dispatch로 제한한다.
 - 프로필·DB는 checkout 밖에 두고 전용 Windows 계정으로 운영한다.
 - 로그인 보안 확인은 직접 수행하며 CAPTCHA 우회 코드는 없다.
-- 발행/예약발행 버튼을 조작하는 기능은 없다.
+- Python의 NaverDraftWriter는 임시저장만 수행한다. 2026-10-10 승인된 Work 공개 발행은 AUTOMATION.md의 당일 원고 검수·발행 전 기록·공개 URL 확인을 모두 따른다. 미확인 공개는 재클릭하지 않는다.
 - 알 수 없는 팝업의 확인·저장 등의 범용 버튼을 누르지 않는다.
 - 미확인 저장은 자동 재시도하지 않는다.
 - Telegram 알림은 기본 비활성이다.

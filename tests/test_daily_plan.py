@@ -345,7 +345,7 @@ def test_imported_receipt_preserves_attempt_day_and_counts_actual_save_day(tmp_p
     assert run_daily(settings)[0]['status'] == 'DAILY_PLAN_LIMIT'
 
 
-def test_current_receipt_completes_matching_api_post_still_approved(tmp_path, monkeypatch):
+def test_current_receipt_marks_matching_api_post_saved_and_completes_daily_plan(tmp_path, monkeypatch):
     settings = settings_on(tmp_path, monkeypatch)
     write_packet(settings, plan_draft(settings, 'current'))
     settings = replace(settings, root=tmp_path / 'repo')
@@ -355,8 +355,10 @@ def test_current_receipt_completes_matching_api_post_still_approved(tmp_path, mo
          'day': '2026-10-05', 'saved_at': '2026-10-05T00:16:00+00:00'}]}))
     cloud.import_manual_saves(settings)
     with connect_db(settings.db_path) as conn:
-        assert conn.execute('SELECT status FROM posts').fetchone()[0] == 'APPROVED'
+        assert conn.execute('SELECT status FROM posts').fetchone()[0] == 'SAVED_NAVER'
+        assert saved_count(conn, active_plan(settings)) == 1
         assert ready_categories(settings, conn) == {'parenting'}
+    monkeypatch.setattr('blogbot.pipeline.collect_requests', lambda _: pytest.fail('Already saved'))
     monkeypatch.setattr('sys.argv', ['cloud', 'prepare'])
     monkeypatch.setattr(cloud, 'load_settings', lambda: settings)
     monkeypatch.setattr(cloud, 'restore', lambda _: None)

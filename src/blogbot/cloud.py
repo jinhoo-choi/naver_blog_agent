@@ -131,6 +131,34 @@ def extract_bundle(encrypted: bytes, directory: Path, key: str) -> None:
                 raise ValueError('Invalid bundle member')
             if target == db_path.resolve() and info.filename != 'blog.db':
                 raise ValueError('Invalid database bundle member')
+        # Never rewind a local one-shot manual claim with an older encrypted bundle.
+        manual_files = list((directory / 'manual-requests').glob('*/*'))
+        manual_files += list((directory / 'manual-thumbnails').glob('*/*'))
+        for path in manual_files:
+            if path.name not in {'claim.json', 'paid-calls.json', 'paid-call.json', 'approved-packet.json'}:
+                continue
+            name = str(path.relative_to(directory))
+            if name not in archive.namelist() or archive.read(name) != path.read_bytes():
+                raise ValueError('Manual request checkpoint conflict; preserve existing state')
+        preserve_manual_receipts = set()
+        for path in (directory / 'manual-requests').glob('*/save-receipt.json'):
+            name = str(path.relative_to(directory))
+            old = json.loads(path.read_text())
+            rank = {'SAVING': 0, 'SAVE_UNCERTAIN': 1, 'SAVED_NAVER': 2, 'SAVE_NOT_SAVED': 2}
+            if old.get('status') not in rank:
+                raise ValueError('Invalid local additional receipt')
+            if name not in archive.namelist():
+                preserve_manual_receipts.add(name)
+                continue
+            incoming = json.loads(archive.read(name))
+            if (any(old.get(k) != incoming.get(k) for k in
+                    ('request_id', 'day', 'approval_reference', 'result_sha256'))
+                    or incoming.get('status') not in rank
+                    or (rank[old['status']] == rank.get(incoming.get('status')) == 2
+                        and old['status'] != incoming['status'])):
+                raise ValueError('Conflicting additional receipt identity/date')
+            if rank[old['status']] >= rank[incoming['status']]:
+                preserve_manual_receipts.add(name)
         if archive.namelist().count('blog.db') != 1:
             raise ValueError('Bundle requires exactly one database')
         # Reconcile in a temporary DB first so stale bundles or conflicting evidence cannot
@@ -140,7 +168,8 @@ def extract_bundle(encrypted: bytes, directory: Path, key: str) -> None:
             staged.write_bytes(archive.read('blog.db'))
             with closing(connect_db(staged)) as conn:
                 merge_work_receipts(conn, preserved, categories={r['category'] for r in preserved})
-            archive.extractall(directory, members=[name for name in archive.namelist() if name != 'blog.db'])
+            archive.extractall(directory, members=[name for name in archive.namelist()
+                                                  if name != 'blog.db' and name not in preserve_manual_receipts])
             os.replace(staged, db_path)
     metadata = json.loads((directory / 'bundle-info.json').read_text())
     old_root = Path(metadata['data_root'])
@@ -173,6 +202,15 @@ def extract_bundle(encrypted: bytes, directory: Path, key: str) -> None:
             continue
         rebase(post_photos)
         rebase(input_photos)
+        atomic_json(path, payload)
+    for path in (directory / 'manual-requests').glob('*/result.json'):
+        payload = json.loads(path.read_text())
+        rebase(payload['post']['photos'])
+        rebase(payload['input']['photos'])
+        atomic_json(path, payload)
+    for path in (directory / 'manual-thumbnails').glob('*/result.json'):
+        payload = json.loads(path.read_text())
+        rebase([payload['photo']])
         atomic_json(path, payload)
     ready_path = directory / 'ready.json'
     if ready_path.exists():
@@ -361,6 +399,29 @@ def pack(settings, destination: Path) -> None:
             archive.write(path, path.relative_to(directory))
         for path in (directory / 'source-evidence').glob('*.json'):
             archive.write(path, path.relative_to(directory))
+        for path in (directory / 'manual-requests').glob('*/*'):
+            if (path.is_symlink() or not path.is_file()
+                    or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,79}', path.parent.name)
+                    or path.name not in {'claim.json', 'approved-packet.json', 'paid-calls.json',
+                                         'result.json', 'save-receipt.json', 'thumbnail.jpg', 'thumbnail.png', 'thumbnail.webp'}
+                    or path.stat().st_size > (5_000_000 if path.name.startswith('thumbnail.') else 1_000_000)):
+                raise ValueError('Invalid manual request checkpoint')
+            archive.write(path, path.relative_to(directory))
+        for path in (directory / 'manual-thumbnails').glob('**/*'):
+            if path.is_dir() and not path.is_symlink():
+                continue
+            relative = path.relative_to(directory / 'manual-thumbnails')
+            valid = (len(relative.parts) in (2, 3)
+                     and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,79}', relative.parts[0])
+                     and ((len(relative.parts) == 2 and path.name in {
+                         'claim.json', 'approved-packet.json', 'paid-call.json', 'result.json'})
+                          or (len(relative.parts) == 3 and relative.parts[1] == 'image'
+                              and (path.name == '.image-plan' or re.fullmatch(
+                                  r'[a-f0-9]{64}\.(?:json|jpg)', path.name)))))
+            if (not valid or path.is_symlink() or not path.is_file()
+                    or path.stat().st_size > 5_000_000):
+                raise ValueError('Invalid manual thumbnail checkpoint')
+            archive.write(path, path.relative_to(directory))
         for name in ['blog.db', 'bundle-info.json', 'ready.json', 'context.json',
                      'topic-cache.json', 'topic-selection.json', 'creator-trends.json',
                      'creator-trend-selection.json', 'creator-trend-decisions.json',
@@ -463,13 +524,22 @@ def filter_ready(directory: Path, receipts: dict, plan: dict | None = None, sett
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('mode', choices=['bootstrap', 'prepare', 'recover', 'unpack', 'probe', 'manual-images'])
+    parser.add_argument('mode', choices=['bootstrap', 'prepare', 'recover', 'unpack', 'probe',
+                                         'manual-images', 'manual-request', 'manual-request-reserve',
+                                         'manual-thumbnail', 'manual-thumbnail-reserve'])
     parser.add_argument('--file', type=Path)
     parser.add_argument('--destination', type=Path)
     parser.add_argument('--receipts', type=Path)
     parser.add_argument('--attribution-review-request-id', default='')
     parser.add_argument('--manual-image-request-id', default='')
+    parser.add_argument('--manual-request-id', default='')
+    parser.add_argument('--manual-request-sha256', default='')
     args = parser.parse_args()
+    if ((bool(args.manual_request_id) and bool(args.manual_request_sha256))
+            != (args.mode in {'manual-request', 'manual-request-reserve', 'manual-thumbnail', 'manual-thumbnail-reserve'})
+            or (args.mode not in {'manual-request', 'manual-request-reserve', 'manual-thumbnail', 'manual-thumbnail-reserve'} and
+                (args.manual_request_id or args.manual_request_sha256))):
+        parser.error('manual request mode requires exact ID and packet digest')
     if bool(args.manual_image_request_id) != (args.mode == 'manual-images'):
         parser.error('manual image mode requires its explicit request selector')
     if args.attribution_review_request_id and (
@@ -486,6 +556,8 @@ def main():
         restored = replace(settings, db_path=args.destination / 'blog.db',
                            artifact_dir=args.destination / 'drafts', inbox_dir=args.destination / 'inbox')
         owner = settings.naver_blog_id or settings.config.get('creator_advisor', {}).get('channel_id', '')
+        from .manual_requests import reconcile_additional_receipts
+        reconcile_additional_receipts(restored, receipts)
         with closing(connect_db(restored.db_path)) as conn:
             import_work_receipts(conn, receipts, blog_id=owner, categories=settings.config['categories'])
         filter_ready(args.destination, receipts, active_plan(settings), restored)
@@ -510,6 +582,29 @@ def main():
         return
     restore(directory)
     try:
+        if args.mode in {'manual-thumbnail', 'manual-thumbnail-reserve'}:
+            from .manual_thumbnail import reserve_thumbnail, run_thumbnail
+            handler = reserve_thumbnail if args.mode.endswith('-reserve') else run_thumbnail
+            result = handler(settings, os.environ.get('BLOG_MANUAL_REQUEST_PACKET', ''),
+                             args.manual_request_id, args.manual_request_sha256)
+            print(json.dumps(result))
+            if result['status'] not in {'MANUAL_THUMBNAIL_READY', 'MANUAL_THUMBNAIL_RESERVED'}:
+                raise PreparationFailed('Manual thumbnail held; reconcile private checkpoints')
+            return
+        if args.mode == 'manual-request-reserve':
+            from .manual_requests import reserve_manual_request
+            result = reserve_manual_request(settings, os.environ.get('BLOG_MANUAL_REQUEST_PACKET', ''),
+                                            args.manual_request_id, args.manual_request_sha256)
+            print(json.dumps(result))
+            return
+        if args.mode == 'manual-request':
+            from .manual_requests import run_manual_request
+            result = run_manual_request(settings, os.environ.get('BLOG_MANUAL_REQUEST_PACKET', ''),
+                                        args.manual_request_id, args.manual_request_sha256)
+            print(json.dumps(result))
+            if result['status'] != 'MANUAL_DRAFT_READY':
+                raise PreparationFailed('Manual request held; reconcile private checkpoints')
+            return
         if args.mode == 'manual-images':
             from .manual_images import run_manual_images
             result = run_manual_images(settings, os.environ.get('BLOG_MANUAL_IMAGE_PACKET', ''),
@@ -596,7 +691,9 @@ def main():
         # Checkpoints survive handled API errors; no raw files are uploaded to the public repository.
         delivery_hold = pack(settings, destination)
         summary_path = directory / 'run-summary.json'
-        if (args.mode not in {'probe', 'manual-images'} and summary_path.exists()
+        if (args.mode not in {'probe', 'manual-images', 'manual-request', 'manual-request-reserve',
+                              'manual-thumbnail', 'manual-thumbnail-reserve'}
+                and summary_path.exists()
                 and json.loads(summary_path.read_text()).get('date') == today_kst().isoformat()):
             from .notify import telegram
             try:

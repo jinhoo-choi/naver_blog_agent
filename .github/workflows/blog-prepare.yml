@@ -6,7 +6,7 @@ on:
       mode:
         description: 'prepare resumes media; recover retries failed inputs; bootstrap/probe diagnose setup'
         type: choice
-        options: [prepare, recover, bootstrap, probe, manual-images]
+        options: [prepare, recover, bootstrap, probe, manual-images, manual-request, manual-thumbnail]
         default: prepare
       attribution_review_request_id:
         description: 'Recover only: explicitly approved existing request with a one-use attribution manifest'
@@ -20,6 +20,21 @@ on:
         default: ''
       manual_image_packet:
         description: 'Manual images only: Fernet ciphertext of the pinned reviewed packet; never plaintext'
+        type: string
+        required: false
+        default: ''
+      manual_request_id:
+        description: 'Manual request only: exact explicitly approved extra draft ID'
+        type: string
+        required: false
+        default: ''
+      manual_request_sha256:
+        description: 'Manual request only: SHA-256 of the exact approved plaintext envelope'
+        type: string
+        required: false
+        default: ''
+      manual_request_packet:
+        description: 'Manual request only: bounded Fernet ciphertext, never plaintext'
         type: string
         required: false
         default: ''
@@ -75,13 +90,34 @@ jobs:
           python-version: '3.12'
       - name: Install API preparer
         run: python -m pip install -e .
+      - name: Reserve explicitly approved manual request
+        id: manual_reservation
+        if: inputs.mode == 'manual-request' || inputs.mode == 'manual-thumbnail'
+        env:
+          MANUAL_RESERVE_MODE: ${{ inputs.mode == 'manual-thumbnail' && 'manual-thumbnail-reserve' || 'manual-request-reserve' }}
+          BLOG_MANUAL_REQUEST_PACKET: ${{ inputs.manual_request_packet || '' }}
+          MANUAL_REQUEST_ID: ${{ inputs.manual_request_id || '' }}
+          MANUAL_REQUEST_SHA256: ${{ inputs.manual_request_sha256 || '' }}
+        run: python -m blogbot.cloud "$MANUAL_RESERVE_MODE" --manual-request-id "$MANUAL_REQUEST_ID" --manual-request-sha256 "$MANUAL_REQUEST_SHA256"
+      - name: Persist manual reservation before paid work
+        if: (inputs.mode == 'manual-request' || inputs.mode == 'manual-thumbnail') && steps.manual_reservation.outputs.cached != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.manual_reservation.outputs.artifact_name }}
+          path: handoff/bundle.enc
+          if-no-files-found: error
+          retention-days: 90
       - name: Prepare or resume
+        if: (inputs.mode != 'manual-request' && inputs.mode != 'manual-thumbnail') || steps.manual_reservation.outputs.cached != 'true'
         env:
           PREPARE_MODE: ${{ inputs.mode || 'prepare' }}
           BLOG_MANUAL_IMAGE_PACKET: ${{ inputs.manual_image_packet || '' }}
           MANUAL_IMAGE_REQUEST_ID: ${{ inputs.manual_image_request_id || '' }}
+          BLOG_MANUAL_REQUEST_PACKET: ${{ inputs.manual_request_packet || '' }}
+          MANUAL_REQUEST_ID: ${{ inputs.manual_request_id || '' }}
+          MANUAL_REQUEST_SHA256: ${{ inputs.manual_request_sha256 || '' }}
           ATTRIBUTION_REVIEW_REQUEST_ID: ${{ inputs.attribution_review_request_id || '' }}
-        run: python -m blogbot.cloud "$PREPARE_MODE" --attribution-review-request-id "$ATTRIBUTION_REVIEW_REQUEST_ID" --manual-image-request-id "$MANUAL_IMAGE_REQUEST_ID"
+        run: python -m blogbot.cloud "$PREPARE_MODE" --attribution-review-request-id "$ATTRIBUTION_REVIEW_REQUEST_ID" --manual-image-request-id "$MANUAL_IMAGE_REQUEST_ID" --manual-request-id "$MANUAL_REQUEST_ID" --manual-request-sha256 "$MANUAL_REQUEST_SHA256"
       - name: Preserve encrypted checkpoints
         if: always()
         uses: actions/upload-artifact@v4

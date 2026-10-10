@@ -12,6 +12,7 @@ dependencies = [
   "cryptography>=44,<47",
   "holidays>=0.80,<1",
   "playwright>=1.52.0,<2",
+  "Pillow>=11,<13",
 ]
 
 [project.optional-dependencies]

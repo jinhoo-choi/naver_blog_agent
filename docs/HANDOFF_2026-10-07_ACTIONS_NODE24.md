@@ -5,8 +5,9 @@
 ## 2026-10-11 최신 main 재검증 (PR #30)
 
 - 통합 기준 main: `435f5cf4a865476e24f47f8cefa3d432015c031e`. 기존 PR head에 main을 병합하는 방식으로 이력 보존.
-- 충돌은 docs/STATE.md 상단 추가 기록 한 곳. 양쪽 기록을 보존했습니다. PR #33~#38의 src/tests/config, 운영·심사 문서 및 준비 모드/인수는 최신 main과 동일하며 hosted action major만 변경했습니다. Windows self-hosted는 checkout@v4/setup-python@v5를 유지합니다.
+- 충돌은 docs/STATE.md 상단 추가 기록 한 곳. 양쪽 기록을 보존했습니다. PR #33~#38의 src/config, 운영·심사 문서 및 준비 모드/인수는 최신 main과 동일하며 hosted action major만 변경했습니다. Windows self-hosted는 checkout@v4/setup-python@v5를 유지합니다.
 - 최신 main에 추가된 manual-review 증거 업로드의 upload-artifact@v4도 @v6로 맞췄습니다. path/retention-days/조건은 유지합니다.
+- 최초 통합 CI에서 수동 예약 회귀의 upload-artifact@v4 고정 비교 1건이 실패했습니다. 해당 기대값만 @v6로 맞추고 예약→업로드→유료 준비 순서·조건·보존기간 검증은 그대로 유지합니다.
 - 최신 main baseline과 통합본을 각각 검증: pytest 1,249 passed, Ruff 0.17.0 통과. Python 3.12.14.
 - 테스트는 비밀 환경변수 없이 실행하고 실제 socket 연결을 차단했습니다. 실제 연결 시도 0건; 유료 API·운영 발송·네이버 저장/발행 미실행.
 - 세 저장소 17개 workflow/18개 job: actionlint 1.7.12, hosted Bash 70개 syntax, YAML 의미 비교 통과. 최신 main과의 차이는 원래 PR의 action 버전, risk Node 강제 플래그 제거, community verify OS 고정뿐입니다. 트리거·권한·secret 참조·실행 명령·입력·Python minor·cache/artifact 설정은 보존.

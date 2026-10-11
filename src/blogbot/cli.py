@@ -10,7 +10,7 @@ from openai import OpenAIError
 from playwright.sync_api import Error as PlaywrightError
 
 from .config import load_settings
-from .core import connect_db, set_status
+from .core import claim_publication, connect_db, import_work_receipts
 from .creator_trends import import_snapshot
 from .inputs import enqueue_file
 from .notify import telegram
@@ -33,6 +33,10 @@ def main() -> None:
     trends.add_argument("--file", type=Path, required=True)
     policy = sub.add_parser("import-policy-evidence", help="검증할 정책 근거 등록 (후보/승인 생성 안 함)")
     policy.add_argument("--file", type=Path, required=True)
+    receipts = sub.add_parser('import-work-receipts', help='관찰한 저장·발행 증거를 비공개 DB에 기록 (클릭 없음)')
+    receipts.add_argument('--file', type=Path, required=True)
+    publication = sub.add_parser('claim-publication', help='Work 발행 클릭 전 단일 실행권 기록 (클릭 없음)')
+    publication.add_argument('--request-id', required=True)
     doctor = sub.add_parser("doctor", help="비밀값을 출력하지 않고 필수 설정 확인")
     doctor.add_argument("--require-naver", action="store_true")
     resolve = sub.add_parser("resolve", help="네이버 임시저장 목록을 직접 확인한 뒤 상태 확정")
@@ -41,10 +45,27 @@ def main() -> None:
     saved_when = resolve.add_mutually_exclusive_group()
     saved_when.add_argument('--saved-at', help='Verified actual save timestamp with timezone offset')
     saved_when.add_argument('--saved-day', help='Verified actual KST save day YYYY-MM-DD')
+    resolve.add_argument('--evidence-file', type=Path,
+                         help='Private observed absence evidence for not-saved/discard; never grants a retry')
     args = parser.parse_args()
     settings = load_settings()
 
     try:
+        if args.command == 'import-work-receipts':
+            owner = settings.naver_blog_id or settings.config.get('creator_advisor', {}).get('channel_id', '')
+            with closing(connect_db(settings.db_path)) as conn:
+                result = import_work_receipts(conn, json.loads(args.file.read_text()), blog_id=owner,
+                                              categories=settings.config['categories'])
+            print(json.dumps(result))
+            return
+        if args.command == 'claim-publication':
+            plan = active_plan(settings)
+            if plan and plan.get('reservation'):
+                raise ValueError('An owner input/editorial hold cannot start automatic publication')
+            with closing(connect_db(settings.db_path)) as conn:
+                result = claim_publication(conn, args.request_id, settings)
+            print(json.dumps(result))
+            return
         if args.command == "import-policy-evidence":
             from .weekly_policy import import_evidence
             print(json.dumps(import_evidence(settings, args.file.resolve())))
@@ -70,17 +91,32 @@ def main() -> None:
             with closing(connect_db(settings.db_path)) as conn:
                 if args.command == "status":
                     rows = conn.execute("SELECT status, COUNT(*) FROM posts GROUP BY status")
-                    print(json.dumps(dict(rows), ensure_ascii=False))
+                    posts = dict(rows)
+                    receipts = dict(conn.execute('SELECT status,COUNT(*) FROM save_receipts GROUP BY status'))
+                    plan = active_plan(settings)
+                    print(json.dumps({'posts': posts, 'receipts': receipts,
+                                      'editorial_hold': (plan or {}).get('reservation')}, ensure_ascii=False))
                     return
-                row = conn.execute("SELECT status FROM posts WHERE id=?", (args.id,)).fetchone()
-                if row is None or row[0] not in {"SAVING", "SAVE_UNCERTAIN", "STALE_REVIEW_REQUIRED"}:
+                row = conn.execute("SELECT status,request_id,category FROM posts WHERE id=?", (args.id,)).fetchone()
+                if row is None or row['status'] not in {"SAVING", "SAVE_UNCERTAIN", "STALE_REVIEW_REQUIRED"}:
                     raise ValueError("Only uncertain or stale posts can be resolved")
                 if args.outcome == "saved":
                     if not args.saved_at and not args.saved_day:
                         raise ValueError('Saved resolution requires actual --saved-at or --saved-day evidence')
                     record_verified_save(conn, args.id, {'saved_at': args.saved_at, 'day': args.saved_day})
                 else:
-                    set_status(conn, args.id, "APPROVED" if args.outcome == "not-saved" else "DISCARDED")
+                    if not args.evidence_file or not row['request_id'] or row['status'] == 'STALE_REVIEW_REQUIRED':
+                        raise ValueError('Keep the hold; uncertain saving requires --evidence-file with the original attempt and observed absence')
+                    evidence = json.loads(args.evidence_file.read_text())
+                    if (not isinstance(evidence, dict) or not isinstance(evidence.get('save_check'), dict)
+                            or evidence['save_check'].get('resolution') != args.outcome):
+                        raise ValueError('Absence evidence must match the requested resolution')
+                    receipt = {'request_id': row['request_id'], 'category': row['category'],
+                               'day': evidence.get('day'), 'status': 'SAVE_NOT_SAVED',
+                               'save_check': evidence['save_check']}
+                    owner = settings.naver_blog_id or settings.config.get('creator_advisor', {}).get('channel_id', '')
+                    import_work_receipts(conn, {'verified_date': evidence.get('verified_date'), 'records': [receipt]},
+                                         blog_id=owner, categories=settings.config['categories'])
                 print(json.dumps({"id": args.id, "resolution": args.outcome}))
                 return
         if args.command == "daily":

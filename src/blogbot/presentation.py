@@ -70,14 +70,6 @@ def markdown_html(text: str) -> str:
 def normalize_structure(post: PostDraft) -> PostDraft:
     """Fix presentation only, preserving factual text and existing section titles."""
     body = re.sub(r'^\[(?:도해|삽화)(?:\s*계획)?\][^\n]*\n?', '', post.body, flags=re.MULTILINE)
-    heads = list(re.finditer(r'^## .+$', body, re.MULTILINE))
-    if len(heads) > 6:
-        for heading in reversed(heads[6:]):
-            body = body[:heading.start()] + '#' + body[heading.start():]
-        heads = heads[:6]
-    if len(heads) >= 5 and not re.search(r'^### .+', body, re.MULTILINE):
-        last = heads[-1].start()
-        body = body[:last] + '#' + body[last:]
     return replace(post, body=body)
 
 
@@ -94,13 +86,10 @@ def validate_structure(post: PostDraft, required: bool = True) -> None:
         raise ValueError("Images are placed from verified files, not model URLs")
     if post.category == 'origins':
         return  # Fact checks remain mandatory; no length or heading quota for short explanations.
-    heads = re.findall(r"^## (.+)$", post.body, re.MULTILINE)
-    if len(heads) < 4 or not re.search(r"^### .+", post.body, re.MULTILINE):
-        raise ValueError("Use at least four major sections and a subsection")
-    if post.category in {"parenting", "exercise"} and len(post.body) < 1800:
-        raise ValueError("Parenting draft is too short; add supported explanation, not filler")
-    if re.search(r"<\s*(script|iframe|img)\b|\{\{image:|!\[", post.body, re.IGNORECASE):
-        raise ValueError("Images are placed from verified files, not model URLs")
+    sections = re.split(r"^## .+$", post.body, flags=re.MULTILINE)[1:]
+    if not sections or any(not re.sub(r"^#{3,6} .+$", "", section,
+                                      flags=re.MULTILINE).strip() for section in sections):
+        raise ValueError("Use a meaningful section heading with supported explanation")
 
 
 def render_segments(post: PostDraft, *, include_tags: bool = True) -> list[Segment]:
@@ -125,9 +114,12 @@ def render_segments(post: PostDraft, *, include_tags: bool = True) -> list[Segme
     for i, photo in enumerate(post.photos):
         if review and photo.get('role') == 'hero':
             pos = 0
-        elif review and photo.get('section_heading'):
-            if photo['section_heading'] not in headings:
-                raise ValueError('Review photo section heading needs reconciliation')
+        elif photo.get('section_heading') and (review or photo.get('role') == 'section'):
+            if photo['section_heading'] not in headings or sum(
+                    bool(re.match(r'^## ' + re.escape(photo['section_heading']) + r'\s*$',
+                                  chunk.splitlines()[0])) for chunk in chunks) != 1:
+                raise ValueError('Review photo section heading needs reconciliation' if review
+                                 else 'Image section heading needs reconciliation')
             pos = headings[photo['section_heading']]
         elif review and photo.get('origin') == 'seller':
             pos = len(chunks) - 1

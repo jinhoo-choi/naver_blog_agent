@@ -1,4 +1,4 @@
-"""API-only preparation and authenticated encrypted handoff to the Work saver."""
+"""API-only preparation and encrypted handoff; Work records saving/publication separately."""
 from __future__ import annotations
 
 import argparse
@@ -6,6 +6,8 @@ import io
 import json
 import os
 import re
+import sqlite3
+import tempfile
 import zipfile
 from contextlib import closing
 from datetime import date, timedelta
@@ -15,7 +17,17 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from cryptography.fernet import Fernet
 
 from .config import load_settings
-from .core import connect_db, today_kst
+from .core import (
+    KST,
+    PUBLICATION_FINISHED,
+    PUBLICATION_PENDING,
+    WORK_RECEIPT_STATES,
+    connect_db,
+    import_work_receipts,
+    merge_work_receipts,
+    today_kst,
+    validate_work_receipt,
+)
 from .images import atomic_json
 from .inputs import enqueue_file, managed_queue_photos
 from .investment import revalidation_reason
@@ -101,12 +113,68 @@ def github_get(path: str) -> bytes:
 def extract_bundle(encrypted: bytes, directory: Path, key: str) -> None:
     data = Fernet(key.encode()).decrypt(encrypted)
     directory.mkdir(parents=True, exist_ok=True)
+    db_path = directory / 'blog.db'
+    preserved = []
+    if db_path.exists():
+        # Read before extracting anything. Corrupt/missing tables are errors, never an empty ledger.
+        with closing(sqlite3.connect(db_path.resolve().as_uri() + '?mode=ro', uri=True)) as conn:
+            conn.row_factory = sqlite3.Row
+            if conn.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
+                raise ValueError('Existing Work database is damaged; reconcile before restoring')
+            preserved = [dict(row) for row in conn.execute('SELECT * FROM save_receipts')]
+            for record in preserved:
+                record.setdefault('status', 'SAVED_NAVER')  # Existing saved-only schema.
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         for info in archive.infolist():
             target = (directory / info.filename).resolve()
             if not target.is_relative_to(directory.resolve()) or info.file_size > 25_000_000:
                 raise ValueError('Invalid bundle member')
-        archive.extractall(directory)
+            if target == db_path.resolve() and info.filename != 'blog.db':
+                raise ValueError('Invalid database bundle member')
+        # Never rewind a local one-shot manual claim with an older encrypted bundle.
+        manual_files = list((directory / 'manual-requests').glob('**/*'))
+        manual_files += list((directory / 'manual-thumbnails').glob('*/*'))
+        for path in manual_files:
+            if (not path.is_file() or (path.name not in {
+                    'claim.json', 'paid-calls.json', 'paid-call.json', 'approved-packet.json',
+                    'original-claim.json'} and 'review-once' not in path.parts)):
+                continue
+            if path.name == 'result.json':
+                continue  # Photo path relocation is validated by the result digest.
+            name = str(path.relative_to(directory))
+            if name not in archive.namelist() or archive.read(name) != path.read_bytes():
+                raise ValueError('Manual request checkpoint conflict; preserve existing state')
+        preserve_manual_receipts = set()
+        for path in (directory / 'manual-requests').glob('*/save-receipt.json'):
+            name = str(path.relative_to(directory))
+            old = json.loads(path.read_text())
+            rank = {'SAVING': 0, 'SAVE_UNCERTAIN': 1, 'SAVED_NAVER': 2, 'SAVE_NOT_SAVED': 2}
+            if old.get('status') not in rank:
+                raise ValueError('Invalid local additional receipt')
+            if name not in archive.namelist():
+                preserve_manual_receipts.add(name)
+                continue
+            incoming = json.loads(archive.read(name))
+            if (any(old.get(k) != incoming.get(k) for k in
+                    ('request_id', 'day', 'approval_reference', 'result_sha256'))
+                    or incoming.get('status') not in rank
+                    or (rank[old['status']] == rank.get(incoming.get('status')) == 2
+                        and old['status'] != incoming['status'])):
+                raise ValueError('Conflicting additional receipt identity/date')
+            if rank[old['status']] >= rank[incoming['status']]:
+                preserve_manual_receipts.add(name)
+        if archive.namelist().count('blog.db') != 1:
+            raise ValueError('Bundle requires exactly one database')
+        # Reconcile in a temporary DB first so stale bundles or conflicting evidence cannot
+        # erase a local publication claim, even when the external Work ledger is replayed.
+        with tempfile.TemporaryDirectory(prefix='.restore-', dir=directory) as temporary:
+            staged = Path(temporary) / 'blog.db'
+            staged.write_bytes(archive.read('blog.db'))
+            with closing(connect_db(staged)) as conn:
+                merge_work_receipts(conn, preserved, categories={r['category'] for r in preserved})
+            archive.extractall(directory, members=[name for name in archive.namelist()
+                                                  if name != 'blog.db' and name not in preserve_manual_receipts])
+            os.replace(staged, db_path)
     metadata = json.loads((directory / 'bundle-info.json').read_text())
     old_root = Path(metadata['data_root'])
     def rebase(photos):
@@ -139,10 +207,19 @@ def extract_bundle(encrypted: bytes, directory: Path, key: str) -> None:
         rebase(post_photos)
         rebase(input_photos)
         atomic_json(path, payload)
+    for path in (directory / 'manual-requests').glob('**/result.json'):
+        payload = json.loads(path.read_text())
+        rebase(payload['post']['photos'])
+        rebase(payload['input']['photos'])
+        atomic_json(path, payload)
+    for path in (directory / 'manual-thumbnails').glob('*/result.json'):
+        payload = json.loads(path.read_text())
+        rebase([payload['photo']])
+        atomic_json(path, payload)
     ready_path = directory / 'ready.json'
     if ready_path.exists():
         ready = json.loads(ready_path.read_text())
-        for item in ready.get('posts', []):
+        for item in ready.get('posts', []) + ready.get('publication_ready', []):
             rebase(item['post']['photos'])
             for segment in item['segments']:
                 if segment.get('photo'):
@@ -174,18 +251,28 @@ def import_manual_saves(settings) -> None:
         return
     payload = json.loads(path.read_text())
     with closing(connect_db(settings.db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
         for record in payload['records']:
             day = receipt_day(record)
             if (record.get('status') != 'SAVED_NAVER' or not record.get('request_id')
                     or record.get('category') not in settings.config['categories']
                     or date.fromisoformat(day) > today_kst()):
                 raise ValueError('Invalid manual-save receipt')
-            receipt = conn.execute('SELECT day,category FROM save_receipts WHERE request_id=?',
+            receipt = conn.execute('SELECT day,category,status FROM save_receipts WHERE request_id=?',
                                    (record['request_id'],)).fetchone()
             if receipt and (receipt['day'] != day or receipt['category'] != record['category']):
                 raise ValueError('Conflicting manual-save receipt; reconcile without resetting budgets')
-            conn.execute('INSERT OR IGNORE INTO save_receipts(request_id,day,category) VALUES(?,?,?)',
+            if receipt and receipt['status'] in PUBLICATION_PENDING | PUBLICATION_FINISHED | {'SAVE_NOT_SAVED'}:
+                continue  # A legacy saved-only ledger cannot erase observed publication state.
+            post = conn.execute('SELECT category,status FROM posts WHERE request_id=?',
+                                (record['request_id'],)).fetchone()
+            if post and (post['category'] != record['category'] or post['status'] in
+                         PUBLICATION_PENDING | PUBLICATION_FINISHED | {'SAVE_NOT_SAVED'}):
+                raise ValueError('Saved-only receipt conflicts with observed post state')
+            conn.execute("INSERT INTO save_receipts(request_id,day,category,status) VALUES(?,?,?,'SAVED_NAVER') "
+                         "ON CONFLICT(request_id) DO UPDATE SET status='SAVED_NAVER'",
                          (record['request_id'], day, record['category']))
+            conn.execute("UPDATE posts SET status='SAVED_NAVER' WHERE request_id=?", (record['request_id'],))
             existing = conn.execute('SELECT id,category FROM attempts WHERE request_id=?',
                                     (record['request_id'],)).fetchone()
             if existing:
@@ -282,7 +369,8 @@ def pack(settings, destination: Path) -> None:
         for path in settings.artifact_dir.glob('*.json'):
             try:
                 payload = json.loads(path.read_text())
-                keep = payload['post']['as_of_date'] >= cutoff
+                keep = (payload['post']['as_of_date'] >= cutoff
+                        or path.name.startswith('manual-images-'))
                 request_id = payload['post']['request_id']
                 if not isinstance(request_id, str):
                     raise TypeError('Invalid packet request id')
@@ -315,6 +403,42 @@ def pack(settings, destination: Path) -> None:
             archive.write(path, path.relative_to(directory))
         for path in (directory / 'source-evidence').glob('*.json'):
             archive.write(path, path.relative_to(directory))
+        for path in (directory / 'manual-requests').glob('**/*'):
+            relative = path.relative_to(directory / 'manual-requests')
+            parts = relative.parts
+            slug = re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,79}', parts[0])
+            if path.is_dir() and not path.is_symlink():
+                if not slug or not (len(parts) == 1 or (len(parts) == 2 and parts[1] == 'review-once')
+                                    or (len(parts) == 3 and parts[1:] == ('review-once', 'response-cache'))):
+                    raise ValueError('Invalid manual request checkpoint directory')
+                continue
+            valid = (slug and ((len(parts) == 2 and path.name in {
+                'claim.json', 'approved-packet.json', 'paid-calls.json', 'result.json',
+                'save-receipt.json', 'thumbnail.jpg', 'thumbnail.png', 'thumbnail.webp'})
+                or (len(parts) == 3 and parts[1] == 'review-once' and path.name in {
+                    'claim.json', 'original-claim.json', 'approved-packet.json',
+                    'paid-calls.json', 'usage.jsonl', 'result.json'})
+                or (len(parts) == 4 and parts[1:3] == ('review-once', 'response-cache')
+                    and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,180}\.json', path.name))))
+            if (not valid or path.is_symlink() or not path.is_file()
+                    or path.stat().st_size > 5_000_000):
+                raise ValueError('Invalid manual request checkpoint')
+            archive.write(path, path.relative_to(directory))
+        for path in (directory / 'manual-thumbnails').glob('**/*'):
+            if path.is_dir() and not path.is_symlink():
+                continue
+            relative = path.relative_to(directory / 'manual-thumbnails')
+            valid = (len(relative.parts) in (2, 3)
+                     and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,79}', relative.parts[0])
+                     and ((len(relative.parts) == 2 and path.name in {
+                         'claim.json', 'approved-packet.json', 'paid-call.json', 'result.json'})
+                          or (len(relative.parts) == 3 and relative.parts[1] == 'image'
+                              and (path.name == '.image-plan' or re.fullmatch(
+                                  r'[a-f0-9]{64}\.(?:json|jpg)', path.name)))))
+            if (not valid or path.is_symlink() or not path.is_file()
+                    or path.stat().st_size > 5_000_000):
+                raise ValueError('Invalid manual thumbnail checkpoint')
+            archive.write(path, path.relative_to(directory))
         for name in ['blog.db', 'bundle-info.json', 'ready.json', 'context.json',
                      'topic-cache.json', 'topic-selection.json', 'creator-trends.json',
                      'creator-trend-selection.json', 'creator-trend-decisions.json',
@@ -338,11 +462,23 @@ def filter_ready(directory: Path, receipts: dict, plan: dict | None = None, sett
     blocked = set()
     used = set()
     uncertain = False
-    for record in receipts['records']:
-        if not record.get('request_id') or record.get('status') not in {
-            'SAVING', 'SAVE_UNCERTAIN', 'SAVED_NAVER', 'PUBLISHED',
-        }:
+    records = list(receipts['records'])
+    if settings is not None:
+        with closing(connect_db(settings.db_path)) as conn:
+            # Empty/replayed input cannot erase a locally recorded publication attempt.
+            records.extend(dict(r) for r in conn.execute('SELECT * FROM save_receipts'))
+    for record in records:
+        if not record.get('request_id') or record.get('status') not in WORK_RECEIPT_STATES:
             raise ValueError('Invalid Work save receipt')
+        if record['status'] in PUBLICATION_PENDING | PUBLICATION_FINISHED | {'SAVE_NOT_SAVED'}:
+            owner = (getattr(settings, 'naver_blog_id', '') or
+                     getattr(settings, 'config', {}).get('creator_advisor', {}).get('channel_id', ''))
+            record = validate_work_receipt(record, owner)
+            uncertain |= record['status'] in PUBLICATION_PENDING
+            from datetime import datetime
+            for field in ('published_at', 'publish_attempted_at'):
+                if record.get(field) and datetime.fromisoformat(record[field]).astimezone(KST).date() == today:
+                    used.add(record['request_id'])
         blocked.add(record['request_id'])
         if plan:
             try:
@@ -360,10 +496,19 @@ def filter_ready(directory: Path, receipts: dict, plan: dict | None = None, sett
         raise ValueError('Stale handoff')
     if ready.get('daily_plan') != plan or (plan and plan['date'] != today.isoformat()):
         raise ValueError('Handoff does not match the current daily plan')
-    eligible, weekly_held = [], False
-    for item in ready['posts']:
+    eligible, publication_ready, weekly_held = [], [], False
+    observed_saved = {r['request_id'] for r in records if r['status'] == 'SAVED_NAVER'
+                      and (not plan or receipt_day(r) == plan['date'])}
+    observed_saved -= {r['request_id'] for r in records if r['status'] != 'SAVED_NAVER'}
+    for item in ready['posts'] + ready.get('publication_ready', []):
         post = item['post']
-        if plan and (plan.get('reservation') or uncertain or used or eligible or post['as_of_date'] != plan['date']
+        identity = post['request_id']
+        publication_candidate = (plan and identity in observed_saved and not publication_ready
+                                 and used <= {identity})
+        if uncertain and any(r.get('status') in PUBLICATION_PENDING for r in records):
+            continue
+        if plan and (plan.get('reservation') or uncertain or (used and not publication_candidate)
+                     or eligible or post['as_of_date'] != plan['date']
                      or post['category'] != plan['category']
                      or post.get('provenance', {}).get('daily_plan') != plan):
             continue
@@ -378,9 +523,11 @@ def filter_ready(directory: Path, receipts: dict, plan: dict | None = None, sett
             except (OSError, ValueError, KeyError, TypeError, RuntimeError):
                 weekly_held = True
                 continue
-        identity = post['request_id']
         if not identity:
             raise ValueError('Missing request identity')
+        if publication_candidate and post['status'] == 'APPROVED':
+            publication_ready.append(item)
+            continue  # Saved once already: expose only to the separate publication claim.
         if identity in blocked or post['status'] != 'APPROVED':
             continue
         if not (today-timedelta(days=3)).isoformat() <= post['as_of_date'] <= today.isoformat():
@@ -388,17 +535,34 @@ def filter_ready(directory: Path, receipts: dict, plan: dict | None = None, sett
         item['requires_fresh_review'] = post['as_of_date'] != today.isoformat()
         eligible.append(item)
         blocked.add(identity)
-    atomic_json(path, {**ready, 'posts': eligible,
+    atomic_json(path, {**ready, 'posts': eligible, 'publication_ready': publication_ready,
                        **({'hold': revalidation_reason(plan)} if weekly_held else {})})
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('mode', choices=['bootstrap', 'prepare', 'recover', 'unpack', 'probe'])
+    parser.add_argument('mode', choices=['bootstrap', 'prepare', 'recover', 'unpack', 'probe',
+                                         'manual-images', 'manual-request', 'manual-request-reserve',
+                                         'manual-thumbnail', 'manual-thumbnail-reserve', 'manual-review', 'manual-review-reserve'])
     parser.add_argument('--file', type=Path)
     parser.add_argument('--destination', type=Path)
     parser.add_argument('--receipts', type=Path)
+    parser.add_argument('--attribution-review-request-id', default='')
+    parser.add_argument('--manual-image-request-id', default='')
+    parser.add_argument('--manual-request-id', default='')
+    parser.add_argument('--manual-request-sha256', default='')
     args = parser.parse_args()
+    if ((bool(args.manual_request_id) and bool(args.manual_request_sha256))
+            != (args.mode in {'manual-request', 'manual-request-reserve', 'manual-thumbnail', 'manual-thumbnail-reserve', 'manual-review', 'manual-review-reserve'})
+            or (args.mode not in {'manual-request', 'manual-request-reserve', 'manual-thumbnail', 'manual-thumbnail-reserve', 'manual-review', 'manual-review-reserve'} and
+                (args.manual_request_id or args.manual_request_sha256))):
+        parser.error('manual request mode requires exact ID and packet digest')
+    if bool(args.manual_image_request_id) != (args.mode == 'manual-images'):
+        parser.error('manual image mode requires its explicit request selector')
+    if args.attribution_review_request_id and (
+            args.mode != 'recover' or not re.fullmatch(
+                r'[A-Za-z0-9][A-Za-z0-9_-]{0,79}', args.attribution_review_request_id)):
+        parser.error('attribution review selector requires recover and one valid existing request ID')
     if args.mode == 'unpack':
         if args.receipts is None:
             parser.error('unpack requires --receipts from the verified Work save ledger')
@@ -408,6 +572,11 @@ def main():
         settings = load_settings()
         restored = replace(settings, db_path=args.destination / 'blog.db',
                            artifact_dir=args.destination / 'drafts', inbox_dir=args.destination / 'inbox')
+        owner = settings.naver_blog_id or settings.config.get('creator_advisor', {}).get('channel_id', '')
+        from .manual_requests import reconcile_additional_receipts
+        reconcile_additional_receipts(restored, receipts)
+        with closing(connect_db(restored.db_path)) as conn:
+            import_work_receipts(conn, receipts, blog_id=owner, categories=settings.config['categories'])
         filter_ready(args.destination, receipts, active_plan(settings), restored)
         # Recreate packet segments with local image paths after relocation.
         print(json.dumps({'status': 'UNPACKED', 'directory': str(args.destination)}))
@@ -430,12 +599,55 @@ def main():
         return
     restore(directory)
     try:
+        if args.mode in {'manual-review', 'manual-review-reserve'}:
+            from .manual_review import reserve_review, run_review
+            handler = reserve_review if args.mode.endswith('-reserve') else run_review
+            result = handler(settings, os.environ.get('BLOG_MANUAL_REQUEST_PACKET', ''),
+                             args.manual_request_id, args.manual_request_sha256)
+            print(json.dumps(result))
+            if result['status'] not in {'MANUAL_DRAFT_READY', 'MANUAL_REVIEW_RESERVED'}:
+                raise PreparationFailed('Manual review held; reconcile private checkpoints')
+            return
+        if args.mode in {'manual-thumbnail', 'manual-thumbnail-reserve'}:
+            from .manual_thumbnail import reserve_thumbnail, run_thumbnail
+            handler = reserve_thumbnail if args.mode.endswith('-reserve') else run_thumbnail
+            result = handler(settings, os.environ.get('BLOG_MANUAL_REQUEST_PACKET', ''),
+                             args.manual_request_id, args.manual_request_sha256)
+            print(json.dumps(result))
+            if result['status'] not in {'MANUAL_THUMBNAIL_READY', 'MANUAL_THUMBNAIL_RESERVED'}:
+                raise PreparationFailed('Manual thumbnail held; reconcile private checkpoints')
+            return
+        if args.mode == 'manual-request-reserve':
+            from .manual_requests import reserve_manual_request
+            result = reserve_manual_request(settings, os.environ.get('BLOG_MANUAL_REQUEST_PACKET', ''),
+                                            args.manual_request_id, args.manual_request_sha256)
+            print(json.dumps(result))
+            return
+        if args.mode == 'manual-request':
+            from .manual_requests import run_manual_request
+            result = run_manual_request(settings, os.environ.get('BLOG_MANUAL_REQUEST_PACKET', ''),
+                                        args.manual_request_id, args.manual_request_sha256)
+            print(json.dumps(result))
+            if result['status'] != 'MANUAL_DRAFT_READY':
+                raise PreparationFailed('Manual request held; reconcile private checkpoints')
+            return
+        if args.mode == 'manual-images':
+            from .manual_images import run_manual_images
+            result = run_manual_images(settings, os.environ.get('BLOG_MANUAL_IMAGE_PACKET', ''),
+                                       args.manual_image_request_id)
+            print(json.dumps(result))
+            if result['status'] != 'MANUAL_IMAGES_READY':
+                raise PreparationFailed('Manual images pending; reconcile private checkpoints')
+            return
         plan = active_plan(settings)
         reserved = bool(args.mode in {'prepare', 'recover'} and plan and plan.get('reservation'))
-        if not reserved:
+        if not reserved and not args.attribution_review_request_id:
             seed_inputs(settings)
             from .weekly_policy import import_environment
             import_environment(settings, os.environ.get('BLOG_POLICY_EVIDENCE_JSON', ''))
+        elif not reserved and args.attribution_review_request_id:
+            # Import authoritative save receipts without seeding any candidates or context.
+            import_manual_saves(settings)
         if reserved:
             results = [reservation_result(plan)]
         elif args.mode == 'probe':
@@ -459,11 +671,13 @@ def main():
         else:
             daily_target = min(getattr(settings, 'daily_count', 3),
                                getattr(settings, 'config', {}).get('blog', {}).get('daily_max', 3))
+            explicit = ({'attribution_review_request_id': args.attribution_review_request_id}
+                        if args.attribution_review_request_id else {})
             results = run_daily(settings, count=daily_target, save_to_naver=False,
-                                retry_failed=args.mode == 'recover')
-            if getattr(settings, 'config', {}).get('categories'):
+                                retry_failed=args.mode == 'recover', **explicit)
+            if not explicit and getattr(settings, 'config', {}).get('categories'):
                 results = recover_preparation(settings, results, daily_target)
-        if args.mode != 'probe' and not reserved:
+        if args.mode != 'probe' and not reserved and not args.attribution_review_request_id:
             with closing(connect_db(settings.db_path)) as conn:
                 unresolved = conn.execute(
                     "SELECT COUNT(*) FROM attempts WHERE day=? AND status IN ('ERROR', 'STARTED')",
@@ -481,7 +695,7 @@ def main():
                                         'DROP_REVIEW', 'DROP_DUPLICATE'} for r in results)
         # A no-op/partial run must not report success when a category has no deliverable.
         categories = getattr(settings, 'config', {}).get('categories', {})
-        if categories and not reserved:
+        if categories and not reserved and not args.attribution_review_request_id:
             with closing(connect_db(settings.db_path)) as conn:
                 ready = ready_categories(settings, conn)
             expected = {key for key, info in categories.items()
@@ -503,7 +717,9 @@ def main():
         # Checkpoints survive handled API errors; no raw files are uploaded to the public repository.
         delivery_hold = pack(settings, destination)
         summary_path = directory / 'run-summary.json'
-        if (args.mode != 'probe' and summary_path.exists()
+        if (args.mode not in {'probe', 'manual-images', 'manual-request', 'manual-request-reserve',
+                              'manual-thumbnail', 'manual-thumbnail-reserve', 'manual-review', 'manual-review-reserve'}
+                and summary_path.exists()
                 and json.loads(summary_path.read_text()).get('date') == today_kst().isoformat()):
             from .notify import telegram
             try:

@@ -54,6 +54,18 @@ def test_good_draft_has_free_check_and_no_extra_call(tmp_path, req, capsys):
     assert '확인된 사실' not in json.dumps(events, ensure_ascii=False)
 
 
+@pytest.mark.parametrize('category', ['parenting', 'exercise', 'investment'])
+def test_short_complete_answer_passes_structure_without_paid_padding(tmp_path, category):
+    request = ContentRequest('short-' + category, category, {'question': '기준과 방법은?'})
+    body = ('공식 자료의 적용 조건을 확인한 뒤 안내된 순서로 진행합니다.\n\n'
+            '## 적용 조건과 순서\n\n자료에 명시된 대상과 조건을 먼저 대조합니다. '
+            '해당하는 절차만 따르며 안전 중단 조건은 각 단계에서 확인합니다.')
+    raw = candidate(body=body)
+    post, report = run_pre_review(tmp_path, NoRepair(), raw, request, INFO)
+    assert post.body == body and len(body) < 1800
+    assert report['model_correction_used'] is False and report['changes'] == []
+
+
 def test_verified_source_alignment_is_lossless_and_free(tmp_path, req):
     raw = candidate(source_urls=[FDA], body=candidate().payload['body'] + '\n' + FDA)
     raw.observed = [TRACKED_FDA]
@@ -62,6 +74,31 @@ def test_verified_source_alignment_is_lossless_and_free(tmp_path, req):
     assert post.body == raw.payload['body'].replace(FDA, TRACKED_FDA)
     assert report['changes'] == ['observed_source_alignment']
     assert not report['model_correction_used']
+
+
+@pytest.mark.parametrize('claimed', [FDA, TRACKED_FDA])
+@pytest.mark.parametrize('reverse', [False, True])
+def test_exact_observed_source_spelling_survives_historical_alias_order(req, claimed, reverse):
+    raw = candidate(source_urls=[claimed], body=candidate().payload['body'] + '\n' + claimed)
+    raw.observed = [FDA, TRACKED_FDA, FDA + '?utm_source=openai']
+    if reverse:
+        raw.observed.reverse()
+    post, issues, changes = inspect_candidate(raw, req, INFO)
+    assert not issues and changes == []
+    assert post.source_urls == [claimed] and post.body == raw.payload['body']
+
+
+def test_alias_fallback_and_recovery_hash_are_independent_of_history_order(req):
+    from blogbot.recovery import source_review_hashes
+    raw = candidate(source_urls=[FDA], body=candidate().payload['body'] + '\n' + FDA)
+    raw.observed = [FDA + '?utm_source=z', FDA + '?utm_source=a']
+    first, issues, changes = inspect_candidate(raw, req, INFO)
+    assert not issues and changes == ['observed_source_alignment']
+    raw.observed.reverse()
+    second, issues, _ = inspect_candidate(raw, req, INFO)
+    assert not issues and first == second
+    assert first.source_urls == [FDA + '?utm_source=a']
+    assert source_review_hashes(first, req) == source_review_hashes(second, req)
 
 
 @pytest.mark.parametrize('other', [
@@ -122,6 +159,7 @@ def test_missing_fields_are_not_coerced_or_silently_defaulted(tmp_path, req):
 @pytest.mark.parametrize('body,code', [
     ('작성일: 2026-10-04\n\n' + candidate().payload['body'], 'invalid_preview'),
     ('본문만 있습니다.', 'missing_headings'),
+    ('핵심 답변입니다.\n\n## 조건\n\n### 하위 제목만 있음', 'missing_headings'),
     (candidate().payload['body'] + '\n![image](file.png)', 'inline_image_markup'),
     (candidate().payload['body'] + '\n저는 이 방법을 사용했더니 효과를 느꼈어요.', 'unsupported_personal_experience'),
     (candidate().payload['body'] + '\n선우는 9개월입니다.', 'unsupported_child_age'),
@@ -262,7 +300,8 @@ def test_bounded_editorial_rewrite_replays_enriched_prompt_exactly(tmp_path, req
 def test_new_prechecked_rejection_cannot_enter_legacy_paid_recovery(tmp_path, req, monkeypatch):
     from blogbot.recovery import recover_rejected
     run_pre_review(tmp_path, NoRepair(), candidate(), req, INFO)
-    settings = NS(db_path=tmp_path/'blog.db', config={'categories': {'investment': {'max_daily': 1}}})
+    settings = NS(root=tmp_path, db_path=tmp_path/'blog.db',
+                  config={'categories': {'investment': {'max_daily': 1}}})
     with connect_db(settings.db_path) as conn:
         conn.execute('INSERT INTO attempts(day,category,request_id,status) VALUES(?,?,?,?)',
                      (str(today_kst()), req.category, req.id, 'DROP_REVIEW'))

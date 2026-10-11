@@ -235,9 +235,11 @@ def test_weekend_feature_quota_and_selected_topic(tmp_path, monkeypatch, day, qu
                     'https://safetosleep.nichd.nih.gov/reduce-risk/safe-sleep-environment']:
             assert url in context
         rules = '\n'.join(settings.config['categories']['parenting']['rules'])
-        for requirement in ['실제 이미지2장 이상', '공식 직접 링크카드1개 이상',
-                            '재사용 자료1개', '재사용 권한', '보조 삽화는 생략']:
+        for requirement in ['주장·재현에 필요한 실제 증거', '공식 출처',
+                            '일률 강제하지 않는다', '재사용 권한', '보조 삽화는 생략']:
             assert requirement in rules
+        # The historic, explicitly selected medical tutorial retains its own evidence gate.
+        assert '제공 사진2장 이상, 공식 안내 직접 링크카드1개 이상' in context
 
 
 def test_interest_prefers_eligible_stock_without_overriding_report_priority(monkeypatch):

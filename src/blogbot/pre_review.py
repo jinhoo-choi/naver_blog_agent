@@ -114,8 +114,7 @@ MESSAGES = {
     'No search-backed sources; hold draft': 'no_sources',
     'Invalid source URL': 'invalid_source_url',
     'Guaranteed-return language requires manual review': 'guaranteed_return_language',
-    'Use at least four major sections and a subsection': 'missing_headings',
-    'Parenting draft is too short; add supported explanation, not filler': 'body_too_short',
+    'Use a meaningful section heading with supported explanation': 'missing_headings',
     'Images are placed from verified files, not model URLs': 'inline_image_markup',
     'Start with a plain-language preview summary, not dates or URLs': 'invalid_preview',
 }
@@ -170,13 +169,17 @@ def inspect_candidate(candidate: DraftCandidate, request: ContentRequest, info: 
 
     # Align only identities established by the existing verified alias rules.
     # Never infer equivalence from a common hostname/path or discard query IDs.
-    identities = {_source_identity(u): u for u in observed}
+    # Keep an exact observed spelling. If only verified aliases were observed,
+    # choose deterministically so cache-directory order/relocation cannot change
+    # the manuscript identity or an already authorized recovery hash.
+    observed_set = set(observed)
+    identities = {_source_identity(u): u for u in sorted(observed, reverse=True)}
     claimed = data['source_urls']
     replacements = {u: identities[_source_identity(u)] for u in claimed
-                    if _source_identity(u) in identities and u != identities[_source_identity(u)]}
+                    if _source_identity(u) in identities and u not in observed_set}
     for url in re.findall(r'https?://[^\s<>\]\)]+', data['body']):
         url = url.rstrip('.,')
-        if _source_identity(url) in identities and url != identities[_source_identity(url)]:
+        if _source_identity(url) in identities and url not in observed_set:
             replacements[url] = identities[_source_identity(url)]
     if replacements:
         data['source_urls'] = [replacements.get(u, u) for u in claimed]

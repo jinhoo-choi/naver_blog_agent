@@ -61,7 +61,8 @@ def test_default_prompt_is_byte_identical_and_review_keeps_safety():
         prompt = (ROOT / f'prompts/{filename}.md').read_text()
         assert routed_prompt(prompt, 'parenting') == prompt
         selected = routed_prompt(prompt, 'parenting', style='review')
-        assert '생성 이미지 기준은 육아' not in selected
+        assert '생성 이미지 기준은' not in selected
+        assert '생성 이미지 상한은' not in selected
         assert '관련 없는 월령표를 강제하지 않는다' in selected or filename == 'reviewer'
         assert '안전' in selected and '출처' in selected
     for term in ['자비 구매', '리뷰 대가 없음', '선택 가능한 적격', '개인정보', '배송 라벨',
@@ -104,7 +105,8 @@ def test_all_four_model_stages_use_review_contract_without_extra_calls(monkeypat
     assert [c['stage'] for c in calls] == ['writer', 'pre_review_correction', 'reviewer', 'rewrite']
     for call in calls:
         assert REVIEW in call['input']
-        assert '생성 이미지 기준은 육아' not in call['input']
+        assert '생성 이미지 기준은' not in call['input']
+        assert '생성 이미지 상한은' not in call['input']
     assert 'tools' not in calls[1]
     assert all(c['max_tool_calls'] == 3 for c in (calls[0], calls[2], calls[3]))
     assert review['scores'] == [4] * 6

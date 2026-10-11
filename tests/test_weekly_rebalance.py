@@ -121,7 +121,7 @@ def verified_packet(settings, monkeypatch, *, identity='owner-yen-question'):
 
 
 @pytest.mark.parametrize('offset', range(7))
-def test_october_5_to_11_exact_historical_plans_and_owner_holds(tmp_path, monkeypatch, offset):
+def test_october_5_to_11_plans_preserve_holds_except_owner_selected_sunday(tmp_path, monkeypatch, offset):
     day = date(2026, 10, 5) + timedelta(days=offset)
     settings = settings_on(tmp_path, monkeypatch, str(day), keep_reservation=True)
     category = ['parenting', 'origins', 'parenting', 'exercise', 'investment',
@@ -135,8 +135,7 @@ def test_october_5_to_11_exact_historical_plans_and_owner_holds(tmp_path, monkey
              2: {'category': category, 'kind': 'owner_preparation_pending'},
              4: {'category': category, 'kind': 'owner_preparation_pending',
                  'request_id': 'owner-20261009-new-policy'},
-             5: {'category': category, 'kind': 'owner_input_pending'},
-             6: {'category': category, 'kind': 'owner_input_pending'}}
+             5: {'category': category, 'kind': 'owner_input_pending'}}
     if offset == 4:
         expected['investment_mode'] = POLICY
     if offset in holds:

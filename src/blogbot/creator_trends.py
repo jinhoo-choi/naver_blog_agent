@@ -149,23 +149,46 @@ def import_snapshot(settings, source: Path) -> dict:
 
 def _load(settings) -> tuple[dict | None, str]:
     path = settings.db_path.parent / SNAPSHOT
-    raw = os.environ.get('BLOG_CREATOR_TRENDS_JSON', '')
+    sources = [('environment', None), ('private_snapshot', path),
+               ('repository_snapshot', settings.root / 'config' / SNAPSHOT)]
+    candidates, failures = [], []
+    now = datetime.now(KST)
+    for source, source_path in sources:
+        try:
+            if source_path is None:
+                raw = os.environ.get('BLOG_CREATOR_TRENDS_JSON', '')
+                if not raw:
+                    continue
+            else:
+                if not source_path.exists():
+                    continue
+                with source_path.open(encoding='utf-8-sig') as stream:
+                    raw = stream.read(MAX_BYTES + 1)
+            snapshot = validate_snapshot(raw)
+            captured = datetime.fromisoformat(snapshot['captured_at'])
+            age = (now - captured).total_seconds() / 3600
+            status = ('WRONG_CHANNEL'
+                      if snapshot['channel_id'] != settings.config['creator_advisor']['channel_id']
+                      else 'FUTURE_CAPTURE' if age < 0 else 'EXPIRED' if age > 36
+                      else 'EXPIRED_DATA' if not any(
+                          0 <= (now.date() - date.fromisoformat(group['data_date'])).days <= 3
+                          for group in snapshot['groups']) else 'AVAILABLE')
+            if status == 'AVAILABLE':
+                candidates.append((captured, snapshot, source))
+                continue
+        except (OSError, ValueError, TypeError, KeyError, AttributeError, OverflowError):
+            status = 'INVALID'
+        failures.append(status)
+        print(f'CREATOR_TRENDS_SOURCE_IGNORED source={source} status={status}')
+    if not candidates:
+        return None, failures[0] if failures else 'UNAVAILABLE'
+    # A stale environment value must not shadow a newer observed repository snapshot.
+    # Ties preserve environment, private state, then repository order.
+    _, snapshot, source = max(candidates, key=lambda item: item[0])
     try:
-        if not raw:
-            if not path.exists():
-                return None, 'UNAVAILABLE'
-            with path.open(encoding='utf-8') as stream:
-                raw = stream.read(MAX_BYTES + 1)
-        snapshot = validate_snapshot(raw)
-        expected = settings.config['creator_advisor']['channel_id']
-        if snapshot['channel_id'] != expected:
-            return None, 'WRONG_CHANNEL'
-        captured = datetime.fromisoformat(snapshot['captured_at'])
-        age = (datetime.now(KST) - captured).total_seconds() / 3600
-        if not 0 <= age <= 36:
-            return None, 'EXPIRED' if age > 36 else 'FUTURE_CAPTURE'
-        # Do not silently fall back to old evidence when the configured input is invalid.
         atomic_json(path, snapshot)
+        print(f'CREATOR_TRENDS_SOURCE_SELECTED source={source} '
+              f'captured_at={snapshot["captured_at"]}')
         return snapshot, 'AVAILABLE'
     except (OSError, ValueError, TypeError, KeyError, AttributeError, OverflowError):
         return None, 'INVALID'

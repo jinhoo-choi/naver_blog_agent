@@ -93,11 +93,21 @@ Show the actual topic, not a generic thinking/checking/preparation scene. Do not
 
 
 def section_contexts(body: str) -> list[str]:
-    """Keep the heading and its actual explanation together for image planning."""
-    return [part.strip() for part in re.split(r'^##\s+', body, flags=re.MULTILINE)[1:]]
+    """Keep distinct, nonempty explanations with their headings for image planning."""
+    sections, seen = [], set()
+    for part in re.split(r'^##\s+', body, flags=re.MULTILINE)[1:]:
+        _, _, explanation = part.partition('\n')
+        identity = re.sub(r'\s+', ' ', re.sub(r'^#{3,6} .+$', '', explanation,
+                                              flags=re.MULTILINE)).strip()
+        if identity and identity not in seen:
+            sections.append(part.strip())
+            seen.add(identity)
+    return sections
 
 
-def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostDraft:
+def generate_images(settings, request: ContentRequest, post: PostDraft, *,
+                    allow_uncertain_recovery: bool = True,
+                    section_headings: list[str] | None = None) -> PostDraft:
     if request.category == 'origins':
         folder = settings.artifact_dir / 'generated-images' / post.request_id
         if folder.exists() and any(folder.iterdir()):
@@ -139,11 +149,18 @@ def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostD
     ):
         count = int(config.get('investment_extended_count', count))
     sections = section_contexts(post.body)
-    if len(sections) < max(1, count - 1):
-        raise ValueError('Not enough sections to place images')
+    if section_headings is not None:
+        indexed = {section.splitlines()[0]: section for section in sections}
+        if (len(set(section_headings)) != len(section_headings)
+                or any(heading not in indexed for heading in section_headings)):
+            raise ImagePending('Selected image sections do not match the approved manuscript')
+        sections = [indexed[heading] for heading in section_headings]
+    # Category counts are ceilings, not quotas that make short answers grow.
+    # Existing plan identity checks below still prevent changed plans resetting budgets.
+    count = min(max(1, count), 1 + len(sections))
     folder = settings.artifact_dir / 'generated-images' / post.request_id
     folder.mkdir(parents=True, exist_ok=True)
-    plans = []
+    plans, placements = [], []
     for index in range(count):
         thumbnail = index == 0
         section = '글 전체 핵심 요약' if thumbnail else sections[
@@ -156,6 +173,17 @@ def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostD
                   'output_format': str(config.get('output_format', 'jpeg'))}
         key = hashlib.sha256(json.dumps(params, sort_keys=True).encode()).hexdigest()
         plans.append((params, key))
+        placements.append({} if thumbnail else {'section_heading': section.splitlines()[0]})
+    photos = execute_image_plans(settings, folder, plans, placements,
+                                 allow_uncertain_recovery=allow_uncertain_recovery)
+    return replace(post, photos=photos)
+
+
+def execute_image_plans(settings, folder, plans, placements, *,
+                        allow_uncertain_recovery=True, before_submit=None, max_attempts=None):
+    """Common existing image engine, also used by an explicitly approved one-image job."""
+    config = settings.config.get('images', {})
+    folder.mkdir(parents=True, exist_ok=True)
     # Prompt edits must not reset existing per-image paid-call budgets.
     # Store only identities; all parameters can be reconstructed from the approved post.
     plan_path = folder / '.image-plan'
@@ -191,12 +219,20 @@ def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostD
             checkpoint(state='READY', sha256=digest)
             return {'file': str(path.resolve()), 'sha256': digest, 'caption': '',
                     'generated': True, 'cache_key': key, 'policy_version': 'category-scene-v2',
-                    'role': 'thumbnail' if thumbnail else 'section'}
+                    'role': 'thumbnail' if thumbnail else 'section', **placements[index]}
         attempts = int(state.get('attempts', 0))
         maximum = min(2, int(config.get('max_attempts', 2)))
+        if max_attempts is not None:
+            maximum = min(maximum, max_attempts)
+        if (not allow_uncertain_recovery and manifest.exists()
+                and (state.get('state') != 'RATE_LIMITED'
+                     or type(state.get('attempts')) is not int or attempts < 1)):
+            raise ImagePending('Manual image outcome requires reconciliation; no resubmission')
         if state.get('recovery_attempted'):
             raise ImagePending('Image recovery budget reached')
         if state.get('state') in {'STARTED', 'UNCERTAIN', 'FAILED'} or attempts >= maximum:
+            if not allow_uncertain_recovery:
+                raise ImagePending('Manual image attempt budget reached; no recovery extension')
             updated = state.get('updated_at')
             if not isinstance(updated, (int, float)) or not 0 < updated <= time.time():
                 # Legacy checkpoints have no reliable age after artifact extraction.
@@ -212,6 +248,8 @@ def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostD
             started = time.monotonic()
             checkpoint(state='STARTED', attempts=attempts, cache_key=key)
             try:
+                if before_submit is not None:
+                    before_submit(params)
                 result = client.images.generate(**params)
                 encoded = result.data[0].b64_json
                 if not encoded:
@@ -230,7 +268,7 @@ def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostD
                     usage=usage.model_dump() if usage else None)
                 return {'file': str(path.resolve()), 'sha256': digest, 'caption': '',
                         'generated': True, 'cache_key': key, 'policy_version': 'category-scene-v2',
-                        'role': 'thumbnail' if thumbnail else 'section'}
+                        'role': 'thumbnail' if thumbnail else 'section', **placements[index]}
             except APIStatusError as exc:
                 # Only explicit rate-limit rejection is safe for one bounded retry.
                 retryable = exc.status_code == 429
@@ -246,7 +284,7 @@ def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostD
         raise ImagePending('Image retry budget reached')
 
     with ThreadPoolExecutor(max_workers=min(2, max(1, int(config.get('concurrency', 2))))) as pool:
-        futures = [pool.submit(one, i) for i in range(count)]
+        futures = [pool.submit(one, i) for i in range(len(plans))]
         photos, errors = [], []
         for future in futures:
             try:
@@ -255,4 +293,4 @@ def generate_images(settings, request: ContentRequest, post: PostDraft) -> PostD
                 errors.append(exc)
         if errors:
             raise ImagePending('Some images are pending; completed files retained') from errors[0]
-    return replace(post, photos=photos)
+    return photos

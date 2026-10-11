@@ -241,7 +241,8 @@ def prepare_reference_evidence(directory, request, urls):
     if request.category not in {'parenting', 'exercise'} or directory is None:
         return request
     allowed = {'www.nasm.org', 'www.cdc.gov', 'www.healthychildren.org',
-               'www.heart.org', 'www.lullabytrust.org.uk', 'www.acefitness.org'}
+               'www.heart.org', 'www.lullabytrust.org.uk', 'www.acefitness.org',
+               'www.nsca.com', 'my.clevelandclinic.org'}
     folder = directory / 'source-evidence'
     folder.mkdir(parents=True, exist_ok=True)
     references = []

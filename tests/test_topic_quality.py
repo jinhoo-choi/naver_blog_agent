@@ -166,3 +166,52 @@ def test_new_image_plan_reuses_cache_and_holds_changed_input(tmp_path, monkeypat
         generate_images(settings, request, replace(post, body=post.body + ' 설명이 바뀌었습니다.'))
     assert len(calls) == 2
     assert before == {p.name: p.read_bytes() for p in folder.iterdir()}
+
+
+def test_short_answer_generates_only_distinct_section_images_and_preserves_budget(tmp_path, monkeypatch):
+    import base64
+    from types import SimpleNamespace
+
+    from blogbot.images import ImagePending, generate_images
+
+    calls = []
+    def generate(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(data=[SimpleNamespace(b64_json=base64.b64encode(b'image').decode())])
+    monkeypatch.setattr('blogbot.images.OpenAI', lambda **kw: SimpleNamespace(
+        images=SimpleNamespace(generate=generate)))
+    settings = SimpleNamespace(artifact_dir=tmp_path, openai_api_key='offline', config={
+        'images': {'exercise_count': 5, 'concurrency': 1}})
+    post = PostDraft('exercise', '운동', 'topic', '제목',
+                     '도입입니다.\n\n## 자세\n손 접점을 확인합니다.\n\n'
+                     '## 같은 설명\n손 접점을 확인합니다.\n\n## 빈 구역\n### 하위 제목',
+                     [], [], '2026-10-10', request_id='short-images')
+    request = ContentRequest('short-images', 'exercise', {})
+    first = generate_images(settings, request, post)
+    assert len(calls) == 2 and [p['role'] for p in first.photos] == ['thumbnail', 'section']
+    assert first.photos[1]['section_heading'] == '자세'
+    assert generate_images(settings, request, post).photos == first.photos and len(calls) == 2
+    folder = tmp_path / 'generated-images' / post.request_id
+    before = {p.name: p.read_bytes() for p in folder.iterdir()}
+    # A later change in the ceiling cannot start a new paid plan or reset attempts.
+    settings.config['images']['exercise_count'] = 1
+    with pytest.raises(ImagePending, match='Image plan changed'):
+        generate_images(settings, request, post)
+    assert len(calls) == 2 and before == {p.name: p.read_bytes() for p in folder.iterdir()}
+
+
+def test_selected_image_stays_with_its_section_after_duplicate_sections_are_skipped():
+    from blogbot.presentation import render_segments
+
+    post = PostDraft('exercise', '운동', 'topic', '제목',
+                     '핵심 답변입니다.\n\n## 준비\n준비 설명입니다.\n\n## 준비 반복\n준비 설명입니다.'
+                     '\n\n## 자세\n자세 설명입니다.\n\n## 주의\n중단 신호입니다.',
+                     [], [], '2026-10-10', photos=[
+                         {'file': 'cover.jpg', 'role': 'thumbnail'},
+                         {'file': 'posture.jpg', 'role': 'section', 'section_heading': '자세'}])
+    segments = render_segments(post)
+    index = next(i for i, segment in enumerate(segments) if '자세 설명입니다.' in segment.html)
+    assert segments[index + 1].photo['file'] == 'posture.jpg'
+    post.body += '\n\n## 자세\n다른 설명입니다.'
+    with pytest.raises(ValueError, match='Image section heading needs reconciliation'):
+        render_segments(post)

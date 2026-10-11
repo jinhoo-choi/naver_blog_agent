@@ -236,7 +236,7 @@ def _run_identity() -> str:
 def reservation_name(run_id: str, packet: dict, stage: str = 'manual') -> str:
     parts = [packet['request_id'], packet['approval_reference'],
              re.sub(r'\s+', '', packet['question']).casefold()]
-    if stage not in {'manual', 'thumbnail', 'review'}:
+    if stage not in {'manual', 'thumbnail', 'review', 'repair'}:
         raise ValueError('Invalid reservation stage')
     return f'blog-state-{run_id}-{stage}-' + '-'.join(
         hashlib.sha256(value.encode()).hexdigest() for value in parts)

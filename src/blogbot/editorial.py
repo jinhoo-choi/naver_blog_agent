@@ -5,6 +5,24 @@ import re
 
 VERSION = 'topic-quality-v1'
 
+VOICE = '''써누애비 문체 seonoo-voice-v1:
+쉬운 습니다체와 직접 답변을 기본으로, 담담한 관찰·절제된 도치·핵심어 강조·가벼운 익살을 더한다.
+정보를 먼저 완결하고 여운은 뒤에 둔다. 도치는 일반 글 0~2회, 짧은 유래 0~1회이며
+도입의 답변 뒤·장면 묘사·마무리에서만 선택한다. 서술어 뒤에 짧은 핵심 구절을 놓되
+두 문장 연속 도치·단어마다 마침표·말줄임표 남용은 피한다. 자연스러우면 0회도 좋다.
+문학적 볼드는 한 구절 1~3어절, 일반 글 0~3곳·짧은 유래 0~1곳이며 문단 전체를 강조하지 않는다.
+기존 필수 조건·안전 강조는 별개로 보존한다. 새 색·글자크기·서식을 추가하지 않는다.
+유머는 글 전체 0~1문장, 확인된 장면의 거창함과 소소함의 차이 또는 가벼운 자기관찰로 쓴다.
+웃기는 설명을 덧붙이지 않는다. 허구의 실수·감정·가족 반응·경험, 자기혐오·독자 조롱은 금지다.
+도치·유머를 제목/캡션/설정값/프롬프트 원문/수치·조건/운동 동작·안전/의료·투자 판단 문장에 넣지 않는다.
+육아·운동은 안전 설명 밖 관찰, 투자는 생활 장면에만 선택하며 수익·손실을 농담으로 다루지 않는다.
+유래는 답을 늦추지 않고, AI 후기는 실제 결과 영상→과정·설정→실제 프롬프트 순서를 유지한다.
+작가 고유 문구를 복제하거나 모든 글을 우울한 고백체로 만들지 않는다. 1인칭은 제공된 경험에만 쓴다.
+검수는 장치를 빼도 사실/조건이 같은지, 웃음이 새 경험을 만들지 않는지, 소리 내어 자연스러운지 본다.
+장치가 0회라는 이유로 감점·재작성을 요구하지 않는다. 어색함은 기존 가독성 issues에서 문장별로
+다루며 새 통과 점수·자동 차단·추가 유료 호출을 만들지 않는다. 기존 저장/공개 원고는 자동 재작성하지 않는다.
+'''
+
 PUBLIC_COPY = '''공개 본문과 비공개 검수 분리 public-copy-v1:
 육아·운동·투자·요리·이름의 유래·후기·AI 튜토리얼 모두에 적용한다.
 내부 검수의 검증 여부·누락 항목·재확인 계획·작성/검수 과정과 반복적 일반 경고는 제목·본문·캡션에
@@ -124,11 +142,11 @@ def quality_guidance(category: str, editorial_type: str | None = None,
                                       'editorial_type': editorial_type or 'article'})
     if category == 'origins':
         from .origins import GUIDANCE
-        return PUBLIC_COPY + '\n' + GUIDANCE
+        return PUBLIC_COPY + '\n' + VOICE + '\n' + GUIDANCE
     if investment_mode == 'life-economics-v1':
         from .life_economics import GUIDANCE
-        return PUBLIC_COPY + '\n' + COMMON + '\n' + GUIDANCE
-    return PUBLIC_COPY + '\n' + COMMON + '\n' + (REVIEW if selected == 'review' else TOPICS.get(key, ''))
+        return PUBLIC_COPY + '\n' + VOICE + '\n' + COMMON + '\n' + GUIDANCE
+    return PUBLIC_COPY + '\n' + VOICE + '\n' + COMMON + '\n' + (REVIEW if selected == 'review' else TOPICS.get(key, ''))
 
 
 def editorial_hints(body: str) -> list[str]:

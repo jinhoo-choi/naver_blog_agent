@@ -1,5 +1,9 @@
 # 프로젝트 상태
 
+**2026-10-11 Actions 재검증 (Codex, PR #30 Draft·미병합):** 최신 main `435f5cf` 통합, 운영 변경 보존. pytest 1,249 passed, Ruff 0.17.0 통과. Python 3.12.14. 운영 발송·유료 API·네이버 저장 미실행. 검증 범위: [인계](HANDOFF_2026-10-07_ACTIONS_NODE24.md).
+
+**2026-10-07 Actions 호환성 (Codex, 검토용 PR·미병합):** GitHub-hosted action을 기본 Node 24 최소 버전으로 변경. runner 2.337.0 실측. Windows self-hosted draft는 설치 runner 버전 미확인으로 기존 action 유지. 기존 테스트·workflow 정적 검증만 수행, 운영·실발송 미실행. 목록·근거·검증·롤백: [인계](HANDOFF_2026-10-07_ACTIONS_NODE24.md).
+
 ## 2026-10-10 재설정 전 전체 검수 — blog-ops-v2
 
 - 소유자가 제안한 하루 3회·30명 시험 운영과 재설정 전 전체 검수를 승인했습니다. 현재 운영 계약은 [AUTOMATION](AUTOMATION.md)의 `blog-ops-v2`이며 아래 17:02 설정은 변경 전 이력입니다. 실제 외부 예약 반영은 비공개 원장의 등록·재조회 증거로 따로 확인합니다.

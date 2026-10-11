@@ -134,10 +134,12 @@ def extract_bundle(encrypted: bytes, directory: Path, key: str) -> None:
         # Never rewind a local one-shot manual claim with an older encrypted bundle.
         manual_files = list((directory / 'manual-requests').glob('**/*'))
         manual_files += list((directory / 'manual-thumbnails').glob('*/*'))
+        manual_files += list((directory / 'manual-repairs').glob('**/*'))
         for path in manual_files:
             if (not path.is_file() or (path.name not in {
                     'claim.json', 'paid-calls.json', 'paid-call.json', 'approved-packet.json',
-                    'original-claim.json'} and 'review-once' not in path.parts)):
+                    'original-claim.json'} and 'review-once' not in path.parts
+                    and 'manual-repairs' not in path.parts)):
                 continue
             if path.name == 'result.json':
                 continue  # Photo path relocation is validated by the result digest.
@@ -208,6 +210,11 @@ def extract_bundle(encrypted: bytes, directory: Path, key: str) -> None:
         rebase(input_photos)
         atomic_json(path, payload)
     for path in (directory / 'manual-requests').glob('**/result.json'):
+        payload = json.loads(path.read_text())
+        rebase(payload['post']['photos'])
+        rebase(payload['input']['photos'])
+        atomic_json(path, payload)
+    for path in (directory / 'manual-repairs').glob('*/result.json'):
         payload = json.loads(path.read_text())
         rebase(payload['post']['photos'])
         rebase(payload['input']['photos'])
@@ -424,6 +431,27 @@ def pack(settings, destination: Path) -> None:
                     or path.stat().st_size > 5_000_000):
                 raise ValueError('Invalid manual request checkpoint')
             archive.write(path, path.relative_to(directory))
+        for path in (directory / 'manual-repairs').glob('**/*'):
+            parts = path.relative_to(directory / 'manual-repairs').parts
+            slug = re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,79}', parts[0])
+            if path.is_dir() and not path.is_symlink():
+                if not slug or not (len(parts) == 1 or (len(parts) == 2 and parts[1] in {
+                        'response-cache', 'source-evidence', 'images'})):
+                    raise ValueError('Invalid manual repair directory')
+                continue
+            valid = slug and ((len(parts) == 2 and path.name in {
+                'claim.json', 'approved-packet.json', 'paid-calls.json', 'result.json',
+                'usage.jsonl', 'review.json', 'review-calls.json'}) or (len(parts) == 3 and (
+                    (parts[1] == 'response-cache' and re.fullmatch(
+                        r'[A-Za-z0-9][A-Za-z0-9_.-]{0,180}\.json', path.name))
+                    or (parts[1] == 'source-evidence' and re.fullmatch(
+                        r'reference-[a-f0-9]{64}\.json', path.name))
+                    or (parts[1] == 'images' and (path.name == '.image-plan'
+                        or re.fullmatch(r'[a-f0-9]{64}\.(?:json|jpg)', path.name))))))
+            if (not valid or path.is_symlink() or not path.is_file()
+                    or path.stat().st_size > 5_000_000):
+                raise ValueError('Invalid manual repair checkpoint')
+            archive.write(path, path.relative_to(directory))
         for path in (directory / 'manual-thumbnails').glob('**/*'):
             if path.is_dir() and not path.is_symlink():
                 continue
@@ -543,7 +571,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('mode', choices=['bootstrap', 'prepare', 'recover', 'unpack', 'probe',
                                          'manual-images', 'manual-request', 'manual-request-reserve',
-                                         'manual-thumbnail', 'manual-thumbnail-reserve', 'manual-review', 'manual-review-reserve'])
+                                         'manual-thumbnail', 'manual-thumbnail-reserve', 'manual-review', 'manual-review-reserve', 'manual-repair', 'manual-repair-reserve'])
     parser.add_argument('--file', type=Path)
     parser.add_argument('--destination', type=Path)
     parser.add_argument('--receipts', type=Path)
@@ -553,8 +581,8 @@ def main():
     parser.add_argument('--manual-request-sha256', default='')
     args = parser.parse_args()
     if ((bool(args.manual_request_id) and bool(args.manual_request_sha256))
-            != (args.mode in {'manual-request', 'manual-request-reserve', 'manual-thumbnail', 'manual-thumbnail-reserve', 'manual-review', 'manual-review-reserve'})
-            or (args.mode not in {'manual-request', 'manual-request-reserve', 'manual-thumbnail', 'manual-thumbnail-reserve', 'manual-review', 'manual-review-reserve'} and
+            != (args.mode in {'manual-request', 'manual-request-reserve', 'manual-thumbnail', 'manual-thumbnail-reserve', 'manual-review', 'manual-review-reserve', 'manual-repair', 'manual-repair-reserve'})
+            or (args.mode not in {'manual-request', 'manual-request-reserve', 'manual-thumbnail', 'manual-thumbnail-reserve', 'manual-review', 'manual-review-reserve', 'manual-repair', 'manual-repair-reserve'} and
                 (args.manual_request_id or args.manual_request_sha256))):
         parser.error('manual request mode requires exact ID and packet digest')
     if bool(args.manual_image_request_id) != (args.mode == 'manual-images'):
@@ -599,6 +627,14 @@ def main():
         return
     restore(directory)
     try:
+        if args.mode in {'manual-repair', 'manual-repair-reserve'}:
+            from .manual_repair import prepare, reserve
+            handler = reserve if args.mode.endswith('-reserve') else prepare
+            result = handler(settings, args.manual_request_id, args.manual_request_sha256)
+            print(json.dumps(result))
+            if result['status'] not in {'MANUAL_REPAIR_DRAFT_READY', 'MANUAL_REPAIR_RESERVED'}:
+                raise PreparationFailed('Manual repair held; reconcile private checkpoints')
+            return
         if args.mode in {'manual-review', 'manual-review-reserve'}:
             from .manual_review import reserve_review, run_review
             handler = reserve_review if args.mode.endswith('-reserve') else run_review
@@ -718,7 +754,7 @@ def main():
         delivery_hold = pack(settings, destination)
         summary_path = directory / 'run-summary.json'
         if (args.mode not in {'probe', 'manual-images', 'manual-request', 'manual-request-reserve',
-                              'manual-thumbnail', 'manual-thumbnail-reserve', 'manual-review', 'manual-review-reserve'}
+                              'manual-thumbnail', 'manual-thumbnail-reserve', 'manual-review', 'manual-review-reserve', 'manual-repair', 'manual-repair-reserve'}
                 and summary_path.exists()
                 and json.loads(summary_path.read_text()).get('date') == today_kst().isoformat()):
             from .notify import telegram

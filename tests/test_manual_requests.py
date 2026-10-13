@@ -1041,7 +1041,7 @@ def test_workflow_uploads_reservation_before_generation_and_skips_paid_cache_rep
     paid = workflow.index('name: Prepare or resume')
     assert reservation < upload < paid
     assert 'id: manual_reservation' in workflow[reservation:upload]
-    assert 'actions/upload-artifact@v4' in workflow[upload:paid]
+    assert 'actions/upload-artifact@v6' in workflow[upload:paid]
     assert 'steps.manual_reservation.outputs.artifact_name' in workflow[upload:paid]
     assert "steps.manual_reservation.outputs.cached != 'true'" in workflow[upload:paid]
     assert "steps.manual_reservation.outputs.cached != 'true'" in workflow[paid:]

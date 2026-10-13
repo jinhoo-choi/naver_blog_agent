@@ -377,3 +377,10 @@ GitHub 문서는 사용자가 승인한 PAT로 반영하며 토큰은 저장소�
 - 준비 코드에 관찰 JSON 검증·36시간/데이터3일 최신성·관련 후보/중복 비교·원고 provenance/상태 보고·암호화 보존을 연결했다. 기존 09:00 API 실행은 Actions 변수 `BLOG_CREATOR_TRENDS_JSON`을 실제 읽는다.
 - 무인 브라우저 수집·실계정 변수 등록·새 일정·유료 수동 준비는 실행하지 않았다. 병합 승인 및 09:00 전 첫 관찰 스냅샷 전달, 자연 실행에서 소비 확인이 남아 있다. 기존 09:15/10:15/11:15 작업을 사전 수집으로 오인하지 않는다.
 - 상세 절차: [CREATOR_TRENDS](CREATOR_TRENDS.md). 기존 하루1편·육아5/운동수1/투자금1·수동 주제 우선·안전/비용/복구 한도는 유지한다.
+
+
+## 과거 PR #30 점검 이력 보존
+
+**2026-10-11 Actions 재검증 (Codex, PR #30 Draft·미병합):** 최신 main `435f5cf` 통합, 운영 변경 보존. pytest 1,249 passed, Ruff 0.17.0 통과. Python 3.12.14. 운영 발송·유료 API·네이버 저장 미실행. 검증 범위: [인계](HANDOFF_2026-10-07_ACTIONS_NODE24.md).
+
+**2026-10-07 Actions 호환성 (Codex, 검토용 PR·미병합):** GitHub-hosted action을 기본 Node 24 최소 버전으로 변경. runner 2.337.0 실측. Windows self-hosted draft는 설치 runner 버전 미확인으로 기존 action 유지. 기존 테스트·workflow 정적 검증만 수행, 운영·실발송 미실행. 목록·근거·검증·롤백: [인계](HANDOFF_2026-10-07_ACTIONS_NODE24.md).

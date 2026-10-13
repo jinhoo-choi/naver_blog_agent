@@ -4,6 +4,8 @@ import json
 import os
 import urllib.request
 
+from .operations import notification_status
+
 
 def telegram(results: list[dict]) -> None:
     saved = [r for r in results if r.get("status") == "SAVED_NAVER"]
@@ -36,11 +38,12 @@ def telegram(results: list[dict]) -> None:
     if summary:
         with open(summary, 'a', encoding='utf-8') as stream:
             stream.write('\n'.join(lines) + '\n')
-    if os.getenv("BLOG_NOTIFY_ENABLED", "false").lower() != "true":
+    configured = notification_status()
+    if configured == 'DISABLED':
         return
     token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
-    if not token or not chat_id:
+    if configured == 'NOT_CONFIGURED':
         print(json.dumps({'notification': 'NOT_CONFIGURED'}))
         return
 

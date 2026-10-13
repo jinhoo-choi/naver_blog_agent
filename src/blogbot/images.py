@@ -9,23 +9,17 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from pathlib import Path
 
 from openai import APIStatusError, OpenAI
 
 from .core import PostDraft
 from .editorial import content_style
 from .inputs import ContentRequest, origin_photo_metadata, review_photo_metadata, verify_photos
+from .storage import atomic_json
 
 
 class ImagePending(RuntimeError):
     """An incomplete or uncertain image must not discard the approved text."""
-
-
-def atomic_json(path: Path, value: dict) -> None:
-    temporary = path.with_suffix(path.suffix + '.tmp')
-    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
-    os.replace(temporary, path)
 
 
 def image_prompt(post: PostDraft, section: str, *, thumbnail: bool = False,

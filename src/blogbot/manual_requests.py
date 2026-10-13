@@ -31,25 +31,10 @@ from .llm import BlogLLM
 from .manual_costs import estimate_project, thumbnail_spend, usage_cost, validate_budget
 from .planning import media_claim
 from .pre_review import inspect_candidate, run_pre_review
+from .storage import atomic_json
 
 VERSION = 'manual-request-v1'
 SLUG = r'[A-Za-z0-9][A-Za-z0-9_-]{0,79}'
-
-
-def atomic_json(path: Path, value) -> None:
-    """Durable private claim, including directory metadata, before external spend."""
-    temporary = path.with_suffix(path.suffix + '.tmp')
-    with temporary.open('w', encoding='utf-8') as stream:
-        json.dump(value, stream, ensure_ascii=False, indent=2)
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(temporary, path)
-    if os.name != 'nt':
-        descriptor = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
 
 
 def _text(value, maximum):

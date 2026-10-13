@@ -185,7 +185,7 @@ def test_two_week_2221_totals_and_measurement_metadata_never_expire_plan(tmp_pat
     assert {key: policy[key] for key in ('measurement_start', 'measurement_end',
                                         'review_not_before', 'measurement_post_hours')} == {
         'measurement_start': '2026-10-12', 'measurement_end': '2026-10-25',
-        'review_not_before': '2026-10-28', 'measurement_post_hours': 72}
+        'review_not_before': '2026-11-01', 'measurement_post_hours': 168}
     for text in ['2026-10-26', '2026-10-28', '2026-11-01', '2027-01-06']:
         day = date.fromisoformat(text)
         plan = resolve_plan(settings.config, day)

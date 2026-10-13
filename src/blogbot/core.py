@@ -195,6 +195,10 @@ def import_work_receipts(conn: sqlite3.Connection, payload: dict, *, blog_id: st
     if (payload.get('verified_date') != today_kst().isoformat()
             or not isinstance(payload.get('records'), list) or not blog_id):
         raise ValueError('A freshly verified owner Work ledger is required')
+    if any(not isinstance(r, dict) or ((r.get('operation_id') or r.get('mode') == 'manual')
+                                      and r.get('status') != 'PUBLISHED')
+           for r in payload['records']):
+        raise ValueError('Manual Work draft saves cannot enter automatic quota receipts')
     return merge_work_receipts(conn, payload['records'], blog_id=blog_id, categories=categories)
 
 
@@ -269,6 +273,10 @@ def claim_publication(conn: sqlite3.Connection, request_id: str, settings) -> di
     from .inputs import verify_photos
     from .investment import validate_current_post
     from .planning import active_plan, matches_post, saved_identities
+    from .work_operations import exclusions, pending_writes
+
+    if request_id in exclusions(settings) or pending_writes(settings):
+        raise ValueError('Separate manual Work cannot enter automatic publication')
 
     plan = active_plan(settings)
     if not plan or plan.get('reservation'):
@@ -281,6 +289,8 @@ def claim_publication(conn: sqlite3.Connection, request_id: str, settings) -> di
     if len(items) != 1 or items[0].get('requires_fresh_review'):
         raise ValueError('Publication requires one current approved handoff item')
     approved = PostDraft(**items[0]['post'])
+    if approved.provenance.get('manual_request'):
+        raise ValueError('A manual draft cannot become an automatic publication')
     if approved.status != 'APPROVED' or not matches_post(approved, plan):
         raise ValueError('Publication requires the approved post in the active editorial slot')
     packet = json.loads((settings.artifact_dir / f"{approved.as_of_date}-{items[0]['id']:05d}.json").read_text())

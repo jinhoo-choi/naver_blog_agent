@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 from cryptography.fernet import Fernet
 
-from blogbot import core, planning, pre_review
+from blogbot import core, manual_requests, planning, pre_review
 from blogbot import manual_repair as repair
 
 
@@ -19,7 +19,7 @@ def sha(path):
 @pytest.fixture
 def case(tmp_path, monkeypatch):
     day = lambda: date(2026, 10, 11)
-    for module in (repair, core, planning, pre_review):
+    for module in (repair, core, planning, pre_review, manual_requests):
         monkeypatch.setattr(module, 'today_kst', day)
     monkeypatch.setenv('GITHUB_ACTIONS', 'true')
     monkeypatch.setenv('GITHUB_RUN_ID', '456')

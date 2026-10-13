@@ -167,6 +167,23 @@ def extract_bundle(encrypted: bytes, directory: Path, key: str) -> None:
                 preserve_manual_receipts.add(name)
         if archive.namelist().count('blog.db') != 1:
             raise ValueError('Bundle requires exactly one database')
+        from .work_operations import merge_record, records, validate_record
+        local_operations = {p.name: r for p, r in records(directory)}
+        merged_operations = dict(local_operations)
+        operation_names = [n for n in archive.namelist() if n.startswith('work-operations/')]
+        if len(operation_names) != len(set(operation_names)):
+            raise ValueError('Duplicate manual Work journal members')
+        for name in operation_names:
+            path = Path(name)
+            if len(path.parts) != 2 or path.suffix != '.json':
+                raise ValueError('Invalid manual Work bundle member')
+            if archive.getinfo(name).file_size > 20_000:
+                raise ValueError('Manual Work bundle size limit exceeded')
+            incoming = validate_record(json.loads(archive.read(name)))
+            if path.stem != incoming['manifest']['operation_id']:
+                raise ValueError('Manual Work bundle identity or size mismatch')
+            local = local_operations.get(path.name)
+            merged_operations[path.name] = merge_record(local, incoming) if local else incoming
         # Reconcile in a temporary DB first so stale bundles or conflicting evidence cannot
         # erase a local publication claim, even when the external Work ledger is replayed.
         with tempfile.TemporaryDirectory(prefix='.restore-', dir=directory) as temporary:
@@ -175,8 +192,14 @@ def extract_bundle(encrypted: bytes, directory: Path, key: str) -> None:
             with closing(connect_db(staged)) as conn:
                 merge_work_receipts(conn, preserved, categories={r['category'] for r in preserved})
             archive.extractall(directory, members=[name for name in archive.namelist()
-                                                  if name != 'blog.db' and name not in preserve_manual_receipts])
+                                                  if name != 'blog.db' and name not in preserve_manual_receipts
+                                                  and name not in operation_names])
             os.replace(staged, db_path)
+        if merged_operations:
+            folder = directory / 'work-operations'
+            folder.mkdir(exist_ok=True)
+            for name, record in merged_operations.items():
+                atomic_json(folder / name, record)
     metadata = json.loads((directory / 'bundle-info.json').read_text())
     old_root = Path(metadata['data_root'])
     def rebase(photos):
@@ -312,6 +335,9 @@ def seed_inputs(settings) -> None:
 
 def pack(settings, destination: Path) -> None:
     directory = settings.db_path.parent
+    from .work_operations import exclusions, pending_writes, records
+    manual_ids = exclusions(settings)
+    manual_pending = pending_writes(settings)
     today = today_kst()
     cutoff = (today-timedelta(days=7)).isoformat()
     packet, weekly_holds = [], []
@@ -335,6 +361,8 @@ def pack(settings, destination: Path) -> None:
             uncertain = True
         for row in rows:
             post = load_post(row)
+            if post.request_id in manual_ids or post.provenance.get('manual_request') or manual_pending:
+                continue
             number = settings.config['categories'][post.category].get('naver_category_no')
             if type(number) is not int or number < 1:
                 continue
@@ -353,7 +381,8 @@ def pack(settings, destination: Path) -> None:
                            'requires_fresh_review': post.as_of_date != today.isoformat(),
                            'post': post.__dict__, 'segments': [s.__dict__ for s in render_segments(
                                post, include_tags=post.provenance.get('content_style') != 'review')]})
-    hold = (revalidation_reason(plan) if weekly_holds else
+    hold = ('unresolved_manual_work' if manual_pending else
+            revalidation_reason(plan) if weekly_holds else
             'kst_date_changed' if stale_settings else 'editorial_slot_reserved'
             if plan and plan.get('reservation') else None)
     atomic_json(directory / 'ready.json', {'date': today.isoformat(), 'posts': packet,
@@ -366,11 +395,15 @@ def pack(settings, destination: Path) -> None:
         held_ids = {r['id'] for r in weekly_holds}
         results = [r for r in prior if r.get('id') not in held_ids
                    and r.get('status') != 'DAILY_PLAN_READY'] + weekly_holds
-        atomic_json(summary_path, {'date': str(today), 'failed': True, 'results': results})
+        from .operations import preparation_outcome
+        atomic_json(summary_path, {'date': str(today), 'failed': True, 'results': results,
+                                   **preparation_outcome(results, failed=True)})
     atomic_json(directory / 'bundle-info.json', {'data_root': str(directory.resolve()),
                                                 'date': today.isoformat(), 'version': 1})
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:
+        for path, _ in records(directory):
+            archive.write(path, path.relative_to(directory))
         # Retain state and recent packets; old completed media are not transported forever.
         keep_ids = set(pending_ids)
         for path in settings.artifact_dir.glob('*.json'):
@@ -488,6 +521,12 @@ def filter_ready(directory: Path, receipts: dict, plan: dict | None = None, sett
     if receipts.get('verified_date') != today.isoformat() or not isinstance(receipts.get('records'), list):
         raise ValueError('A freshly verified Work save ledger is required')
     blocked = set()
+    from .work_operations import records
+    manual_records = [r for _, r in records(directory)]
+    manual_ids = {r['manifest']['request_id'] for r in manual_records}
+    manual_pending = any(r['status'] == 'SAVE_UNCERTAIN' or (
+        r['status'] in {'STARTED', 'HELD'} and r['manifest']['action'] in {'revise', 'save'})
+        for r in manual_records)
     used = set()
     uncertain = False
     records = list(receipts['records'])
@@ -531,6 +570,8 @@ def filter_ready(directory: Path, receipts: dict, plan: dict | None = None, sett
     for item in ready['posts'] + ready.get('publication_ready', []):
         post = item['post']
         identity = post['request_id']
+        if identity in manual_ids or post.get('provenance', {}).get('manual_request') or manual_pending:
+            continue
         publication_candidate = (plan and identity in observed_saved and not publication_ready
                                  and used <= {identity})
         if uncertain and any(r.get('status') in PUBLICATION_PENDING for r in records):
@@ -595,6 +636,9 @@ def main():
         if args.receipts is None:
             parser.error('unpack requires --receipts from the verified Work save ledger')
         receipts = json.loads(args.receipts.read_text())
+        if any((r.get('operation_id') or r.get('mode') == 'manual') and r.get('status') != 'PUBLISHED'
+               for r in receipts.get('records', [])):
+            raise ValueError('Manual Work receipts cannot consume automatic quota')
         extract_bundle(args.file.read_bytes(), args.destination, os.environ['BLOG_BUNDLE_KEY'])
         from dataclasses import replace
         settings = load_settings()
@@ -745,8 +789,12 @@ def main():
                                          'DAILY_PLAN_READY', 'DAILY_PLAN_LIMIT'}
                      for r in results):
                 failed = False  # A bounded replacement can resolve an earlier editorial rejection.
+        from .operations import preparation_outcome
+        deliverable_ready = bool(categories and not reserved and not args.attribution_review_request_id
+                                 and expected <= ready)
         atomic_json(directory / 'run-summary.json',
-                    {'date': today_kst().isoformat(), 'failed': failed, 'results': results})
+                    {'date': today_kst().isoformat(), 'failed': failed, 'results': results,
+                     **preparation_outcome(results, failed=failed, deliverable_ready=deliverable_ready)})
         if failed:
             raise PreparationFailed('Preparation did not complete; inspect private diagnostics')
     finally:

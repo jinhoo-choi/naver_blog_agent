@@ -68,6 +68,10 @@ def make_writer(settings: Settings) -> NaverDraftWriter:
 def save_pending(settings: Settings) -> list[dict]:
     """Retry reviewed text without buying another generation or repeating uncertain saves."""
     plan = active_plan(settings)
+    from .work_operations import exclusions, pending_writes
+    manual_ids = exclusions(settings)
+    if pending_writes(settings):
+        return [{'status': 'MANUAL_CHECK_REQUIRED', 'reason': 'unresolved_manual_work'}]
     if plan and plan.get('reservation'):
         return [reservation_result(plan)]
     if plan and plan['category'] == 'origins':
@@ -90,6 +94,8 @@ def save_pending(settings: Settings) -> list[dict]:
         rows = conn.execute("SELECT * FROM posts WHERE status='APPROVED' ORDER BY id").fetchall()
         for row in rows:
             post = load_post(row)
+            if post.request_id in manual_ids or post.provenance.get('manual_request'):
+                continue
             if plan and (not matches_post(post, plan) or saved_count(conn, plan)):
                 continue
             if post.as_of_date != today_kst().isoformat():
@@ -135,6 +141,12 @@ def save_pending(settings: Settings) -> list[dict]:
 
 def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool = False,
               retry_failed: bool = False, attribution_review_request_id: str = '') -> list[dict]:
+    from .work_operations import exclusions, pending_writes
+    manual_ids = exclusions(settings)
+    if save_to_naver and pending_writes(settings):
+        return [{'status': 'MANUAL_CHECK_REQUIRED', 'reason': 'unresolved_manual_work'}]
+    if isinstance(attribution_review_request_id, str) and attribution_review_request_id in manual_ids:
+        raise ValueError('Manual Work request cannot enter automatic recovery')
     if attribution_review_request_id != '':
         if (not retry_failed or save_to_naver or not isinstance(attribution_review_request_id, str)
                 or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,79}', attribution_review_request_id)):
@@ -174,7 +186,8 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
             if uncertain:
                 return [{"id": uncertain[0], "status": "MANUAL_CHECK_REQUIRED"}]
     candidates, notices = collect_requests(settings)
-    candidates = [r for r in candidates if settings.config['categories'][r.category]['max_daily'] > 0]
+    candidates = [r for r in candidates if settings.config['categories'][r.category]['max_daily'] > 0
+                  and r.id not in manual_ids and not r.provenance.get('manual_request')]
     if plan:
         candidates = [replace(r, provenance={**r.provenance, 'daily_plan': plan,
                                             'editorial_type': r.data.get('editorial_type', 'article')})
@@ -188,7 +201,7 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
             plan_posts = [r for r in conn.execute(
                 "SELECT * FROM posts WHERE status IN ('APPROVED','TEXT_APPROVED','IMAGES_PENDING') "
                 "ORDER BY CASE WHEN status='APPROVED' THEN 0 ELSE 1 END,id"
-            ) if matches_post(load_post(r), plan)]
+            ) if r['request_id'] not in manual_ids and matches_post(load_post(r), plan)]
             if plan_posts:
                 plan_post_id = plan_posts[0]['id']
                 candidates = []  # Resume at most this one slot; never top it up with a new article.
@@ -222,6 +235,8 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
             for row in conn.execute("SELECT * FROM posts WHERE status IN ('APPROVED', 'REPAIR_PENDING') AND as_of_date=?",
                                     (today_kst().isoformat(),)).fetchall():
                 post = load_post(row)
+                if post.request_id in manual_ids or post.provenance.get('manual_request'):
+                    continue
                 if plan:
                     continue  # Legacy paid repairs cannot adopt a different operating profile.
                 if settings.config['categories'][post.category]['max_daily'] == 0:
@@ -307,6 +322,8 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
         for row in pending:
             post = load_post(row)
             today = today_kst()
+            if post.request_id in manual_ids or post.provenance.get('manual_request'):
+                continue
             if plan and (row['id'] != plan_post_id or not matches_post(post, plan)):
                 continue
             if settings.config['categories'][post.category]['max_daily'] == 0:

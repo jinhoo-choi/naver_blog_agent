@@ -37,8 +37,18 @@ def main() -> None:
     receipts.add_argument('--file', type=Path, required=True)
     publication = sub.add_parser('claim-publication', help='Work 발행 클릭 전 단일 실행권 기록 (클릭 없음)')
     publication.add_argument('--request-id', required=True)
+    manual = sub.add_parser('register-manual-work', help='명시적 수기 작업 등록 (생성·클릭·발행 없음)')
+    manual.add_argument('--file', type=Path, required=True)
+    manual_start = sub.add_parser('start-manual-work', help='기존 수기 작업의 단일 시작 기록')
+    manual_start.add_argument('--operation-id', required=True)
+    manual_start.add_argument('--target-sha256', default='')
+    manual_finish = sub.add_parser('finish-manual-work', help='실제로 확인한 수기 결과 기록 (재실행 없음)')
+    manual_finish.add_argument('--operation-id', required=True)
+    manual_finish.add_argument('--file', type=Path, required=True)
+    sub.add_parser('manual-work-status', help='수기 작업 상태·자동 제외·미해결 쓰기 확인')
     doctor = sub.add_parser("doctor", help="비밀값을 출력하지 않고 필수 설정 확인")
     doctor.add_argument("--require-naver", action="store_true")
+    doctor.add_argument('--runtime', action='store_true', help='원장·알림·현재 운영 기준의 오프라인 진단')
     resolve = sub.add_parser("resolve", help="네이버 임시저장 목록을 직접 확인한 뒤 상태 확정")
     resolve.add_argument("--id", type=int, required=True)
     resolve.add_argument("--outcome", choices=["saved", "not-saved", "discard"], required=True)
@@ -51,10 +61,32 @@ def main() -> None:
     settings = load_settings()
 
     try:
+        if args.command in {'register-manual-work', 'start-manual-work',
+                            'finish-manual-work', 'manual-work-status'}:
+            from . import work_operations
+            if args.command == 'register-manual-work':
+                result = work_operations.register(settings, json.loads(args.file.read_text()))
+            elif args.command == 'start-manual-work':
+                result = work_operations.start(settings, args.operation_id, args.target_sha256)
+            elif args.command == 'finish-manual-work':
+                result = work_operations.finish(settings, args.operation_id, json.loads(args.file.read_text()))
+            else:
+                result = {'operations': [
+                    {'operation_id': r['manifest']['operation_id'], 'request_id': r['manifest']['request_id'],
+                     'category': r['manifest']['category'], 'action': r['manifest']['action'],
+                     'status': r['status']} for _, r in work_operations.records(settings.db_path.parent)],
+                    'automatic_exclusions': sorted(work_operations.exclusions(settings)),
+                    'pending_writes': work_operations.pending_writes(settings)}
+            print(json.dumps(result, ensure_ascii=False))
+            return
         if args.command == 'import-work-receipts':
+            payload = json.loads(args.file.read_text())
+            if any((r.get('operation_id') or r.get('mode') == 'manual') and r.get('status') != 'PUBLISHED'
+                   for r in payload.get('records', [])):
+                raise ValueError('Manual Work saves belong in their separate operation journal')
             owner = settings.naver_blog_id or settings.config.get('creator_advisor', {}).get('channel_id', '')
             with closing(connect_db(settings.db_path)) as conn:
-                result = import_work_receipts(conn, json.loads(args.file.read_text()), blog_id=owner,
+                result = import_work_receipts(conn, payload, blog_id=owner,
                                               categories=settings.config['categories'])
             print(json.dumps(result))
             return
@@ -82,7 +114,11 @@ def main() -> None:
             if args.require_naver:
                 checks["NAVER_BLOG_ID"] = bool(settings.naver_blog_id)
                 checks["NAVER_PROFILE_DIR"] = bool(settings.naver_profile_dir)
-            print(json.dumps(checks))
+            if args.runtime:
+                from .operations import runtime_status
+                print(json.dumps({'checks': checks, 'runtime': runtime_status(settings)}, ensure_ascii=False))
+            else:
+                print(json.dumps(checks))
             raise SystemExit(0 if all(checks.values()) else 1)
         if args.command == "login":
             make_writer(settings).login()

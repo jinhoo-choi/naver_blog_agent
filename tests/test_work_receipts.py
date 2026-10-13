@@ -57,6 +57,27 @@ def record(**changes):
             'status': 'SAVED_NAVER', **changes}
 
 
+def test_explicit_manual_revision_is_never_exposed_as_an_automatic_delivery(setup, tmp_path, monkeypatch):
+    from blogbot import core, work_operations
+    from blogbot.planning import ready_categories
+    monkeypatch.setattr(work_operations, 'datetime', core.datetime)
+    work_operations.register(setup, {'version': work_operations.VERSION,
+        'operation_id': 'explicit-revision', 'request_id': 'question', 'category': 'parenting',
+        'action': 'revise', 'approval_reference': 'Sentinel_actual_test_revision',
+        'approved_by': 'repository_owner', 'approved_date': '2026-10-12',
+        'scope': 'draft_only', 'target_sha256': 'a' * 64})
+    with connect_db(setup.db_path) as conn:
+        assert ready_categories(setup, conn) == set()
+        ingest(conn, record())
+        with pytest.raises(ValueError, match='manual Work'):
+            claim_publication(conn, 'question', setup)
+        assert saved_count(conn, setup.config['daily_plan']) == 1
+    monkeypatch.setenv('BLOG_BUNDLE_KEY', Fernet.generate_key().decode())
+    pack(setup, tmp_path / 'handoff' / 'bundle.enc')
+    ready = json.loads((setup.db_path.parent / 'ready.json').read_text())
+    assert ready['posts'] == []
+
+
 def published(**changes):
     return {**record(status='PUBLISHED', published_url='https://blog.naver.com/test_owner/123456',
                      post_id='123456', published_at='2026-10-12T11:00:00+09:00'), **changes}

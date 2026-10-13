@@ -77,7 +77,8 @@ jobs:
       GITHUB_TOKEN: ${{ github.token }}
       BLOG_DATA_DIR: ${{ github.workspace }}/private-state
       BLOG_ENCRYPTED_OUTPUT: ${{ github.workspace }}/handoff/bundle.enc
-      BLOG_NOTIFY_ENABLED: 'true'
+      # Work reports are the default. Telegram requires an explicitly enabled configured destination.
+      BLOG_NOTIFY_ENABLED: ${{ vars.BLOG_NOTIFY_ENABLED || 'false' }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       PYTHONUTF8: '1'

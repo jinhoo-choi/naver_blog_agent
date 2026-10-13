@@ -91,6 +91,10 @@ blogbot manual-work-status
 영수증으로 일반 `records`에 반영할 수 있다. 이는 관측 기록일 뿐 발행 허가가 아니며 공통 당일
 발행 한도를 소비한다. 수기 임시저장의 예외를 공개 글 집계 누락으로 확대하지 않는다.
 
+## 저장 완료 이후 읽기 검수 — post-save-review-v1
+
+SAVED_NAVER와 실제 저장 증거 보존 직후 [CONTENT_QUALITY의 저장본 품질평가](CONTENT_QUALITY.md#임시저장-후-품질평가보완재평가--post-save-review-v1)를 적용한다. 저장 후 실물 평가 → 별도 보완 → 수정 저장 확인 → 재평가 → 보고를 원래 원고 ID로 연결한다. 평가 기록은 기존 원고 심사·저장 영수증과 별개이며 DB enum이나 공통 manifest 필드로 주입하지 않는다. 읽기 평가를 위한 가짜 save 작업·저장본 재열기·새 유료 호출·발행은 하지 않는다. 미확인 항목은 미산정으로 남기고 기존 점유·수기 기록·일정·저장 한도·발행 권한을 유지한다.
+
 ## 상태·알림·측정
 
 `run-summary.json`은 기존 `failed`/exit 동작을 유지하면서 `outcome`과 `deliverable_ready`를 추가한다.

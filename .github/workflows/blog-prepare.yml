@@ -6,7 +6,7 @@ on:
       mode:
         description: 'prepare resumes media; recover retries failed inputs; bootstrap/probe diagnose setup'
         type: choice
-        options: [prepare, recover, bootstrap, probe, manual-images, manual-request, manual-thumbnail, manual-review]
+        options: [prepare, recover, bootstrap, probe, manual-images, manual-request, manual-thumbnail, manual-review, manual-repair]
         default: prepare
       attribution_review_request_id:
         description: 'Recover only: explicitly approved existing request with a one-use attribution manifest'
@@ -77,7 +77,8 @@ jobs:
       GITHUB_TOKEN: ${{ github.token }}
       BLOG_DATA_DIR: ${{ github.workspace }}/private-state
       BLOG_ENCRYPTED_OUTPUT: ${{ github.workspace }}/handoff/bundle.enc
-      BLOG_NOTIFY_ENABLED: 'true'
+      # Work reports are the default. Telegram requires an explicitly enabled configured destination.
+      BLOG_NOTIFY_ENABLED: ${{ vars.BLOG_NOTIFY_ENABLED || 'false' }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       PYTHONUTF8: '1'
@@ -92,15 +93,16 @@ jobs:
         run: python -m pip install -e .
       - name: Reserve explicitly approved manual request
         id: manual_reservation
-        if: inputs.mode == 'manual-request' || inputs.mode == 'manual-thumbnail' || inputs.mode == 'manual-review'
+        if: inputs.mode == 'manual-request' || inputs.mode == 'manual-thumbnail' || inputs.mode == 'manual-review' || inputs.mode == 'manual-repair'
         env:
-          MANUAL_RESERVE_MODE: ${{ inputs.mode == 'manual-thumbnail' && 'manual-thumbnail-reserve' || inputs.mode == 'manual-review' && 'manual-review-reserve' || 'manual-request-reserve' }}
+          MANUAL_RESERVE_MODE: ${{ inputs.mode == 'manual-thumbnail' && 'manual-thumbnail-reserve' || inputs.mode == 'manual-review' && 'manual-review-reserve' || inputs.mode == 'manual-repair' && 'manual-repair-reserve' || 'manual-request-reserve' }}
           BLOG_MANUAL_REQUEST_PACKET: ${{ inputs.manual_request_packet || '' }}
+          BLOG_MANUAL_REPAIR_PACKET: ${{ inputs.manual_request_packet || '' }}
           MANUAL_REQUEST_ID: ${{ inputs.manual_request_id || '' }}
           MANUAL_REQUEST_SHA256: ${{ inputs.manual_request_sha256 || '' }}
         run: python -m blogbot.cloud "$MANUAL_RESERVE_MODE" --manual-request-id "$MANUAL_REQUEST_ID" --manual-request-sha256 "$MANUAL_REQUEST_SHA256"
       - name: Persist manual reservation before paid work
-        if: (inputs.mode == 'manual-request' || inputs.mode == 'manual-thumbnail' || inputs.mode == 'manual-review') && steps.manual_reservation.outputs.cached != 'true'
+        if: (inputs.mode == 'manual-request' || inputs.mode == 'manual-thumbnail' || inputs.mode == 'manual-review' || inputs.mode == 'manual-repair') && steps.manual_reservation.outputs.cached != 'true'
         uses: actions/upload-artifact@v6
         with:
           name: ${{ steps.manual_reservation.outputs.artifact_name }}
@@ -108,12 +110,13 @@ jobs:
           if-no-files-found: error
           retention-days: 90
       - name: Prepare or resume
-        if: (inputs.mode != 'manual-request' && inputs.mode != 'manual-thumbnail' && inputs.mode != 'manual-review') || steps.manual_reservation.outputs.cached != 'true'
+        if: (inputs.mode != 'manual-request' && inputs.mode != 'manual-thumbnail' && inputs.mode != 'manual-review' && inputs.mode != 'manual-repair') || steps.manual_reservation.outputs.cached != 'true'
         env:
           PREPARE_MODE: ${{ inputs.mode || 'prepare' }}
           BLOG_MANUAL_IMAGE_PACKET: ${{ inputs.manual_image_packet || '' }}
           MANUAL_IMAGE_REQUEST_ID: ${{ inputs.manual_image_request_id || '' }}
           BLOG_MANUAL_REQUEST_PACKET: ${{ inputs.manual_request_packet || '' }}
+          BLOG_MANUAL_REPAIR_PACKET: ${{ inputs.manual_request_packet || '' }}
           MANUAL_REQUEST_ID: ${{ inputs.manual_request_id || '' }}
           MANUAL_REQUEST_SHA256: ${{ inputs.manual_request_sha256 || '' }}
           ATTRIBUTION_REVIEW_REQUEST_ID: ${{ inputs.attribution_review_request_id || '' }}

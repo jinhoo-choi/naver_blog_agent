@@ -146,6 +146,32 @@ rules = [
 enabled = true
 channel_id = "choijku"
 
+# Current collection is paused. Retained evidence is never refreshed by changing its date.
+[operations]
+version = "blog-operations-v3"
+automatic_enabled = true
+manual_version = "work-operation-v1"
+creator_collection_enabled = false
+browser_coordination = "external_versioned_ledger_required"
+
+[operations.publication]
+automation_id = "6abc680c58d881918a79768c869b1983"
+timezone = "Asia/Seoul"
+hours = [9, 11]
+minute = 15
+
+[operations.exchange]
+automation_id = "6acdd33858288191a12a4666cf2de925"
+timezone = "Asia/Seoul"
+hours = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
+minute = 0
+last_start_date = "2026-10-31"
+work_minutes = 55
+closing_minutes = 5
+# Planning targets, not mandatory counts or platform limits.
+per_run_target = 10
+daily_target_ceiling = 130
+
 # Optional ranking of existing eligible inputs; missing credentials preserve queue order.
 [topics]
 enabled = true
@@ -253,8 +279,11 @@ start_date = "2026-10-05"
 effective_date = "2026-10-12"
 measurement_start = "2026-10-12"
 measurement_end = "2026-10-25"
-review_not_before = "2026-10-28"
-measurement_post_hours = 72
+review_not_before = "2026-11-01"
+measurement_post_days = 7
+measurement_window = "kst_calendar_days_d0_d6"
+# Legacy reporting metadata only; do not use a rolling 168-hour query for D0~D6.
+measurement_post_hours = 168
 weekdays = ["parenting", "origins", "investment", "exercise", "investment", "parenting", "origins"]
 investment_modes = ["", "", "life-economics-v1", "", "weekly-policy-v1", "", ""]
 

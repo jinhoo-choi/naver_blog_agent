@@ -135,11 +135,15 @@ def attempt_matches(row, plan: dict) -> bool:
 
 def ready_categories(settings, conn) -> set[str]:
     plan = active_plan(settings)
+    from .work_operations import exclusions, pending_writes
+    manual_ids = exclusions(settings)
+    if pending_writes(settings):
+        return set()
     if not plan:
         return {row[0] for row in conn.execute(
-            "SELECT category FROM posts WHERE as_of_date=? AND status IN ('APPROVED','SAVED_NAVER') "
-            "UNION SELECT category FROM attempts WHERE day=? AND status='SAVED_NAVER'",
-            (str(today_kst()), str(today_kst())))}
+            "SELECT category,request_id FROM posts WHERE as_of_date=? AND status IN ('APPROVED','SAVED_NAVER') "
+            "UNION SELECT category,request_id FROM attempts WHERE day=? AND status='SAVED_NAVER'",
+            (str(today_kst()), str(today_kst()))) if row[1] not in manual_ids}
     from .core import load_post
     if plan.get('reservation'):
         return set()  # Manual editorial coverage does not assert API preparation or saving.
@@ -151,10 +155,10 @@ def ready_categories(settings, conn) -> set[str]:
         # A verified Work receipt can acknowledge an API post still marked APPROVED.
         saved = saved_identities(conn, plan['date'])
         rows = conn.execute("SELECT * FROM posts WHERE status IN ('APPROVED','SAVED_NAVER','PUBLISHED')").fetchall()
-        matched = any(matches_post(load_post(r), plan) and (
+        matched = any(r['request_id'] not in manual_ids and matches_post(load_post(r), plan) and (
             (r['request_id'] or f"post:{r['id']}") in saved) for r in rows)
         return {plan['category']} if matched else set()
-    return {plan['category']} if any(matches_post(load_post(r), plan) for r in conn.execute(
+    return {plan['category']} if any(r['request_id'] not in manual_ids and matches_post(load_post(r), plan) for r in conn.execute(
         "SELECT * FROM posts WHERE status='APPROVED' AND as_of_date=?", (plan['date'],))) else set()
 
 

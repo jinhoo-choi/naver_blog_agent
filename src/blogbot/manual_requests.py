@@ -31,25 +31,10 @@ from .llm import BlogLLM
 from .manual_costs import estimate_project, thumbnail_spend, usage_cost, validate_budget
 from .planning import media_claim
 from .pre_review import inspect_candidate, run_pre_review
+from .storage import atomic_json
 
 VERSION = 'manual-request-v1'
 SLUG = r'[A-Za-z0-9][A-Za-z0-9_-]{0,79}'
-
-
-def atomic_json(path: Path, value) -> None:
-    """Durable private claim, including directory metadata, before external spend."""
-    temporary = path.with_suffix(path.suffix + '.tmp')
-    with temporary.open('w', encoding='utf-8') as stream:
-        json.dump(value, stream, ensure_ascii=False, indent=2)
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(temporary, path)
-    if os.name != 'nt':
-        descriptor = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
 
 
 def _text(value, maximum):
@@ -236,7 +221,7 @@ def _run_identity() -> str:
 def reservation_name(run_id: str, packet: dict, stage: str = 'manual') -> str:
     parts = [packet['request_id'], packet['approval_reference'],
              re.sub(r'\s+', '', packet['question']).casefold()]
-    if stage not in {'manual', 'thumbnail', 'review'}:
+    if stage not in {'manual', 'thumbnail', 'review', 'repair'}:
         raise ValueError('Invalid reservation stage')
     return f'blog-state-{run_id}-{stage}-' + '-'.join(
         hashlib.sha256(value.encode()).hexdigest() for value in parts)

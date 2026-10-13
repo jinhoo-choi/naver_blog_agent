@@ -1,5 +1,11 @@
 # Explicitly requested additional drafts
 
+All five categories can register metadata-only manual Work operations through
+`work-operation-v1`; see [RUNTIME_CONTRACT](RUNTIME_CONTRACT.md). These operations
+are separate from automatic quota and cannot be reused as automatic candidates.
+They do not invoke paid models or broaden the v1 paid origins path below.
+Existing dated image/review/repair approvals remain pinned to their own scope.
+
 `manual-request-v1` is a separate owner-only, one-shot preparation path. It does
 not raise/reset the automatic daily limit, remove a dated hold, replace tomorrow's
 topic, write automatic posts/attempts/save receipts, or create an automatic ready

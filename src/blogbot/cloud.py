@@ -134,10 +134,12 @@ def extract_bundle(encrypted: bytes, directory: Path, key: str) -> None:
         # Never rewind a local one-shot manual claim with an older encrypted bundle.
         manual_files = list((directory / 'manual-requests').glob('**/*'))
         manual_files += list((directory / 'manual-thumbnails').glob('*/*'))
+        manual_files += list((directory / 'manual-repairs').glob('**/*'))
         for path in manual_files:
             if (not path.is_file() or (path.name not in {
                     'claim.json', 'paid-calls.json', 'paid-call.json', 'approved-packet.json',
-                    'original-claim.json'} and 'review-once' not in path.parts)):
+                    'original-claim.json'} and 'review-once' not in path.parts
+                    and 'manual-repairs' not in path.parts)):
                 continue
             if path.name == 'result.json':
                 continue  # Photo path relocation is validated by the result digest.
@@ -165,6 +167,23 @@ def extract_bundle(encrypted: bytes, directory: Path, key: str) -> None:
                 preserve_manual_receipts.add(name)
         if archive.namelist().count('blog.db') != 1:
             raise ValueError('Bundle requires exactly one database')
+        from .work_operations import merge_record, records, validate_record
+        local_operations = {p.name: r for p, r in records(directory)}
+        merged_operations = dict(local_operations)
+        operation_names = [n for n in archive.namelist() if n.startswith('work-operations/')]
+        if len(operation_names) != len(set(operation_names)):
+            raise ValueError('Duplicate manual Work journal members')
+        for name in operation_names:
+            path = Path(name)
+            if len(path.parts) != 2 or path.suffix != '.json':
+                raise ValueError('Invalid manual Work bundle member')
+            if archive.getinfo(name).file_size > 20_000:
+                raise ValueError('Manual Work bundle size limit exceeded')
+            incoming = validate_record(json.loads(archive.read(name)))
+            if path.stem != incoming['manifest']['operation_id']:
+                raise ValueError('Manual Work bundle identity or size mismatch')
+            local = local_operations.get(path.name)
+            merged_operations[path.name] = merge_record(local, incoming) if local else incoming
         # Reconcile in a temporary DB first so stale bundles or conflicting evidence cannot
         # erase a local publication claim, even when the external Work ledger is replayed.
         with tempfile.TemporaryDirectory(prefix='.restore-', dir=directory) as temporary:
@@ -173,8 +192,14 @@ def extract_bundle(encrypted: bytes, directory: Path, key: str) -> None:
             with closing(connect_db(staged)) as conn:
                 merge_work_receipts(conn, preserved, categories={r['category'] for r in preserved})
             archive.extractall(directory, members=[name for name in archive.namelist()
-                                                  if name != 'blog.db' and name not in preserve_manual_receipts])
+                                                  if name != 'blog.db' and name not in preserve_manual_receipts
+                                                  and name not in operation_names])
             os.replace(staged, db_path)
+        if merged_operations:
+            folder = directory / 'work-operations'
+            folder.mkdir(exist_ok=True)
+            for name, record in merged_operations.items():
+                atomic_json(folder / name, record)
     metadata = json.loads((directory / 'bundle-info.json').read_text())
     old_root = Path(metadata['data_root'])
     def rebase(photos):
@@ -208,6 +233,11 @@ def extract_bundle(encrypted: bytes, directory: Path, key: str) -> None:
         rebase(input_photos)
         atomic_json(path, payload)
     for path in (directory / 'manual-requests').glob('**/result.json'):
+        payload = json.loads(path.read_text())
+        rebase(payload['post']['photos'])
+        rebase(payload['input']['photos'])
+        atomic_json(path, payload)
+    for path in (directory / 'manual-repairs').glob('*/result.json'):
         payload = json.loads(path.read_text())
         rebase(payload['post']['photos'])
         rebase(payload['input']['photos'])
@@ -305,6 +335,9 @@ def seed_inputs(settings) -> None:
 
 def pack(settings, destination: Path) -> None:
     directory = settings.db_path.parent
+    from .work_operations import exclusions, pending_writes, records
+    manual_ids = exclusions(settings)
+    manual_pending = pending_writes(settings)
     today = today_kst()
     cutoff = (today-timedelta(days=7)).isoformat()
     packet, weekly_holds = [], []
@@ -328,6 +361,8 @@ def pack(settings, destination: Path) -> None:
             uncertain = True
         for row in rows:
             post = load_post(row)
+            if post.request_id in manual_ids or post.provenance.get('manual_request') or manual_pending:
+                continue
             number = settings.config['categories'][post.category].get('naver_category_no')
             if type(number) is not int or number < 1:
                 continue
@@ -346,7 +381,8 @@ def pack(settings, destination: Path) -> None:
                            'requires_fresh_review': post.as_of_date != today.isoformat(),
                            'post': post.__dict__, 'segments': [s.__dict__ for s in render_segments(
                                post, include_tags=post.provenance.get('content_style') != 'review')]})
-    hold = (revalidation_reason(plan) if weekly_holds else
+    hold = ('unresolved_manual_work' if manual_pending else
+            revalidation_reason(plan) if weekly_holds else
             'kst_date_changed' if stale_settings else 'editorial_slot_reserved'
             if plan and plan.get('reservation') else None)
     atomic_json(directory / 'ready.json', {'date': today.isoformat(), 'posts': packet,
@@ -359,11 +395,15 @@ def pack(settings, destination: Path) -> None:
         held_ids = {r['id'] for r in weekly_holds}
         results = [r for r in prior if r.get('id') not in held_ids
                    and r.get('status') != 'DAILY_PLAN_READY'] + weekly_holds
-        atomic_json(summary_path, {'date': str(today), 'failed': True, 'results': results})
+        from .operations import preparation_outcome
+        atomic_json(summary_path, {'date': str(today), 'failed': True, 'results': results,
+                                   **preparation_outcome(results, failed=True)})
     atomic_json(directory / 'bundle-info.json', {'data_root': str(directory.resolve()),
                                                 'date': today.isoformat(), 'version': 1})
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:
+        for path, _ in records(directory):
+            archive.write(path, path.relative_to(directory))
         # Retain state and recent packets; old completed media are not transported forever.
         keep_ids = set(pending_ids)
         for path in settings.artifact_dir.glob('*.json'):
@@ -424,6 +464,27 @@ def pack(settings, destination: Path) -> None:
                     or path.stat().st_size > 5_000_000):
                 raise ValueError('Invalid manual request checkpoint')
             archive.write(path, path.relative_to(directory))
+        for path in (directory / 'manual-repairs').glob('**/*'):
+            parts = path.relative_to(directory / 'manual-repairs').parts
+            slug = re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,79}', parts[0])
+            if path.is_dir() and not path.is_symlink():
+                if not slug or not (len(parts) == 1 or (len(parts) == 2 and parts[1] in {
+                        'response-cache', 'source-evidence', 'images'})):
+                    raise ValueError('Invalid manual repair directory')
+                continue
+            valid = slug and ((len(parts) == 2 and path.name in {
+                'claim.json', 'approved-packet.json', 'paid-calls.json', 'result.json',
+                'usage.jsonl', 'review.json', 'review-calls.json'}) or (len(parts) == 3 and (
+                    (parts[1] == 'response-cache' and re.fullmatch(
+                        r'[A-Za-z0-9][A-Za-z0-9_.-]{0,180}\.json', path.name))
+                    or (parts[1] == 'source-evidence' and re.fullmatch(
+                        r'reference-[a-f0-9]{64}\.json', path.name))
+                    or (parts[1] == 'images' and (path.name == '.image-plan'
+                        or re.fullmatch(r'[a-f0-9]{64}\.(?:json|jpg)', path.name))))))
+            if (not valid or path.is_symlink() or not path.is_file()
+                    or path.stat().st_size > 5_000_000):
+                raise ValueError('Invalid manual repair checkpoint')
+            archive.write(path, path.relative_to(directory))
         for path in (directory / 'manual-thumbnails').glob('**/*'):
             if path.is_dir() and not path.is_symlink():
                 continue
@@ -460,6 +521,12 @@ def filter_ready(directory: Path, receipts: dict, plan: dict | None = None, sett
     if receipts.get('verified_date') != today.isoformat() or not isinstance(receipts.get('records'), list):
         raise ValueError('A freshly verified Work save ledger is required')
     blocked = set()
+    from .work_operations import records
+    manual_records = [r for _, r in records(directory)]
+    manual_ids = {r['manifest']['request_id'] for r in manual_records}
+    manual_pending = any(r['status'] == 'SAVE_UNCERTAIN' or (
+        r['status'] in {'STARTED', 'HELD'} and r['manifest']['action'] in {'revise', 'save'})
+        for r in manual_records)
     used = set()
     uncertain = False
     records = list(receipts['records'])
@@ -503,6 +570,8 @@ def filter_ready(directory: Path, receipts: dict, plan: dict | None = None, sett
     for item in ready['posts'] + ready.get('publication_ready', []):
         post = item['post']
         identity = post['request_id']
+        if identity in manual_ids or post.get('provenance', {}).get('manual_request') or manual_pending:
+            continue
         publication_candidate = (plan and identity in observed_saved and not publication_ready
                                  and used <= {identity})
         if uncertain and any(r.get('status') in PUBLICATION_PENDING for r in records):
@@ -543,7 +612,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('mode', choices=['bootstrap', 'prepare', 'recover', 'unpack', 'probe',
                                          'manual-images', 'manual-request', 'manual-request-reserve',
-                                         'manual-thumbnail', 'manual-thumbnail-reserve', 'manual-review', 'manual-review-reserve'])
+                                         'manual-thumbnail', 'manual-thumbnail-reserve', 'manual-review', 'manual-review-reserve', 'manual-repair', 'manual-repair-reserve'])
     parser.add_argument('--file', type=Path)
     parser.add_argument('--destination', type=Path)
     parser.add_argument('--receipts', type=Path)
@@ -553,8 +622,8 @@ def main():
     parser.add_argument('--manual-request-sha256', default='')
     args = parser.parse_args()
     if ((bool(args.manual_request_id) and bool(args.manual_request_sha256))
-            != (args.mode in {'manual-request', 'manual-request-reserve', 'manual-thumbnail', 'manual-thumbnail-reserve', 'manual-review', 'manual-review-reserve'})
-            or (args.mode not in {'manual-request', 'manual-request-reserve', 'manual-thumbnail', 'manual-thumbnail-reserve', 'manual-review', 'manual-review-reserve'} and
+            != (args.mode in {'manual-request', 'manual-request-reserve', 'manual-thumbnail', 'manual-thumbnail-reserve', 'manual-review', 'manual-review-reserve', 'manual-repair', 'manual-repair-reserve'})
+            or (args.mode not in {'manual-request', 'manual-request-reserve', 'manual-thumbnail', 'manual-thumbnail-reserve', 'manual-review', 'manual-review-reserve', 'manual-repair', 'manual-repair-reserve'} and
                 (args.manual_request_id or args.manual_request_sha256))):
         parser.error('manual request mode requires exact ID and packet digest')
     if bool(args.manual_image_request_id) != (args.mode == 'manual-images'):
@@ -567,6 +636,9 @@ def main():
         if args.receipts is None:
             parser.error('unpack requires --receipts from the verified Work save ledger')
         receipts = json.loads(args.receipts.read_text())
+        if any((r.get('operation_id') or r.get('mode') == 'manual') and r.get('status') != 'PUBLISHED'
+               for r in receipts.get('records', [])):
+            raise ValueError('Manual Work receipts cannot consume automatic quota')
         extract_bundle(args.file.read_bytes(), args.destination, os.environ['BLOG_BUNDLE_KEY'])
         from dataclasses import replace
         settings = load_settings()
@@ -599,6 +671,14 @@ def main():
         return
     restore(directory)
     try:
+        if args.mode in {'manual-repair', 'manual-repair-reserve'}:
+            from .manual_repair import prepare, reserve
+            handler = reserve if args.mode.endswith('-reserve') else prepare
+            result = handler(settings, args.manual_request_id, args.manual_request_sha256)
+            print(json.dumps(result))
+            if result['status'] not in {'MANUAL_REPAIR_DRAFT_READY', 'MANUAL_REPAIR_RESERVED'}:
+                raise PreparationFailed('Manual repair held; reconcile private checkpoints')
+            return
         if args.mode in {'manual-review', 'manual-review-reserve'}:
             from .manual_review import reserve_review, run_review
             handler = reserve_review if args.mode.endswith('-reserve') else run_review
@@ -709,8 +789,12 @@ def main():
                                          'DAILY_PLAN_READY', 'DAILY_PLAN_LIMIT'}
                      for r in results):
                 failed = False  # A bounded replacement can resolve an earlier editorial rejection.
+        from .operations import preparation_outcome
+        deliverable_ready = bool(categories and not reserved and not args.attribution_review_request_id
+                                 and expected <= ready)
         atomic_json(directory / 'run-summary.json',
-                    {'date': today_kst().isoformat(), 'failed': failed, 'results': results})
+                    {'date': today_kst().isoformat(), 'failed': failed, 'results': results,
+                     **preparation_outcome(results, failed=failed, deliverable_ready=deliverable_ready)})
         if failed:
             raise PreparationFailed('Preparation did not complete; inspect private diagnostics')
     finally:
@@ -718,7 +802,7 @@ def main():
         delivery_hold = pack(settings, destination)
         summary_path = directory / 'run-summary.json'
         if (args.mode not in {'probe', 'manual-images', 'manual-request', 'manual-request-reserve',
-                              'manual-thumbnail', 'manual-thumbnail-reserve', 'manual-review', 'manual-review-reserve'}
+                              'manual-thumbnail', 'manual-thumbnail-reserve', 'manual-review', 'manual-review-reserve', 'manual-repair', 'manual-repair-reserve'}
                 and summary_path.exists()
                 and json.loads(summary_path.read_text()).get('date') == today_kst().isoformat()):
             from .notify import telegram

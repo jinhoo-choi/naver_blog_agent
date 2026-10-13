@@ -1,3 +1,10 @@
+# 2026-10-13 현행 main 통합 / PR #30
+
+blog-operations-v3의 수기·자동 분리, manual-repair 예약→업로드→유료 준비 순서,
+입력·조건·권한·암호화 인계·알림 opt-in을 보존하고 hosted action만 Node24 버전으로 전환한다.
+Windows 설치 버전은 미검증이므로 기존 action을 유지한다. 아래 10/7·11 검증은 역사다.
+새 전체 테스트·Ruff·실제 hosted CI 결과를 별도로 확인하며 유료 준비나 Windows 실행을 시작하지 않는다.
+
 # 2026-10-07 Actions Node 24 최소 호환 변경
 
 기준 main: `ef6a28040a0d726c5db504831c678708a91f7c41`. 변경은 검토용 PR; 운영 workflow 및 실발송 미실행.

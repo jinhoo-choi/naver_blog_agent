@@ -21,6 +21,31 @@ VOICE = '''써누애비 문체 seonoo-voice-v1:
 검수는 장치를 빼도 사실/조건이 같은지, 웃음이 새 경험을 만들지 않는지, 소리 내어 자연스러운지 본다.
 장치가 0회라는 이유로 감점·재작성을 요구하지 않는다. 어색함은 기존 가독성 issues에서 문장별로
 다루며 새 통과 점수·자동 차단·추가 유료 호출을 만들지 않는다. 기존 저장/공개 원고는 자동 재작성하지 않는다.
+
+최신 간결 전개 concise-owner-v2:
+핵심 답 → 이해에 필요한 개요·설명/예시 → 독자에게 갖는 의미·조건/다음 판단 → 짧은 마무리로 쓴다.
+문장은 한 생각씩, 문단은 한 요점과 1~2문장을 지향한다. 짧게 쓰느라 대상의 개요·이유·적용 조건을
+생략하지 않으며 필요한 구역만 둔다. 반복 결론·상투어·과도한 검수/산출근거 해설·전체 볼드는 제거한다.
+실제 제공 경험·공식 사실·저자 분석을 검수에서 구분하고 경험이 없으면 검증한 원문 비교와 해설로 답한다.
+가정 사례는 가정으로 밝히며 가족 반응·효과·매매·납입 경험을 만들지 않는다.
+생활경제는 조건별 실제 혜택·비용과 선택의 의미를 먼저 설명한다. 종목은 사업 진전의 의미·남은 조건·
+확인된 다음 일정을 설명하며 기회를 계약·효능·수익·주가 상승의 확정으로 바꾸지 않는다.
+투자 권유 아님 문구는 종목 글의 Work 최종 편집에서 참고자료·관련 글·태그 뒤 마지막에만 한 문장으로 두며 생활경제·연금 글에는 붙이지 않는다.
+중요한 의료·금융·계약·안전 조건과 필요한 광고 고지는 해당 사실/단계에 보존한다.
+'''
+
+IMAGES = '''이미지 적용 우선순위 image-precedence-v1:
+해당 글의 명시적 소유자 요청 → 유형별 실제 증거/승인 예외 → 일반 정보글 기준 순으로 적용한다.
+일반 육아·운동·투자/생활경제 정보글은 썸네일과 별개로 본문 설명용 삽화 최소2장을 배치하며
+서로 다른 설명 역할과 인접 본문·검증 원문의 대응을 확인한다. 장수를 채우려고 설명을 늘리지 않는다.
+이름의 유래 기본은 제공·승인된 썸네일1장이다. 일반 본문2장 기준을 유래에 자동 적용하지 않는다.
+밈4편의 편당 실제 캡처2장은 그 개별 요청에만 적용하며 Work가 기존 인계에서 별도로 확인한다.
+후기·요리·AI 영상/튜토리얼은 실제 제공 사진·영상·실행 캡처 등 원본 증거를 우선하며
+생성 삽화로 실제 사용·실행 증거를 대체하거나 일반 삽화 수량을 강제하지 않는다.
+이 우선순위는 기존 입력/미디어 스키마·생성 상한·예산·호출·복구 계약을 바꾸지 않는다.
+기존 승인 자료·캐시를 재사용하고 부족한 장수는 Work 저장 검수에서 미완료로 기록한다.
+추가 유료 생성 권한을 추정하지 않는다. 현재 텍스트 심사에서는 사진의 실제 장수·등록·대표·
+인체/기구 정확성을 확인했다고 주장하거나 아직 첨부되지 않았다는 이유만으로 재작성하지 않는다.
 '''
 
 PUBLIC_COPY = '''공개 본문과 비공개 검수 분리 public-copy-v1:
@@ -140,13 +165,14 @@ def quality_guidance(category: str, editorial_type: str | None = None,
     key = 'ai_tutorial' if category == 'parenting' and editorial_type == 'ai_tutorial' else category
     selected = content_style(category, {'content_style': style or 'article',
                                       'editorial_type': editorial_type or 'article'})
+    shared = PUBLIC_COPY + '\n' + VOICE + '\n' + IMAGES
     if category == 'origins':
         from .origins import GUIDANCE
-        return PUBLIC_COPY + '\n' + VOICE + '\n' + GUIDANCE
+        return shared + '\n' + GUIDANCE
     if investment_mode == 'life-economics-v1':
         from .life_economics import GUIDANCE
-        return PUBLIC_COPY + '\n' + VOICE + '\n' + COMMON + '\n' + GUIDANCE
-    return PUBLIC_COPY + '\n' + VOICE + '\n' + COMMON + '\n' + (REVIEW if selected == 'review' else TOPICS.get(key, ''))
+        return shared + '\n' + COMMON + '\n' + GUIDANCE
+    return shared + '\n' + COMMON + '\n' + (REVIEW if selected == 'review' else TOPICS.get(key, ''))
 
 
 def editorial_hints(body: str) -> list[str]:

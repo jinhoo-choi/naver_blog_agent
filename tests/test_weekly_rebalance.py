@@ -554,6 +554,9 @@ def test_actual_four_model_paths_route_wednesday_without_changing_call_budgets(t
         'offline-writer', 'offline-reviewer', 'offline-writer', 'offline-writer']
     for call in calls:
         assert life_economics.GUIDANCE in call['input']
+        assert 'concise-owner-v2' in call['input']
+        assert 'image-precedence-v1' in call['input']
+        assert '생활경제·연금 글에는 붙이지 않는다' in call['input']
         assert request.data['question'] in call['input']
         assert 'kis-community-bot의 심사 통과 원본 facts/src/body를 기반으로만 작성' not in call['input']
     assert all(call['max_tool_calls'] == 3 for call in calls[:3])

@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from blogbot.core import PostDraft, render_post_text, review_result
-from blogbot.editorial import PUBLIC_COPY, quality_guidance
+from blogbot.editorial import IMAGES, PUBLIC_COPY, quality_guidance
 from blogbot.inputs import ContentRequest
 from blogbot.llm import BlogLLM, _checked_review
 from blogbot.pre_review import DraftCandidate
@@ -63,6 +63,10 @@ def test_every_model_path_gets_public_private_contract_without_extra_calls(
     for call in calls:
         assert PUBLIC_COPY in call['input']
         assert quality_guidance(category, subtype, style) in call['input']
+        assert 'concise-owner-v2' in call['input']
+        assert '개요·설명/예시' in call['input']
+        assert '실제 제공 경험·공식 사실·저자 분석' in call['input']
+        assert IMAGES in call['input']
         assert call['model'] == 'offline'
         assert call['schema'] == (REVIEW_SCHEMA if call['stage'] == 'reviewer' else DRAFT_SCHEMA)
     assert 'tools' not in calls[-1]

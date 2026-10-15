@@ -281,7 +281,7 @@ def claim_publication(conn: sqlite3.Connection, request_id: str, settings) -> di
     plan = active_plan(settings)
     if not plan or plan.get('reservation'):
         raise ValueError('Automatic publication requires an active unreserved editorial slot')
-    if plan.get('work_managed') and plan['target'] != 1:
+    if plan.get('work_managed') and plan['target'] not in {1, 2}:
         raise ValueError('Focused strategy has no new-publication slot today')
     ready = json.loads((settings.db_path.parent / 'ready.json').read_text())
     if ready.get('date') != today_kst().isoformat() or ready.get('daily_plan') != plan or ready.get('hold'):
@@ -309,6 +309,35 @@ def claim_publication(conn: sqlite3.Connection, request_id: str, settings) -> di
     with conn:
         conn.execute('BEGIN IMMEDIATE')
         if plan.get('work_managed'):
+            if plan.get('capacity_stage') == 'scaled10':
+                proof = settings.config['strategy_reset']['scale_evidence']
+                observed_urls = set()
+                for identity in proof['bootstrap_request_ids']:
+                    receipt = conn.execute('SELECT * FROM save_receipts WHERE request_id=?', (identity,)).fetchone()
+                    evidence = conn.execute('SELECT * FROM posts WHERE request_id=?', (identity,)).fetchall()
+                    if not receipt or receipt['status'] != 'PUBLISHED' or len(evidence) != 1:
+                        raise ValueError('Scaled10 requires five verified published bootstrap posts')
+                    observed = validate_work_receipt(dict(receipt), settings.naver_blog_id)
+                    if observed['published_url'] in observed_urls:
+                        raise ValueError('Scaled10 requires five distinct observed publications')
+                    observed_urls.add(observed['published_url'])
+                    prior = load_post(evidence[0])
+                    provenance = prior.provenance
+                    if (prior.status != 'PUBLISHED' or prior.quality_score < settings.config['blog']['review_pass_score']
+                            or provenance.get('source') != 'work_autonomous'
+                            or provenance.get('strategy_version') != 'strategy-reset-v2'
+                            or provenance.get('daily_plan', {}).get('capacity_stage') != 'bootstrap5'
+                            or observed['day'] < settings.config['strategy_reset']['publication_start']
+                            or datetime.fromisoformat(observed['published_at']).astimezone(KST).date().isoformat() > proof['verified_date']):
+                        raise ValueError('Scaled10 bootstrap evidence must match reviewed autonomous results')
+                    artifact = json.loads((settings.artifact_dir / f'{prior.as_of_date}-{evidence[0]["id"]:05d}.json').read_text())
+                    prior.status = 'APPROVED'
+                    score, decision = review_result(artifact.get('review', {}))
+                    source_checks = artifact.get('review', {}).get('source_checks', [])
+                    if (artifact.get('post') != asdict(prior) or decision != 'PASS'
+                            or score != prior.quality_score or not source_checks
+                            or any(check.get('status') != 'SUPPORTED' for check in source_checks)):
+                        raise ValueError('Scaled10 bootstrap final review does not match the observed post')
             week_start = today_kst() - timedelta(days=today_kst().weekday())
             weekly = set()
             for receipt in conn.execute('SELECT * FROM save_receipts'):
@@ -340,7 +369,11 @@ def claim_publication(conn: sqlite3.Connection, request_id: str, settings) -> di
         if conn.execute("SELECT 1 FROM save_receipts WHERE status IN "
                         "('SAVING','SAVE_UNCERTAIN','PUBLISHING','PUBLISH_UNCERTAIN')").fetchone():
             raise ValueError('Reconcile the uncertain publication before another attempt')
-        if saved_identities(conn, today_kst().isoformat()) - {request_id}:
+        if plan.get('capacity_stage') == 'scaled10' and conn.execute(
+                "SELECT 1 FROM save_receipts WHERE day=? AND status='SAVED_NAVER' AND request_id!=?",
+                (plan['date'], request_id)).fetchone():
+            raise ValueError('Complete the saved draft publication before another attempt')
+        if len(saved_identities(conn, today_kst().isoformat()) - {request_id}) >= plan['target']:
             raise ValueError('Another delivery already occupies the daily slot')
         stamp = datetime.now(KST).isoformat()
         conn.execute("UPDATE save_receipts SET status='PUBLISHING',publish_attempted_at=? WHERE request_id=?",

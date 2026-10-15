@@ -328,15 +328,23 @@ kind = "owner_input_pending"
 
 # 2026-10-11 owner_input_pending resolved by the dated topic above; prior hold remains in Git history.
 
-# Owner approved 2026-10-15 18:25 KST. Supersedes the old weekday plan from this date.
+# Bootstrap the new process with five posts; scaled10 requires verified evidence below.
 [strategy_reset]
 enabled = true
-version = "strategy-reset-v1"
+version = "strategy-reset-v2"
 start_date = "2026-10-15"
 publication_start = "2026-10-22"
 measurement_end = "2026-11-11"
 final_cohort_review_not_before = "2026-12-09"
-weekly_publication_limit = 3
-weekdays = ["parenting", "", "investment", "", "", "parenting", ""]
+weekly_publication_limit = 5
+capacity_stage = "bootstrap5"
+scale_evidence = {}
+weekdays = ["parenting", "parenting", "investment", "", "investment", "parenting", ""]
+week_cycle_anchor = "2026-10-26"
+week_cycle = [
+  ["parenting", "parenting", "investment", "", "investment", "parenting", ""],
+  ["parenting", "parenting", "investment", "", "parenting", "parenting", ""],
+  ["parenting", "parenting", "investment", "", "investment", "parenting", ""],
+]
 topic_selection = "autonomous_verified"
 executor = "work_project"

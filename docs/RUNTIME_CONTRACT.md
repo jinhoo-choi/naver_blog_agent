@@ -1,7 +1,7 @@
 # 현재 실행 계약 — blog-operations-v3
 
 > 2026-10-15 18:25 KST 소유자 전면 개편 승인 이후의 정기 운영은
-> [RESET_OPERATIONS](RESET_OPERATIONS.md)의 `strategy-reset-v1`이 우선합니다.
+> [RESET_OPERATIONS](RESET_OPERATIONS.md)의 `strategy-reset-v2`이 우선합니다.
 > 아래 내용은 기존 영수증·원래 ID·인증/불확실 제출·예산·수기 이력의 호환 계약입니다.
 > 구 요일 편성·사용자 수동 입력 대기·중복 점수표를 새 정기 실행 지시로 가져오지 않습니다.
 

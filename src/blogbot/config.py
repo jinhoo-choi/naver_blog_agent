@@ -44,7 +44,7 @@ def load_settings() -> Settings:
                                            and plan['category'] == 'investment'
                                            and plan.get('investment_mode') != 'life-economics-v1')
         for category, info in config['categories'].items():
-            info['max_daily'] = int(bool(plan['target']) and category == plan['category'])
+            info['max_daily'] = plan['target'] if category == plan['category'] else 0
         info = config['categories'][plan['category']]
         if plan.get('investment_mode') == 'life-economics-v1':
             from .life_economics import RULES

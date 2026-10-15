@@ -1,8 +1,9 @@
 # Naver Blog Agent
 
-**2026-10-15 이후 정기 운영: [RESET_OPERATIONS](docs/RESET_OPERATIONS.md), `strategy-reset-v1`.**
+**2026-10-15 이후 정기 운영: [RESET_OPERATIONS](docs/RESET_OPERATIONS.md), `strategy-reset-v2`.**
 사용자 수동 입력 없이 Work가 검증 자료로 주제를 선정합니다. 첫 주는 진단·대표 글 검증,
-10/22부터 월·토 육아/실사용·수 가족 돈 관리, 신규 공개 주3편 상한입니다.
+10/22부터 최초5편으로 새 공정을 실증하고 주10편을 잠정 목표로 운영합니다. 주20편은 용량·품질 검증 후 확대합니다.
+초기 설정은 주5편·일1편이며, 실증 근거 확인 후 주10편·일2편으로 전환합니다. 기존 최종 발행 승인과 두 축은 유지합니다.
 작성·검증은 [RESET_EDITORIAL](docs/RESET_EDITORIAL.md), 서식·미디어는
 [RESET_DESIGN](docs/RESET_DESIGN.md)을 따릅니다. 아래 구 편성·규칙은 역사입니다.
 기존 외부 API 준비는 `AUTONOMOUS_WORK_REQUIRED`로 인계하며 중복 원고·유료 생성은 하지 않습니다.

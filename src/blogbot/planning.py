@@ -18,19 +18,55 @@ def work_strategy(config: dict, day: date | None = None) -> dict | None:
     day = day or today_kst()
     if not policy.get('enabled') or day < date.fromisoformat(policy['start_date']):
         return None
-    slots = policy['weekdays']
-    if (len(slots) != 7 or slots.count('parenting') != 2 or slots.count('investment') != 1
-            or any(c not in {'', 'parenting', 'investment'} for c in slots)
-            or policy['weekly_publication_limit'] != 3):
+    weeks = policy['week_cycle']
+    anchor = date.fromisoformat(policy['week_cycle_anchor'])
+    stage = policy.get('capacity_stage')
+    daily_limit = {'bootstrap5': 1, 'scaled10': 2}.get(stage)
+    if (len(weeks) != 3 or anchor.weekday() != 0 or policy['weekdays'] != weeks[0]
+            or daily_limit is None or policy['weekly_publication_limit'] != 5 * daily_limit
+            or any(len(slots) != 7 or slots.count('parenting') != parenting
+                   or slots.count('investment') != 5 - parenting
+                   or any(c not in {'', 'parenting', 'investment'} for c in slots)
+                   for slots, parenting in zip(weeks, (3, 4, 3)))):
         raise ValueError('Invalid focused Work strategy')
+    if stage == 'scaled10':
+        proof = policy.get('scale_evidence', {})
+        if not isinstance(proof, dict):
+            raise ValueError('Scaled10 requires observed evidence')
+        groups = [proof.get(key, []) for key in
+                  ('bootstrap_request_ids', 'next_ten_request_ids', 'next_ten_question_ids')]
+        elapsed_minutes = proof.get('bootstrap_elapsed_minutes', [])
+        browser_minutes = proof.get('bootstrap_browser_minutes', [])
+        if (any(not isinstance(items, list) or len(items) != count
+                or any(not isinstance(item, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,79}', item)
+                       for item in items) or len(set(items)) != count
+                for items, count in zip(groups, (5, 10, 10)))
+                or set(groups[0]) & set(groups[1])
+                or any(not isinstance(proof.get(key), str) or not 1 <= len(proof[key].strip()) <= 500
+                       for key in ('ledger_ref', 'final_approval_ref', 'next_ten_ready_ref'))
+                or proof.get('major_errors') != 0 or type(proof.get('major_errors')) is not int
+                or not isinstance(elapsed_minutes, list) or len(elapsed_minutes) != 5
+                or any(type(minutes) not in {int, float} or not 0 < minutes < float('inf')
+                       for minutes in elapsed_minutes)
+                or not isinstance(browser_minutes, list) or len(browser_minutes) != 5
+                or any(type(minutes) not in {int, float} or not 0 < minutes <= 55
+                       for minutes in browser_minutes)
+                or any(browser > elapsed for browser, elapsed in zip(browser_minutes, elapsed_minutes))
+                or sum(browser_minutes) * 2 * 1.25 > 550):
+            raise ValueError('Scaled10 requires five observed results, capacity and ten distinct ready inputs')
+        verified = date.fromisoformat(proof.get('verified_date', ''))
+        if not date.fromisoformat(policy['publication_start']) <= verified <= min(day, today_kst()):
+            raise ValueError('Scaled10 evidence must precede activation and cannot be future-dated')
+    slots = weeks[((day - anchor).days // 7) % 3]
     elapsed = (day - date.fromisoformat(policy['start_date'])).days
     phase = 'audit' if elapsed < 2 else 'pilot' if elapsed < 7 else 'focused'
     category = slots[day.weekday()]
-    target = int(bool(category) and day >= date.fromisoformat(policy['publication_start']))
+    target = daily_limit if category and day >= date.fromisoformat(policy['publication_start']) else 0
     return {'version': policy['version'], 'date': day.isoformat(), 'target': target,
             'category': category or 'parenting', 'depth': 'deep', 'work_managed': True,
             'phase': phase, 'topic_selection': 'autonomous_verified',
-            'weekly_publication_limit': 3,
+            'capacity_stage': stage,
+            'weekly_publication_limit': policy['weekly_publication_limit'],
             'editorial_types': ['article', 'ai_tutorial'] if category == 'parenting' else ['article'],
             **({'investment_mode': 'life-economics-v1'} if category == 'investment' else {}),
             'review_due': day > date.fromisoformat(policy['measurement_end'])}
@@ -180,7 +216,7 @@ def ready_categories(settings, conn) -> set[str]:
         count = saved_count(conn, plan)
     except SaveDateRequired:
         return set()
-    if count:
+    if count >= plan['target']:
         # A verified Work receipt can acknowledge an API post still marked APPROVED.
         saved = saved_identities(conn, plan['date'])
         rows = conn.execute("SELECT * FROM posts WHERE status IN ('APPROVED','SAVED_NAVER','PUBLISHED')").fetchall()

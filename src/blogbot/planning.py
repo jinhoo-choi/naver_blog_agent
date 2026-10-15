@@ -12,7 +12,34 @@ from zoneinfo import ZoneInfo
 from .core import KST, PUBLICATION_PENDING, today_kst
 
 
+def work_strategy(config: dict, day: date | None = None) -> dict | None:
+    """Owner-approved Work execution; the API preparer must not invent inputs."""
+    policy = config.get('strategy_reset', {})
+    day = day or today_kst()
+    if not policy.get('enabled') or day < date.fromisoformat(policy['start_date']):
+        return None
+    slots = policy['weekdays']
+    if (len(slots) != 7 or slots.count('parenting') != 2 or slots.count('investment') != 1
+            or any(c not in {'', 'parenting', 'investment'} for c in slots)
+            or policy['weekly_publication_limit'] != 3):
+        raise ValueError('Invalid focused Work strategy')
+    elapsed = (day - date.fromisoformat(policy['start_date'])).days
+    phase = 'audit' if elapsed < 2 else 'pilot' if elapsed < 7 else 'focused'
+    category = slots[day.weekday()]
+    target = int(bool(category) and day >= date.fromisoformat(policy['publication_start']))
+    return {'version': policy['version'], 'date': day.isoformat(), 'target': target,
+            'category': category or 'parenting', 'depth': 'deep', 'work_managed': True,
+            'phase': phase, 'topic_selection': 'autonomous_verified',
+            'weekly_publication_limit': 3,
+            'editorial_types': ['article', 'ai_tutorial'] if category == 'parenting' else ['article'],
+            **({'investment_mode': 'life-economics-v1'} if category == 'investment' else {}),
+            'review_due': day > date.fromisoformat(policy['measurement_end'])}
+
+
 def resolve_plan(config: dict, day: date | None = None) -> dict | None:
+    reset = work_strategy(config, day)
+    if reset:
+        return reset
     policy = config.get('operating_plan', {})
     day = day or today_kst()
     if not policy.get('enabled') or day < date.fromisoformat(policy['start_date']):
@@ -135,6 +162,8 @@ def attempt_matches(row, plan: dict) -> bool:
 
 def ready_categories(settings, conn) -> set[str]:
     plan = active_plan(settings)
+    if plan and plan.get('work_managed') and not plan['target']:
+        return set()
     from .work_operations import exclusions, pending_writes
     manual_ids = exclusions(settings)
     if pending_writes(settings):

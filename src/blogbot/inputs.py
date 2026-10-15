@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+from contextlib import closing
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -15,7 +16,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from zoneinfo import ZoneInfo
 
 from .config import Settings
-from .core import today_kst
+from .core import connect_db, today_kst
 from .editorial import content_style
 from .planning import active_plan, editorial_type, matches_request
 
@@ -137,9 +138,14 @@ def enqueue_file(settings: Settings, source: Path) -> str:
     provenance = {'source': source_kind}
     if source_kind == 'work_autonomous':
         plan = active_plan(settings)
-        if (not plan or not plan.get('work_managed') or plan['target'] != 1
+        if (not plan or not plan.get('work_managed') or plan['target'] not in {1, 2}
                 or category != plan['category'] or raw.get('strategy_version') != plan['version']):
             raise ValueError('Autonomous selection requires the current approved Work slot')
+        if plan.get('capacity_stage') == 'scaled10' and settings.db_path.exists():
+            with closing(connect_db(settings.db_path)) as conn:
+                if conn.execute("SELECT 1 FROM save_receipts WHERE day=? AND status='SAVED_NAVER' "
+                                "AND request_id!=?", (plan['date'], request_id)).fetchone():
+                    raise ValueError('Complete the saved draft publication before another Work input')
         provenance['strategy_version'] = plan['version']
     elif source_kind != 'owner_input':
         raise ValueError('Unsupported input source')

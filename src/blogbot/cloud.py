@@ -350,10 +350,20 @@ def pack(settings, destination: Path) -> None:
     with closing(connect_db(settings.db_path)) as conn:
         pending_ids = {r['request_id'] for r in conn.execute(
             "SELECT request_id FROM posts WHERE status IN ('TEXT_APPROVED','IMAGES_PENDING')")}
+        proof_ids = set(config.get('strategy_reset', {}).get('scale_evidence', {}).get('bootstrap_request_ids', []))
+        if plan and plan.get('capacity_stage') == 'bootstrap5':
+            for row in conn.execute("SELECT request_id,provenance_json FROM posts WHERE status='PUBLISHED'"):
+                provenance = json.loads(row['provenance_json'])
+                if (provenance.get('source') == 'work_autonomous'
+                        and provenance.get('strategy_version') == 'strategy-reset-v2'
+                        and provenance.get('daily_plan', {}).get('capacity_stage') == 'bootstrap5'):
+                    proof_ids.add(row['request_id'])
         rows = conn.execute("SELECT * FROM posts WHERE status='APPROVED' "
                             "AND as_of_date BETWEEN ? AND ? ORDER BY as_of_date,id",
                             ((today-timedelta(days=3)).isoformat(), today.isoformat())).fetchall()
         uncertain = conn.execute("SELECT 1 FROM posts WHERE status IN ('SAVING','SAVE_UNCERTAIN') LIMIT 1").fetchone()
+        saved_waiting = (plan and plan.get('capacity_stage') == 'scaled10' and conn.execute(
+            "SELECT 1 FROM save_receipts WHERE day=? AND status='SAVED_NAVER'", (plan['date'],)).fetchone())
         try:
             used = saved_count(conn, plan) if plan else 0
         except SaveDateRequired:
@@ -367,7 +377,7 @@ def pack(settings, destination: Path) -> None:
             if type(number) is not int or number < 1:
                 continue
             if stale_settings or (plan and (not plan['target'] or plan.get('reservation') or uncertain or not matches_post(post, plan)
-                                           or packet or used)):
+                                           or packet or saved_waiting or used >= plan['target'])):
                 continue
             from .investment import validate_current_post
             try:
@@ -405,8 +415,8 @@ def pack(settings, destination: Path) -> None:
     with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:
         for path, _ in records(directory):
             archive.write(path, path.relative_to(directory))
-        # Retain state and recent packets; old completed media are not transported forever.
-        keep_ids = set(pending_ids)
+        # Bootstrap evidence must survive until promotion and throughout scaled10.
+        keep_ids = pending_ids | proof_ids
         for path in settings.artifact_dir.glob('*.json'):
             try:
                 payload = json.loads(path.read_text())
@@ -419,7 +429,7 @@ def pack(settings, destination: Path) -> None:
                 # Preserve evidence, never silently drop the broken packet or paid-call state.
                 archive.write(path, path.relative_to(directory))
                 continue
-            if keep or request_id in pending_ids:
+            if keep or request_id in keep_ids:
                 keep_ids.add(request_id)
                 archive.write(path, path.relative_to(directory))
                 md = path.with_suffix('.md')
@@ -574,10 +584,12 @@ def filter_ready(directory: Path, receipts: dict, plan: dict | None = None, sett
         if identity in manual_ids or post.get('provenance', {}).get('manual_request') or manual_pending:
             continue
         publication_candidate = (plan and identity in observed_saved and not publication_ready
-                                 and used <= {identity})
+                                 and len(used - {identity}) < plan['target'])
         if uncertain and any(r.get('status') in PUBLICATION_PENDING for r in records):
             continue
-        if plan and (not plan['target'] or plan.get('reservation') or uncertain or (used and not publication_candidate)
+        if plan and (not plan['target'] or plan.get('reservation') or uncertain
+                     or (len(used) >= plan['target'] and not publication_candidate)
+                     or (plan.get('capacity_stage') == 'scaled10' and observed_saved - {identity})
                      or eligible or post['as_of_date'] != plan['date']
                      or post['category'] != plan['category']
                      or post.get('provenance', {}).get('daily_plan') != plan):

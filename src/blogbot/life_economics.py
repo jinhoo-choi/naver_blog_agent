@@ -73,7 +73,7 @@ def request_contract(request, *, fresh=True):
     try:
         source_ok = (request.provenance.get('source') == 'owner_input' or
                      (request.provenance.get('source') == 'work_autonomous'
-                      and request.provenance.get('strategy_version') == 'strategy-reset-v1'))
+                      and request.provenance.get('strategy_version') in {'strategy-reset-v1', 'strategy-reset-v2'}))
         return (request.category == 'investment' and source_ok
                 and request.provenance.get('investment_mode') == VERSION
                 and request.provenance.get('life_economics') == validate_data(request.data, fresh=fresh))
@@ -104,7 +104,8 @@ def post_contract(post, plan):
         p = post.provenance
         source_ok = (p.get('source') == 'owner_input' or
                      (p.get('source') == 'work_autonomous'
-                      and p.get('strategy_version') == plan.get('version') == 'strategy-reset-v1'
+                      and p.get('strategy_version') == plan.get('version')
+                      and plan.get('version') in {'strategy-reset-v1', 'strategy-reset-v2'}
                       and plan.get('work_managed') is True))
         if (post.category != 'investment' or not source_ok
                 or p.get('investment_mode') != VERSION or plan.get('investment_mode') != VERSION):

@@ -29,6 +29,14 @@ def work_strategy(config: dict, day: date | None = None) -> dict | None:
                    or any(c not in {'', 'parenting', 'investment'} for c in slots)
                    for slots, parenting in zip(weeks, (3, 4, 3)))):
         raise ValueError('Invalid focused Work strategy')
+    transition = policy.get('transition_week')
+    if transition is not None and (transition != {
+            'start_date': '2026-10-12', 'end_date': '2026-10-18', 'publication_limit': 16}
+            or type(transition.get('publication_limit')) is not int):
+        raise ValueError('Only the approved Oct 12-18 transition week limit is allowed')
+    weekly_limit = policy['weekly_publication_limit']
+    if transition and transition['start_date'] <= day.isoformat() <= transition['end_date']:
+        weekly_limit = transition['publication_limit']
     if stage == 'scaled10':
         proof = policy.get('scale_evidence', {})
         if not isinstance(proof, dict):
@@ -66,7 +74,7 @@ def work_strategy(config: dict, day: date | None = None) -> dict | None:
             'category': category or 'parenting', 'depth': 'deep', 'work_managed': True,
             'phase': phase, 'topic_selection': 'autonomous_verified',
             'capacity_stage': stage,
-            'weekly_publication_limit': policy['weekly_publication_limit'],
+            'weekly_publication_limit': weekly_limit,
             'editorial_types': ['article', 'ai_tutorial'] if category == 'parenting' else ['article'],
             **({'investment_mode': 'life-economics-v1'} if category == 'investment' else {}),
             'review_due': day > date.fromisoformat(policy['measurement_end'])}

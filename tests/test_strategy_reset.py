@@ -32,9 +32,9 @@ def settings_at(tmp_path, monkeypatch, day):
 
 @pytest.mark.parametrize('day,phase,target,category', [
     ('2026-10-15', 'audit', 0, 'parenting'),
-    ('2026-10-16', 'audit', 0, 'parenting'),
-    ('2026-10-17', 'pilot', 0, 'parenting'),
-    ('2026-10-21', 'pilot', 0, 'investment'),
+    ('2026-10-16', 'audit', 1, 'parenting'),
+    ('2026-10-17', 'pilot', 1, 'parenting'),
+    ('2026-10-21', 'pilot', 1, 'investment'),
     ('2026-10-22', 'focused', 0, 'parenting'),
     ('2026-10-23', 'focused', 1, 'investment'),
     ('2026-10-24', 'focused', 1, 'parenting'),
@@ -83,6 +83,28 @@ def test_weekly_limit_cannot_silently_change_approved_capacity(limit):
     config['strategy_reset']['weekly_publication_limit'] = limit
     with pytest.raises(ValueError, match='Invalid focused Work strategy'):
         resolve_plan(config, date(2026, 10, 26))
+
+
+@pytest.mark.parametrize('field,value', [
+    ('start_date', '2026-10-19'), ('end_date', '2026-10-25'),
+    ('publication_limit', 17), ('publication_limit', 16.0), ('extra_limit', 20),
+])
+def test_transition_exception_cannot_expand_approved_dates_or_limit(field, value):
+    config = tomllib.loads((Path(__file__).parents[1] / 'config/blog.toml').read_text())
+    config['strategy_reset']['transition_week'][field] = value
+    with pytest.raises(ValueError, match='approved Oct 12-18 transition'):
+        resolve_plan(config, date(2026, 10, 16))
+
+
+def test_transition_week_does_not_reset_counts_or_extend_past_october_18():
+    config = tomllib.loads((Path(__file__).parents[1] / 'config/blog.toml').read_text())
+    assert resolve_plan(config, date(2026, 10, 16))['weekly_publication_limit'] == 16
+    assert resolve_plan(config, date(2026, 10, 17))['weekly_publication_limit'] == 16
+    assert resolve_plan(config, date(2026, 10, 18))['weekly_publication_limit'] == 16
+    assert resolve_plan(config, date(2026, 10, 18))['target'] == 0
+    assert resolve_plan(config, date(2026, 10, 19))['weekly_publication_limit'] == 5
+    del config['strategy_reset']['transition_week']
+    assert resolve_plan(config, date(2026, 10, 16))['weekly_publication_limit'] == 5
 
 
 def test_api_preparation_and_saver_never_invent_an_owner_input(tmp_path, monkeypatch):
@@ -202,6 +224,13 @@ def test_scaled_ten_has_two_daily_slots_and_preserves_three_week_topic_mix(tmp_p
         counts.append(tuple(sum(p['target'] for p in plans if p['category'] == category)
                             for category in ('parenting', 'investment')))
     assert counts == [(6, 4), (8, 2), (6, 4)]
+
+
+def test_transition_exception_returns_to_normal_scaled_ten_limit_on_october_19(tmp_path, monkeypatch):
+    settings = scaled_settings(tmp_path, monkeypatch, actual_results=False)
+    settings.config['strategy_reset']['scale_evidence']['verified_date'] = '2026-10-17'
+    assert resolve_plan(settings.config, date(2026, 10, 17))['weekly_publication_limit'] == 16
+    assert resolve_plan(settings.config, date(2026, 10, 19))['weekly_publication_limit'] == 10
 
 
 def test_parallel_total_work_time_is_recorded_without_using_it_as_browser_capacity(tmp_path, monkeypatch):
@@ -364,6 +393,38 @@ def test_weekly_cap_counts_all_publications_before_claim(tmp_path, monkeypatch, 
             with pytest.raises(ValueError, match='weekly publication limit'):
                 claim_publication(conn, 'current', settings)
             assert conn.execute("SELECT status FROM save_receipts WHERE request_id='current'").fetchone()[0] == 'SAVED_NAVER'
+
+
+@pytest.mark.parametrize('day', ['2026-10-16', '2026-10-17'])
+@pytest.mark.parametrize('used,allowed', [(14, True), (15, True), (16, False)])
+def test_transition_claim_counts_every_prior_publication(tmp_path, monkeypatch, day, used, allowed):
+    settings = settings_at(tmp_path, monkeypatch, day)
+    prepare_publication(settings)
+    with connect_db(settings.db_path) as conn:
+        prior_days = ['12'] * 2 + ['13'] * 7 + ['14'] * 2 + ['15'] * (used - 11)
+        for i, prior_day in enumerate(prior_days):
+            stamp_day = f'2026-10-{prior_day}'
+            conn.execute('INSERT INTO save_receipts(request_id,day,category,status,published_at) '
+                         'VALUES(?,?,?,?,?)', (f'prior-{i}', stamp_day, 'exercise', 'PUBLISHED',
+                                              stamp_day + 'T10:00:00+09:00'))
+        conn.commit()
+        if allowed:
+            assert claim_publication(conn, 'current', settings)['status'] == 'PUBLICATION_CLAIMED'
+        else:
+            with pytest.raises(ValueError, match='weekly publication limit'):
+                claim_publication(conn, 'current', settings)
+            assert conn.execute("SELECT status FROM save_receipts WHERE request_id='current'").fetchone()[0] == 'SAVED_NAVER'
+
+
+def test_transition_limit_still_rejects_a_second_publication_on_the_same_day(tmp_path, monkeypatch):
+    settings = settings_at(tmp_path, monkeypatch, '2026-10-16')
+    prepare_publication(settings, 'first')
+    with connect_db(settings.db_path) as conn:
+        assert claim_publication(conn, 'first', settings)['status'] == 'PUBLICATION_CLAIMED'
+    publish_fixture(settings, 'first', 501)
+    prepare_publication(settings, 'second')
+    with connect_db(settings.db_path) as conn, pytest.raises(ValueError, match='daily slot'):
+        claim_publication(conn, 'second', settings)
 
 
 @pytest.mark.parametrize('day', ['2026-10-15', '2026-10-22', '2026-10-25'])

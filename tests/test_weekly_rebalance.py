@@ -10,6 +10,9 @@ from dataclasses import asdict, replace
 from datetime import date, datetime, timedelta
 
 import pytest
+
+# These tests intentionally cover the archived pre-reset weekly policy.
+pytestmark = pytest.mark.usefixtures('historical_profile')
 from cryptography.fernet import Fernet
 from test_daily_plan import set_clock, settings_on
 

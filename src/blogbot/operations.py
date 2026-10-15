@@ -12,7 +12,7 @@ def preparation_outcome(results, *, failed, deliverable_ready=False):
         outcome = 'DIAGNOSTIC'
     elif deliverable_ready and not failed:
         outcome = 'READY'
-    elif statuses <= {'PLANNED_INPUT_REQUIRED', 'EDITORIAL_SLOT_RESERVED',
+    elif statuses <= {'PLANNED_INPUT_REQUIRED', 'EDITORIAL_SLOT_RESERVED', 'AUTONOMOUS_WORK_REQUIRED',
                        'PREPARATION_PARTIAL', 'NO_ELIGIBLE_INPUT_OR_DAILY_LIMIT',
                        'DAILY_PLAN_LIMIT', 'COMMUNITY_SOURCE_PENDING', 'NO_ELIGIBLE_INVESTMENT'}:
         outcome = 'WAITING'
@@ -32,7 +32,10 @@ def runtime_status(settings):
     from .work_operations import exclusions, pending_writes, records
     config = settings.config
     operations = config.get('operations', {})
-    return {'contract_version': operations.get('version'),
+    from .planning import work_strategy
+    strategy = work_strategy(config)
+    return {'contract_version': strategy['version'] if strategy else operations.get('version'),
+            'work_strategy': strategy,
             'automatic_enabled': operations.get('automatic_enabled', True),
             'manual_mode': 'separate_draft_only',
             'manual_operations': len(records(settings.db_path.parent)),
@@ -41,7 +44,9 @@ def runtime_status(settings):
             'creator_collection': ('ENABLED' if operations.get('creator_collection_enabled', False)
                                    else 'PAUSED'),
             'telegram': notification_status(),
-            'measurement': {k: config.get('operating_plan', {}).get(k) for k in
-                            ('measurement_window', 'measurement_post_days', 'review_not_before')},
+            'measurement': ({k: config['strategy_reset'].get(k) for k in
+                             ('start_date', 'measurement_end', 'final_cohort_review_not_before')}
+                            if strategy else {k: config.get('operating_plan', {}).get(k) for k in
+                            ('measurement_window', 'measurement_post_days', 'review_not_before')}),
             'browser_coordination': 'external_versioned_ledger_required',
             'scheduler_next_run': 'not_observed'}

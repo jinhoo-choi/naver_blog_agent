@@ -5,6 +5,9 @@ from types import SimpleNamespace
 
 import pytest
 
+# These tests intentionally cover the archived pre-reset weekly policy.
+pytestmark = pytest.mark.usefixtures('historical_profile')
+
 from blogbot.config import load_settings
 from blogbot.core import connect_db, reserve_attempt
 from blogbot.inputs import ContentRequest, collect_requests, enqueue_file

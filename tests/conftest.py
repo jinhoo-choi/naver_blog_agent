@@ -1,7 +1,17 @@
 """Opt-in clocks for tests whose setup specifically exercises weekday policy."""
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture
+def historical_profile(tmp_path, monkeypatch):
+    """Exercise the preserved old policy independently of the Oct 15 replacement."""
+    source = Path(__file__).parents[1] / 'config/blog.toml'
+    profile = tmp_path / 'historical-blog.toml'
+    profile.write_text(source.read_text().partition('\n[strategy_reset]')[0])
+    monkeypatch.setenv('BLOG_CONFIG_PATH', str(profile))
 
 
 @pytest.fixture

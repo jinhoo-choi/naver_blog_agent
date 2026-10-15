@@ -366,7 +366,7 @@ def pack(settings, destination: Path) -> None:
             number = settings.config['categories'][post.category].get('naver_category_no')
             if type(number) is not int or number < 1:
                 continue
-            if stale_settings or (plan and (plan.get('reservation') or uncertain or not matches_post(post, plan)
+            if stale_settings or (plan and (not plan['target'] or plan.get('reservation') or uncertain or not matches_post(post, plan)
                                            or packet or used)):
                 continue
             from .investment import validate_current_post
@@ -381,7 +381,8 @@ def pack(settings, destination: Path) -> None:
                            'requires_fresh_review': post.as_of_date != today.isoformat(),
                            'post': post.__dict__, 'segments': [s.__dict__ for s in render_segments(
                                post, include_tags=post.provenance.get('content_style') != 'review')]})
-    hold = ('unresolved_manual_work' if manual_pending else
+    hold = ('work_strategy_nonpublication_day' if plan and plan.get('work_managed') and not plan['target'] else
+            'unresolved_manual_work' if manual_pending else
             revalidation_reason(plan) if weekly_holds else
             'kst_date_changed' if stale_settings else 'editorial_slot_reserved'
             if plan and plan.get('reservation') else None)
@@ -576,7 +577,7 @@ def filter_ready(directory: Path, receipts: dict, plan: dict | None = None, sett
                                  and used <= {identity})
         if uncertain and any(r.get('status') in PUBLICATION_PENDING for r in records):
             continue
-        if plan and (plan.get('reservation') or uncertain or (used and not publication_candidate)
+        if plan and (not plan['target'] or plan.get('reservation') or uncertain or (used and not publication_candidate)
                      or eligible or post['as_of_date'] != plan['date']
                      or post['category'] != plan['category']
                      or post.get('provenance', {}).get('daily_plan') != plan):
@@ -720,7 +721,9 @@ def main():
                 raise PreparationFailed('Manual images pending; reconcile private checkpoints')
             return
         plan = active_plan(settings)
-        reserved = bool(args.mode in {'prepare', 'recover'} and plan and plan.get('reservation'))
+        work_managed = bool(args.mode in {'prepare', 'recover'} and plan and plan.get('work_managed'))
+        reserved = bool(args.mode in {'prepare', 'recover'} and plan and
+                        (plan.get('reservation') or work_managed))
         if not reserved and not args.attribution_review_request_id:
             seed_inputs(settings)
             from .weekly_policy import import_environment
@@ -728,7 +731,9 @@ def main():
         elif not reserved and args.attribution_review_request_id:
             # Import authoritative save receipts without seeding any candidates or context.
             import_manual_saves(settings)
-        if reserved:
+        if work_managed:
+            results = [{'status': 'AUTONOMOUS_WORK_REQUIRED', 'daily_plan': plan}]
+        elif reserved:
             results = [reservation_result(plan)]
         elif args.mode == 'probe':
             from openai import OpenAI

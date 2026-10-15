@@ -281,6 +281,8 @@ def claim_publication(conn: sqlite3.Connection, request_id: str, settings) -> di
     plan = active_plan(settings)
     if not plan or plan.get('reservation'):
         raise ValueError('Automatic publication requires an active unreserved editorial slot')
+    if plan.get('work_managed') and plan['target'] != 1:
+        raise ValueError('Focused strategy has no new-publication slot today')
     ready = json.loads((settings.db_path.parent / 'ready.json').read_text())
     if ready.get('date') != today_kst().isoformat() or ready.get('daily_plan') != plan or ready.get('hold'):
         raise ValueError('Publication requires the current approved handoff')
@@ -306,6 +308,22 @@ def claim_publication(conn: sqlite3.Connection, request_id: str, settings) -> di
     verify_photos(approved.photos)
     with conn:
         conn.execute('BEGIN IMMEDIATE')
+        if plan.get('work_managed'):
+            week_start = today_kst() - timedelta(days=today_kst().weekday())
+            weekly = set()
+            for receipt in conn.execute('SELECT * FROM save_receipts'):
+                if receipt['status'] not in PUBLICATION_PENDING | {'PUBLISHED'}:
+                    continue
+                for field in ('published_at', 'publish_attempted_at'):
+                    if not receipt[field]:
+                        continue
+                    stamp = datetime.fromisoformat(receipt[field])
+                    if stamp.tzinfo is None:
+                        raise ValueError('Weekly publication evidence needs a timezone')
+                    if week_start <= stamp.astimezone(KST).date() <= today_kst():
+                        weekly.add(receipt['request_id'])
+            if len(weekly) >= plan['weekly_publication_limit']:
+                raise ValueError('Focused strategy weekly publication limit reached')
         row = conn.execute('SELECT * FROM save_receipts WHERE request_id=?', (request_id,)).fetchone()
         if not row or row['status'] != 'SAVED_NAVER' or row['day'] != today_kst().isoformat():
             raise ValueError('Only a verified saved draft can begin publication once')

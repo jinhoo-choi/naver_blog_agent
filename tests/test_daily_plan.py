@@ -7,6 +7,9 @@ from datetime import UTC, date, datetime, timedelta
 from threading import Barrier
 
 import pytest
+
+# These tests intentionally cover the archived pre-reset weekly policy.
+pytestmark = pytest.mark.usefixtures('historical_profile')
 from cryptography.fernet import Fernet
 
 from blogbot import cloud

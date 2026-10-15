@@ -71,7 +71,10 @@ def validate_data(data, day=None, *, fresh=True):
 
 def request_contract(request, *, fresh=True):
     try:
-        return (request.category == 'investment' and request.provenance.get('source') == 'owner_input'
+        source_ok = (request.provenance.get('source') == 'owner_input' or
+                     (request.provenance.get('source') == 'work_autonomous'
+                      and request.provenance.get('strategy_version') == 'strategy-reset-v1'))
+        return (request.category == 'investment' and source_ok
                 and request.provenance.get('investment_mode') == VERSION
                 and request.provenance.get('life_economics') == validate_data(request.data, fresh=fresh))
     except (KeyError, TypeError, ValueError, AttributeError):
@@ -99,7 +102,11 @@ def verify_evidence(settings, request):
 def post_contract(post, plan):
     try:
         p = post.provenance
-        if (post.category != 'investment' or p.get('source') != 'owner_input'
+        source_ok = (p.get('source') == 'owner_input' or
+                     (p.get('source') == 'work_autonomous'
+                      and p.get('strategy_version') == plan.get('version') == 'strategy-reset-v1'
+                      and plan.get('work_managed') is True))
+        if (post.category != 'investment' or not source_ok
                 or p.get('investment_mode') != VERSION or plan.get('investment_mode') != VERSION):
             return False
         bundle = validate_data(p['life_economics'], date.fromisoformat(plan['date']))

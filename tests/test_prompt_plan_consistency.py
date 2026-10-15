@@ -5,6 +5,9 @@ from pathlib import Path
 
 import pytest
 
+# These tests intentionally cover the archived pre-reset weekly policy.
+pytestmark = pytest.mark.usefixtures('historical_profile')
+
 from blogbot.config import load_settings
 from blogbot.inputs import ContentRequest
 from blogbot.llm import BlogLLM

@@ -133,6 +133,16 @@ def enqueue_file(settings: Settings, source: Path) -> str:
     if not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", request_id):
         raise ValueError("Request id must be a unique ASCII slug")
     category = raw.get("category")
+    source_kind = raw.get('source', 'owner_input')
+    provenance = {'source': source_kind}
+    if source_kind == 'work_autonomous':
+        plan = active_plan(settings)
+        if (not plan or not plan.get('work_managed') or plan['target'] != 1
+                or category != plan['category'] or raw.get('strategy_version') != plan['version']):
+            raise ValueError('Autonomous selection requires the current approved Work slot')
+        provenance['strategy_version'] = plan['version']
+    elif source_kind != 'owner_input':
+        raise ValueError('Unsupported input source')
     style = content_style(category, raw)
     if category in {"parenting", "exercise", "origins"}:
         question = raw.get("question", "")
@@ -230,7 +240,7 @@ def enqueue_file(settings: Settings, source: Path) -> str:
         target = destination / f"photo-{i + 1:02d}{original.suffix.lower()}"
         shutil.copyfile(original, target)
         photo["file"] = str(target.resolve())
-    request = ContentRequest(request_id, category, data, photos, {"source": "owner_input"})
+    request = ContentRequest(request_id, category, data, photos, provenance)
     manifest = destination / "request.json"
     manifest.write_text(json.dumps(asdict(request), ensure_ascii=False, indent=2), encoding="utf-8")
     return request_id

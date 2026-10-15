@@ -146,12 +146,12 @@ rules = [
 enabled = true
 channel_id = "choijku"
 
-# Current collection is paused. Retained evidence is never refreshed by changing its date.
+# Work observes Creator Advisor before autonomous selection; retained evidence keeps its real date.
 [operations]
 version = "blog-operations-v3"
 automatic_enabled = true
 manual_version = "work-operation-v1"
-creator_collection_enabled = false
+creator_collection_enabled = true
 browser_coordination = "external_versioned_ledger_required"
 
 [operations.publication]

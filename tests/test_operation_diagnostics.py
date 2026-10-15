@@ -45,7 +45,7 @@ def test_notification_diagnostics_never_return_credentials(monkeypatch, tmp_path
     assert notification_status() == 'NOT_CONFIGURED'
     status = runtime_status(load_settings())
     encoded = json.dumps(status)
-    assert 'PRIVATE_' not in encoded and status['creator_collection'] == 'PAUSED'
+    assert 'PRIVATE_' not in encoded and status['creator_collection'] == 'ENABLED'
     assert status['scheduler_next_run'] == 'not_observed'
 
 

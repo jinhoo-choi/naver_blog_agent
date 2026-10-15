@@ -105,6 +105,23 @@ def connect_db(path: Path) -> sqlite3.Connection:
     return conn
 
 
+def publication_days(record) -> set[date]:
+    """Observed KST dates for quota accounting, without inventing publication times."""
+    record = dict(record)
+    days = set()
+    if record.get('published_at_precision') == 'day':
+        observed = validate_work_receipt(record)
+        check = json.loads(observed['publication_check_json'])
+        days.add(date.fromisoformat(check['published_date']))
+    for stamp_key in ('published_at', 'publish_attempted_at'):
+        if record.get(stamp_key):
+            stamp = datetime.fromisoformat(record[stamp_key])
+            if stamp.tzinfo is None:
+                raise ValueError('Publication evidence requires a timezone')
+            days.add(stamp.astimezone(KST).date())
+    return days
+
+
 def validate_work_receipt(record: dict, blog_id: str = '') -> dict:
     """Validate observed Work evidence; this never checks a site or publishes a post."""
     from .planning import receipt_day
@@ -117,6 +134,8 @@ def validate_work_receipt(record: dict, blog_id: str = '') -> dict:
     if date.fromisoformat(result['day']) > today_kst():
         raise ValueError('Receipt cannot be future-dated')
     status = result['status']
+    if record.get('published_at_precision') == 'day' and status != 'PUBLISHED':
+        raise ValueError('Day-only evidence is limited to observed historical publications')
     if status == 'SAVE_NOT_SAVED':
         check = record.get('save_check') or json.loads(record.get('save_check_json', '{}'))
         if (not isinstance(check, dict) or check.get('resolution') not in {'not-saved', 'discard'}
@@ -163,7 +182,7 @@ def validate_work_receipt(record: dict, blog_id: str = '') -> dict:
         result['publication_check_json'] = json.dumps(check, sort_keys=True, ensure_ascii=False)
     if status == 'PUBLISHED':
         precision = record.get('published_at_precision', 'second')
-        if precision not in {'second', 'minute'}:
+        if precision not in {'second', 'minute', 'day'}:
             raise ValueError('Unknown observed publication timestamp precision')
         result['published_at_precision'] = precision
         url = record.get('published_url', '')
@@ -174,9 +193,29 @@ def validate_work_receipt(record: dict, blog_id: str = '') -> dict:
         match = re.fullmatch(r'/([A-Za-z0-9_-]+)/([1-9][0-9]*)', parsed.path)
         if (parsed.scheme != 'https' or parsed.netloc not in {'blog.naver.com', 'm.blog.naver.com'}
                 or parsed.query or parsed.fragment or not match or match[2] != post_id
-                or (blog_id and match[1] != blog_id) or 'published_at' not in stamps):
+                or (blog_id and match[1] != blog_id) or (precision != 'day' and 'published_at' not in stamps)):
             raise ValueError('Published evidence must identify the observed owner post and publication time')
         result['published_url'] = 'https://blog.naver.com' + parsed.path
+        if precision == 'day':
+            check = record.get('publication_check') or json.loads(record.get('publication_check_json', '{}'))
+            if (record.get('published_at') or record.get('publish_attempted_at')
+                    or not isinstance(check, dict) or check.get('published_post_checked') is not True
+                    or check.get('timezone') != 'Asia/Seoul'
+                    or not isinstance(check.get('published_date'), str)
+                    or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', check['published_date'])
+                    or not isinstance(check.get('checked_at'), str)
+                    or not isinstance(check.get('evidence_ref'), str)
+                    or not 1 <= len(check['evidence_ref'].strip()) <= 500):
+                raise ValueError('Historical day evidence requires a checked post, KST date and evidence reference')
+            observed_day = date.fromisoformat(check['published_date'])
+            checked = datetime.fromisoformat(check.get('checked_at', ''))
+            if (not date.fromisoformat(result['day']) <= observed_day < today_kst()
+                    or checked.tzinfo is None or checked > datetime.now(KST)
+                    or checked.astimezone(KST).date() < observed_day):
+                raise ValueError('Historical publication day must follow its save day and precede today')
+            result['published_at'] = ''
+            result['publication_check_json'] = json.dumps(check, sort_keys=True, ensure_ascii=False)
+            return result
         published = stamps['published_at']
         if precision == 'minute' and (published.second or published.microsecond):
             raise ValueError('Minute publication evidence cannot invent seconds')
@@ -226,8 +265,12 @@ def merge_work_receipts(conn: sqlite3.Connection, records: list[dict], *, blog_i
                 raise ValueError('Only an uncertain save can be resolved as not saved')
             if old and old['status'] == 'PUBLISHED' and (status != 'PUBLISHED' or any(
                     old[k] != record.get(k, '') for k in
-                    ('published_url', 'post_id', 'published_at', 'published_at_precision'))):
+                    ('published_url', 'post_id', 'published_at', 'published_at_precision'))
+                    or (old['published_at_precision'] == 'day'
+                        and old['publication_check_json'] != record.get('publication_check_json'))):
                 raise ValueError('Published receipt cannot be downgraded or reassigned')
+            if record.get('published_at_precision') == 'day' and old and old['status'] in PUBLICATION_PENDING:
+                raise ValueError('Day-only evidence cannot resolve an uncertain publication attempt')
             if old and old['status'] in PUBLICATION_PENDING and status not in PUBLICATION_PENDING | PUBLICATION_FINISHED:
                 raise ValueError('Publication outcome must be reconciled before any retry')
             if old and old['status'] == 'PUBLICATION_NOT_PUBLISHED' and status not in PUBLICATION_FINISHED:
@@ -244,6 +287,9 @@ def merge_work_receipts(conn: sqlite3.Connection, records: list[dict], *, blog_i
                 original = conn.execute(f'SELECT category,status FROM {table} WHERE request_id=?', (identity,)).fetchone()
                 if original and original['category'] != record['category']:
                     raise ValueError('Receipt category does not match the original request')
+                if (record.get('published_at_precision') == 'day' and original
+                        and original['status'] in PUBLICATION_PENDING):
+                    raise ValueError('Day-only evidence cannot resolve an uncertain publication attempt')
                 if status == 'SAVE_NOT_SAVED' and original and original['status'] in {
                         'SAVED_NAVER', *PUBLICATION_PENDING, *PUBLICATION_FINISHED}:
                     raise ValueError('Observed saved or published work cannot be declared absent')
@@ -327,6 +373,7 @@ def claim_publication(conn: sqlite3.Connection, request_id: str, settings) -> di
                             or provenance.get('source') != 'work_autonomous'
                             or provenance.get('strategy_version') != 'strategy-reset-v2'
                             or provenance.get('daily_plan', {}).get('capacity_stage') != 'bootstrap5'
+                            or observed['published_at_precision'] == 'day'
                             or observed['day'] < settings.config['strategy_reset']['publication_start']
                             or datetime.fromisoformat(observed['published_at']).astimezone(KST).date().isoformat() > proof['verified_date']):
                         raise ValueError('Scaled10 bootstrap evidence must match reviewed autonomous results')
@@ -343,14 +390,8 @@ def claim_publication(conn: sqlite3.Connection, request_id: str, settings) -> di
             for receipt in conn.execute('SELECT * FROM save_receipts'):
                 if receipt['status'] not in PUBLICATION_PENDING | {'PUBLISHED'}:
                     continue
-                for field in ('published_at', 'publish_attempted_at'):
-                    if not receipt[field]:
-                        continue
-                    stamp = datetime.fromisoformat(receipt[field])
-                    if stamp.tzinfo is None:
-                        raise ValueError('Weekly publication evidence needs a timezone')
-                    if week_start <= stamp.astimezone(KST).date() <= today_kst():
-                        weekly.add(receipt['request_id'])
+                if any(week_start <= day <= today_kst() for day in publication_days(receipt)):
+                    weekly.add(receipt['request_id'])
             if len(weekly) >= plan['weekly_publication_limit']:
                 raise ValueError('Focused strategy weekly publication limit reached')
         row = conn.execute('SELECT * FROM save_receipts WHERE request_id=?', (request_id,)).fetchone()

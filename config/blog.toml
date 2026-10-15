@@ -333,10 +333,12 @@ kind = "owner_input_pending"
 enabled = true
 version = "strategy-reset-v2"
 start_date = "2026-10-15"
-publication_start = "2026-10-22"
+publication_start = "2026-10-16"
 measurement_end = "2026-11-11"
 final_cohort_review_not_before = "2026-12-09"
 weekly_publication_limit = 5
+# This launch week includes all 14 observed prior posts plus at most one on Oct 16 and 17.
+transition_week = { start_date = "2026-10-12", end_date = "2026-10-18", publication_limit = 16 }
 capacity_stage = "bootstrap5"
 scale_evidence = {}
 weekdays = ["parenting", "parenting", "investment", "", "investment", "parenting", ""]

@@ -18,13 +18,13 @@ from cryptography.fernet import Fernet
 
 from .config import load_settings
 from .core import (
-    KST,
     PUBLICATION_FINISHED,
     PUBLICATION_PENDING,
     WORK_RECEIPT_STATES,
     connect_db,
     import_work_receipts,
     merge_work_receipts,
+    publication_days,
     today_kst,
     validate_work_receipt,
 )
@@ -553,10 +553,8 @@ def filter_ready(directory: Path, receipts: dict, plan: dict | None = None, sett
                      getattr(settings, 'config', {}).get('creator_advisor', {}).get('channel_id', ''))
             record = validate_work_receipt(record, owner)
             uncertain |= record['status'] in PUBLICATION_PENDING
-            from datetime import datetime
-            for field in ('published_at', 'publish_attempted_at'):
-                if record.get(field) and datetime.fromisoformat(record[field]).astimezone(KST).date() == today:
-                    used.add(record['request_id'])
+            if today in publication_days(record):
+                used.add(record['request_id'])
         blocked.add(record['request_id'])
         if plan:
             try:

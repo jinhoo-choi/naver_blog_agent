@@ -102,6 +102,17 @@ RESET_OPERATIONS의 현행 날짜·stage별 일/주 한도를 적용한다. 수�
 영수증으로 일반 `records`에 반영할 수 있다. 이는 관측 기록일 뿐 발행 허가가 아니며 공통 당일
 발행 한도를 소비한다. 수기 임시저장의 예외를 공개 글 집계 누락으로 확대하지 않는다.
 
+과거 공개글의 발행일만 실제 확인된 경우에는 한도 집계 누락을 복구하는 관측 영수증으로만
+`status="PUBLISHED"`, `published_at=""`, `published_at_precision="day"`를 허용한다.
+기존 `request_id`·`day`(최초 저장일)·카테고리·소유자 공개URL·글ID를 유지하고, 입력의
+`publication_check`에 `published_date`, `timezone="Asia/Seoul"`, `published_post_checked=true`,
+시간대 있는 실제 `checked_at`·원장/화면 `evidence_ref`를 넣어 기존 `publication_check_json`에 보존한다.
+저장일≤공개일<오늘인 과거 공개만 대상이며, 관측시각은 공개일 당일 또는 이후·현재 이하로 검증한다.
+임의00:00이나 관측시각을 발행시각으로 채우지 않고, 기존 정밀 발행시각 덮기·발행 시도 불확실 상태
+해제·최초5편 증량 실증 근거로 사용하지 않는다. 정확한24/72시간 경과 확인도 이 날짜로 대신하지 않는다.
+기존 저장·시도 이력을 보존하며 실제 공개 목록과 일/주 한도 집계를 대조한다. import·암호화 인계·복원은
+각각 실제 결과를 확인한 뒤 최신 원장의 시행 영수증에 기록하며, 코드 지원만으로 일치·복원 완료를 주장하지 않는다.
+
 ## 저장 완료 이후 읽기 검수 — post-save-review-v1
 
 콘텐츠 개선안의 추가 증거·별도35점 진단은 [CONTENT_QUALITY의 editorial-evidence-v2와 dia-content-diagnostic-v1](CONTENT_QUALITY.md#내용차별성-증거--editorial-evidence-v2)을 따른다. 기존 원고/저장본 점수·영수증 상태·실행 스키마는 그대로 유지한다. 신규/수정은 원래 요청·작업 유형과 실제 결과 게시물 ID를 대조한다. 수정은 기존 ID 유지 여부, 신규는 새 ID와 비교 기존 ID를 확인하며 제목·날짜만으로 구분하지 않는다. 현재/이전 제목 이력·공개 URL·실제 최초 발행/수정시각은 관측 정밀도만 기록하고 목록 날짜로 정확한 시각을 추정하지 않는다.

@@ -11,7 +11,14 @@ from cryptography.fernet import Fernet
 
 from blogbot import cloud
 from blogbot.config import load_settings
-from blogbot.core import PostDraft, claim_publication, connect_db, import_work_receipts, save_post
+from blogbot.core import (
+    PostDraft,
+    claim_publication,
+    connect_db,
+    import_work_receipts,
+    publication_days,
+    save_post,
+)
 from blogbot.inputs import ContentRequest, enqueue_file
 from blogbot.life_economics import post_contract, request_contract
 from blogbot.pipeline import run_daily, save_pending
@@ -256,6 +263,66 @@ def test_scaled_ten_cannot_publish_without_five_real_reviewed_results(tmp_path, 
     prepare_publication(settings)
     with connect_db(settings.db_path) as conn, pytest.raises(ValueError, match='five verified published'):
         claim_publication(conn, 'current', settings)
+
+
+def test_historical_day_receipt_cannot_be_used_for_scaled_ten_bootstrap_proof(tmp_path, monkeypatch):
+    settings = scaled_settings(tmp_path, monkeypatch)
+    prepare_publication(settings)
+    check = {'published_date': '2026-10-24', 'timezone': 'Asia/Seoul', 'published_post_checked': True,
+             'checked_at': '2026-11-03T11:00:00+09:00', 'evidence_ref': 'offline-observation:bootstrap-0'}
+    with connect_db(settings.db_path) as conn:
+        conn.execute("UPDATE save_receipts SET published_at='', published_at_precision='day', "
+                     "publication_check_json=? WHERE request_id='bootstrap-0'", (json.dumps(check),))
+        conn.commit()
+        with pytest.raises(ValueError, match='Scaled10 bootstrap evidence'):
+            claim_publication(conn, 'current', settings)
+
+
+@pytest.mark.parametrize('day_only_count,allowed', [(3, True), (5, False)])
+def test_transition_counts_precise_and_day_publications_before_claim(tmp_path, monkeypatch, day_only_count, allowed):
+    settings = settings_at(tmp_path, monkeypatch, '2026-10-16')
+    prepare_publication(settings, saved=False)
+    records = []
+    for i, day in enumerate(['2026-10-12'] * 2 + ['2026-10-13'] * 7 + ['2026-10-14'] * 2
+                            + ['2026-10-15'] * day_only_count):
+        records.append({'request_id': f'history-{i}', 'day': '2026-10-12', 'category': 'parenting',
+                        'status': 'PUBLISHED', 'published_url': f'https://blog.naver.com/test_owner/{1000 + i}',
+                        'post_id': str(1000 + i), 'published_at': day + 'T11:00:00+09:00',
+                        'published_at_precision': 'minute'})
+        if i >= 11:
+            records[-1].update(published_at='', published_at_precision='day', publication_check={
+                'published_date': day, 'timezone': 'Asia/Seoul', 'published_post_checked': True,
+                'checked_at': '2026-10-16T08:30:00+09:00', 'evidence_ref': f'offline-list-observation:{i}'})
+    with connect_db(settings.db_path) as conn:
+        import_work_receipts(conn, {'verified_date': '2026-10-16', 'records': records},
+                             blog_id='test_owner', categories={'parenting'})
+        observed = conn.execute('SELECT * FROM save_receipts').fetchall()
+        assert len(observed) == 11 + day_only_count
+        assert sum(date(2026, 10, 15) in publication_days(row) for row in observed) == day_only_count
+        assert all(any(date(2026, 10, 12) <= d <= date(2026, 10, 16) for d in publication_days(row))
+                   for row in observed)
+    cloud.filter_ready(tmp_path, {'verified_date': '2026-10-16', 'records': []},
+                       settings.config['daily_plan'], settings)
+    assert len(json.loads((tmp_path / 'ready.json').read_text())['posts']) == 1
+    with connect_db(settings.db_path) as conn:
+        import_work_receipts(conn, {'verified_date': '2026-10-16', 'records': [{
+            'request_id': 'current', 'day': '2026-10-16', 'category': 'parenting', 'status': 'SAVED_NAVER'}]},
+            blog_id='test_owner', categories={'parenting'})
+    cloud.filter_ready(tmp_path, {'verified_date': '2026-10-16', 'records': []},
+                       settings.config['daily_plan'], settings)
+    assert len(json.loads((tmp_path / 'ready.json').read_text())['publication_ready']) == 1
+    with connect_db(settings.db_path) as conn:
+        if not allowed:
+            with pytest.raises(ValueError, match='weekly publication limit'):
+                claim_publication(conn, 'current', settings)
+            return
+        assert claim_publication(conn, 'current', settings)['status'] == 'PUBLICATION_CLAIMED'
+    publish_fixture(settings, 'current', 2000)
+    prepare_publication(settings, 'second')
+    with connect_db(settings.db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM save_receipts WHERE status='PUBLISHED'").fetchone()[0] == 15
+        with pytest.raises(ValueError, match='daily slot'):
+            claim_publication(conn, 'second', settings)
 
 
 @pytest.mark.parametrize('used,allowed', [(9, True), (10, False)])

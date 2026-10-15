@@ -15,6 +15,7 @@ from blogbot.core import (
     claim_publication,
     connect_db,
     import_work_receipts,
+    publication_days,
     save_post,
     validate_work_receipt,
 )
@@ -86,6 +87,115 @@ def published(**changes):
 def ingest(conn, *records):
     return import_work_receipts(conn, {'verified_date': '2026-10-12', 'records': list(records)},
                                 blog_id='test_owner', categories={'parenting', 'exercise'})
+
+
+def historical_day(**changes):
+    return published(request_id='historical', day='2026-10-10', published_at='', published_at_precision='day',
+                     publication_check={'published_date': '2026-10-11', 'timezone': 'Asia/Seoul',
+                         'published_post_checked': True, 'checked_at': '2026-10-12T11:30:00+09:00',
+                         'evidence_ref': 'offline-observation:historical'}, **changes)
+
+
+@pytest.mark.parametrize('changes', [
+    {'published_date': '2026-02-30'}, {'published_date': '2026-10-12'},
+    {'published_date': '2026-10-13'}, {'published_date': '2026-10-09'},
+    {'published_date': '20261011'}, {'timezone': 'UTC'}, {'published_post_checked': False},
+    {'checked_at': ''}, {'checked_at': None}, {'checked_at': '2026-10-12T11:30:00'},
+    {'checked_at': '2026-10-12T13:00:00+09:00'}, {'checked_at': '2026-10-10T11:00:00+09:00'},
+    {'evidence_ref': ''}, {'evidence_ref': '   '},
+])
+def test_historical_day_requires_past_kst_day_and_actual_checked_evidence(setup, changes):
+    evidence = historical_day()
+    evidence['publication_check'].update(changes)
+    with pytest.raises(ValueError):
+        validate_work_receipt(evidence, 'test_owner')
+
+
+@pytest.mark.parametrize('changes', [
+    {'published_url': 'https://blog.naver.com/another_owner/123456'},
+    {'published_url': 'https://blog.naver.com/test_owner/123456?redirect=1'}, {'post_id': '789'},
+    {'published_at': '2026-10-11T00:00:00+09:00'},
+    {'publish_attempted_at': '2026-10-11T10:00:00+09:00'}, {'status': 'SAVED_NAVER'},
+])
+def test_historical_day_cannot_invent_a_time_or_omit_the_owner_post(setup, changes):
+    with pytest.raises(ValueError):
+        validate_work_receipt({**historical_day(), **changes}, 'test_owner')
+
+
+def test_historical_day_is_idempotent_immutable_and_counted_once_without_time(setup):
+    with connect_db(setup.db_path) as conn:
+        ingest(conn, historical_day())
+        ingest(conn, {**historical_day(), 'published_url': 'https://m.blog.naver.com/test_owner/123456'})
+        row = dict(conn.execute('SELECT * FROM save_receipts').fetchone())
+        assert row['day'] == '2026-10-10'
+        assert row['published_at'] == row['publish_attempted_at'] == ''
+        assert row['published_at_precision'] == 'day'
+        assert publication_days(row) == {datetime.fromisoformat('2026-10-11').date()}
+        assert saved_count(conn, {**setup.config['daily_plan'], 'date': '2026-10-11'}) == 1
+        assert saved_count(conn, setup.config['daily_plan']) == 0
+        with pytest.raises(sqlite3.IntegrityError):
+            ingest(conn, {**historical_day(), 'request_id': 'duplicate'})
+        changed = historical_day()
+        changed['publication_check']['published_date'] = '2026-10-10'
+        with pytest.raises(ValueError, match='cannot be downgraded or reassigned'):
+            ingest(conn, changed)
+        with pytest.raises(ValueError, match='cannot be downgraded or reassigned'):
+            ingest(conn, {**historical_day(), 'published_at_precision': 'minute',
+                          'published_at': '2026-10-11T10:25:00+09:00'})
+        assert conn.execute('SELECT COUNT(*) FROM save_receipts').fetchone()[0] == 1
+        assert dict(conn.execute('SELECT * FROM save_receipts').fetchone()) == row
+
+
+@pytest.mark.parametrize('status', ['PUBLISHING', 'PUBLISH_UNCERTAIN'])
+def test_historical_day_cannot_resolve_an_uncertain_publication(setup, status):
+    with connect_db(setup.db_path) as conn:
+        ingest(conn, record(request_id='historical', day='2026-10-10', status=status,
+                            publish_attempted_at='2026-10-11T10:00:00+09:00'))
+        with pytest.raises(ValueError, match='cannot resolve an uncertain'):
+            ingest(conn, historical_day())
+        assert conn.execute('SELECT status FROM save_receipts').fetchone()[0] == status
+
+
+def test_historical_day_cannot_replace_an_existing_precise_publication(setup):
+    with connect_db(setup.db_path) as conn:
+        ingest(conn, published(request_id='historical', day='2026-10-10',
+                               published_at='2026-10-11T10:25:00+09:00', published_at_precision='minute'))
+        with pytest.raises(ValueError, match='cannot be downgraded or reassigned'):
+            ingest(conn, historical_day())
+        assert conn.execute('SELECT published_at FROM save_receipts').fetchone()[0] == '2026-10-11T10:25:00+09:00'
+
+
+def test_historical_day_cannot_clear_a_pending_attempt_with_a_missing_receipt(setup):
+    with connect_db(setup.db_path) as conn:
+        conn.execute("INSERT INTO attempts(request_id,day,category,status) "
+                     "VALUES('historical','2026-10-10','parenting','PUBLISHING')")
+        conn.commit()
+        with pytest.raises(ValueError, match='cannot resolve an uncertain'):
+            ingest(conn, historical_day())
+        assert conn.execute("SELECT status FROM attempts WHERE request_id='historical'").fetchone()[0] == 'PUBLISHING'
+        assert conn.execute('SELECT COUNT(*) FROM save_receipts').fetchone()[0] == 0
+
+
+def test_historical_day_survives_bundle_export_restore_and_stale_bundle_merge(setup, tmp_path, monkeypatch):
+    key = Fernet.generate_key().decode()
+    monkeypatch.setenv('BLOG_BUNDLE_KEY', key)
+    archive = tmp_path / 'old.enc'
+    pack(setup, archive)
+    target = tmp_path / 'work'
+    extract_bundle(archive.read_bytes(), target, key)
+    restored = replace(setup, db_path=target / 'blog.db', artifact_dir=target / 'drafts', inbox_dir=target / 'inbox')
+    with connect_db(restored.db_path) as conn:
+        ingest(conn, historical_day())
+        before = dict(conn.execute('SELECT * FROM save_receipts').fetchone())
+    extract_bundle(archive.read_bytes(), target, key)
+    filter_ready(target, {'verified_date': '2026-10-12', 'records': []}, setup.config['daily_plan'], restored)
+    assert len(json.loads((target / 'ready.json').read_text())['posts']) == 1
+    exported = tmp_path / 'observed.enc'
+    pack(restored, exported)
+    fresh = tmp_path / 'fresh'
+    extract_bundle(exported.read_bytes(), fresh, key)
+    with connect_db(fresh / 'blog.db') as conn:
+        assert dict(conn.execute('SELECT * FROM save_receipts').fetchone()) == before
 
 
 def test_legacy_schema_migrates_without_fabricating_publication(tmp_path):

@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-from .core import KST, PUBLICATION_PENDING, today_kst
+from .core import KST, PUBLICATION_PENDING, publication_days, today_kst
 
 
 def work_strategy(config: dict, day: date | None = None) -> dict | None:
@@ -239,9 +239,8 @@ def saved_identities(conn, day: str) -> set[str]:
     # attempts.day always remains generation/reservation day, never save evidence.
     records = conn.execute('SELECT * FROM save_receipts').fetchall()
     receipts = {r['request_id']: r['day'] for r in records}
-    identities = {r['request_id'] for r in records if r['day'] == day or any(
-        r[field] and datetime.fromisoformat(r[field]).astimezone(KST).date().isoformat() == day
-        for field in ('published_at', 'publish_attempted_at'))}
+    identities = {r['request_id'] for r in records
+                  if r['day'] == day or date.fromisoformat(day) in publication_days(r)}
     for row in conn.execute("SELECT id,request_id,draft_saved_at FROM posts WHERE status='SAVED_NAVER'"):
         identity = row['request_id'] or f"post:{row['id']}"
         if identity in receipts or not row['draft_saved_at']:

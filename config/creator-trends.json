@@ -1,27 +1,39 @@
 {
   "version": "creator-advisor-v1",
   "channel_id": "choijku",
-  "captured_at": "2026-10-15T23:04:00+09:00",
+  "captured_at": "2026-10-16T19:14:40+09:00",
   "capture_method": "authenticated_ui",
   "groups": [
     {
       "category": "parenting",
       "ui_category": "육아·결혼",
       "metric": "keyword_inflow_order",
-      "data_date": "2026-10-14",
+      "data_date": "2026-10-15",
       "source_url": "https://creator-advisor.naver.com/naver_blog/choijku/trends#trend-by-categories",
       "keyword": "",
       "entries": [
         {
-          "rank": 14,
-          "title": "아기 뒤집기 시기",
-          "url": "https://creator-advisor.naver.com/new-windows/trend-stats?endDate=2026-10-14&interval=day&query=%EC%95%84%EA%B8%B0%20%EB%92%A4%EC%A7%91%EA%B8%B0%20%EC%8B%9C%EA%B8%B0&service=naver_blog&startDate=2026-10-14",
+          "rank": 2,
+          "title": "육아휴직 급여",
+          "url": "https://creator-advisor.naver.com/new-windows/trend-stats?endDate=2026-10-15&interval=day&query=%EC%9C%A1%EC%95%84%ED%9C%B4%EC%A7%81%20%EA%B8%89%EC%97%AC&service=naver_blog&startDate=2026-10-15",
           "views": null
         },
         {
-          "rank": 18,
-          "title": "어린이집 대기신청",
-          "url": "https://creator-advisor.naver.com/new-windows/trend-stats?endDate=2026-10-14&interval=day&query=%EC%96%B4%EB%A6%B0%EC%9D%B4%EC%A7%91%20%EB%8C%80%EA%B8%B0%EC%8B%A0%EC%B2%AD&service=naver_blog&startDate=2026-10-14",
+          "rank": 6,
+          "title": "초기이유식 식단표",
+          "url": "https://creator-advisor.naver.com/new-windows/trend-stats?endDate=2026-10-15&interval=day&query=%EC%B4%88%EA%B8%B0%EC%9D%B4%EC%9C%A0%EC%8B%9D%20%EC%8B%9D%EB%8B%A8%ED%91%9C&service=naver_blog&startDate=2026-10-15",
+          "views": null
+        },
+        {
+          "rank": 15,
+          "title": "첫만남이용권 사용처",
+          "url": "https://creator-advisor.naver.com/new-windows/trend-stats?endDate=2026-10-15&interval=day&query=%EC%B2%AB%EB%A7%8C%EB%82%A8%EC%9D%B4%EC%9A%A9%EA%B6%8C%20%EC%82%AC%EC%9A%A9%EC%B2%98&service=naver_blog&startDate=2026-10-15",
+          "views": null
+        },
+        {
+          "rank": 17,
+          "title": "유치원 우선모집 조건",
+          "url": "https://creator-advisor.naver.com/new-windows/trend-stats?endDate=2026-10-15&interval=day&query=%EC%9C%A0%EC%B9%98%EC%9B%90%20%EC%9A%B0%EC%84%A0%EB%AA%A8%EC%A7%91%20%EC%A1%B0%EA%B1%B4&service=naver_blog&startDate=2026-10-15",
           "views": null
         }
       ]
@@ -30,78 +42,50 @@
       "category": "parenting",
       "ui_category": "육아·결혼",
       "metric": "search_inflow_rank",
-      "data_date": "2026-10-14",
-      "source_url": "https://creator-advisor.naver.com/new-windows/trend-stats?endDate=2026-10-14&interval=day&query=%EC%95%84%EA%B8%B0%20%EB%92%A4%EC%A7%91%EA%B8%B0%20%EC%8B%9C%EA%B8%B0&service=naver_blog&startDate=2026-10-14",
-      "keyword": "아기 뒤집기 시기",
+      "data_date": "2026-10-15",
+      "source_url": "https://creator-advisor.naver.com/new-windows/trend-stats?endDate=2026-10-15&interval=day&query=%EC%B2%AB%EB%A7%8C%EB%82%A8%EC%9D%B4%EC%9A%A9%EA%B6%8C%20%EC%82%AC%EC%9A%A9%EC%B2%98&service=naver_blog&startDate=2026-10-15",
+      "keyword": "첫만남이용권 사용처",
       "entries": [
         {
           "rank": 1,
-          "title": "아기 뒤집기 시기 신생아 터미타임, 늦어도 괜찮을까?",
-          "url": "https://blog.naver.com/el512/224436985787",
+          "title": "첫만남이용권 사용처 조회 방법, 제외 업종 체크",
+          "url": "https://blog.naver.com/dms8714/224437479626",
           "views": null
         },
         {
           "rank": 2,
-          "title": "아기 뒤집기 시기 5개월이면 느린 걸까? 신생아 발달 순서까지",
-          "url": "https://blog.naver.com/nsyncbye1004/224435270334",
+          "title": "첫만남이용권 신청부터 지급까지, 사용처와 사용기한 총정리",
+          "url": "https://blog.naver.com/oh_daeri/224441977884",
           "views": null
         },
         {
           "rank": 3,
-          "title": "아기 뒤집기 시기부터 배밀이까지 움직임 변화 어떻게 볼까?",
-          "url": "https://blog.naver.com/fds6051/224439165949",
+          "title": "국민행복카드 첫만남이용권 신청 지급 사용처 총정리 베팡 사은품 혜택",
+          "url": "https://blog.naver.com/hahastudy/224441541029",
           "views": null
         },
         {
           "rank": 4,
-          "title": "“이 행동 보이면 곧?” 아기 뒤집기 시기, 언제 시작할까요?",
-          "url": "https://blog.naver.com/ad5rable/224432680600",
+          "title": "첫만남이용권 신청 및 지급일 사용처 잔액조회까지 총정리",
+          "url": "https://blog.naver.com/gorgeous0312/224441481884",
           "views": null
         },
         {
           "rank": 5,
-          "title": "신생아 아기 뒤집기 시기 언제부터 주의사항 까지",
-          "url": "https://blog.naver.com/kimsam258025/224437552430",
-          "views": null
-        }
-      ]
-    },
-    {
-      "category": "parenting",
-      "ui_category": "육아·결혼",
-      "metric": "search_inflow_rank",
-      "data_date": "2026-10-14",
-      "source_url": "https://creator-advisor.naver.com/new-windows/trend-stats?endDate=2026-10-14&interval=day&query=%EC%96%B4%EB%A6%B0%EC%9D%B4%EC%A7%91%20%EB%8C%80%EA%B8%B0%EC%8B%A0%EC%B2%AD&service=naver_blog&startDate=2026-10-14",
-      "keyword": "어린이집 대기신청",
-      "entries": [
-        {
-          "rank": 1,
-          "title": "어린이집 대기신청 방법, 어린이집 입소대기 신청 언제 어떻게 할까?",
-          "url": "https://blog.naver.com/smfromkorea/224426126053",
+          "title": "국민행복카드 첫만남이용권 사용처 총정리! 어디서 사용할까?",
+          "url": "https://blog.naver.com/happyday_353/224357658965",
           "views": null
         },
         {
-          "rank": 2,
-          "title": "어린이집 대기신청 순번 왜 밀릴까? 입소대기 점수 총정리",
-          "url": "https://blog.naver.com/vividjane55/224421367572",
+          "rank": 6,
+          "title": "첫만남이용권 사용처 어디지? 온라인 사용, 네이버페이 결제 방법과 달라진 신청지급절차!",
+          "url": "https://blog.naver.com/yjy819/224442259270",
           "views": null
         },
         {
-          "rank": 3,
-          "title": "어린이집 대기신청 입소대기 방법 우선순위 정리",
-          "url": "https://blog.naver.com/iamfrontiet/224404017787",
-          "views": null
-        },
-        {
-          "rank": 4,
-          "title": "어린이집 입소대기 신청방법 아이사랑 우선순위 점수 총정리",
-          "url": "https://blog.naver.com/gorgeous0312/224440842182",
-          "views": null
-        },
-        {
-          "rank": 5,
-          "title": "어린이집 입소 대기신청 방법, 입소대기 순번과 희망 시기",
-          "url": "https://blog.naver.com/twinkle_mina/224440229458",
+          "rank": 7,
+          "title": "첫만남이용권 사용처 쿠팡·온라인 되나요? 200만원 직접 써보고 정리한 사용 가능 업종",
+          "url": "https://blog.naver.com/ricopapa0903/224442310070",
           "views": null
         }
       ]

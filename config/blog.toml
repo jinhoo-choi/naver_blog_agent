@@ -163,14 +163,26 @@ minute = 15
 [operations.exchange]
 automation_id = "6acdd33858288191a12a4666cf2de925"
 timezone = "Asia/Seoul"
-hours = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
+version = "night-exchange-v1"
+effective_start = "2026-10-17T22:00:00+09:00"
+hours = [0, 1, 2, 3, 4, 5, 6, 7, 8, 22, 23]
 minute = 0
-last_start_date = "2026-10-31"
 work_minutes = 55
 closing_minutes = 5
 # Planning targets, not mandatory counts or platform limits.
 per_run_target = 10
-daily_target_ceiling = 130
+daily_target_ceiling = 110
+comments_target = 10
+likes_target = 10
+new_requests_target = 10
+existing_neighbors_first = 10
+new_candidates_target = 10
+operating_window_start_hour = 22
+operating_window_last_start_hour = 8
+browser_handoff_hour = 9
+rounds_per_window = 11
+busy_recheck_minutes = 5
+report_grouping = "kst_22_to_next_08"
 
 # Optional ranking of existing eligible inputs; missing credentials preserve queue order.
 [topics]

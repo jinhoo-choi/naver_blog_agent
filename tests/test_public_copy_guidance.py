@@ -61,6 +61,9 @@ def test_every_model_path_gets_public_private_contract_without_extra_calls(
     assert [c['stage'] for c in calls] == [
         'writer', 'reviewer', 'rewrite', 'pre_review_correction']
     for call in calls:
+        assert '일반 정보 글은 썸네일 외 본문 설명 삽화 최소2장' not in call['input']
+        assert '정확히 5개 고른다' not in call['input']
+        assert '서로 다른 태그 5개인지' not in call['input']
         assert PUBLIC_COPY in call['input']
         assert quality_guidance(category, subtype, style) in call['input']
         assert 'concise-owner-v2' in call['input']

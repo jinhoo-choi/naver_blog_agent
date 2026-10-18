@@ -293,6 +293,10 @@ def _exchange_update(read, compare_and_swap, edit):
     revision, current = read()
     if revision is None or not isinstance(current, dict) or 'browser_claim' not in current:
         raise ValueError('Authoritative shared ledger revision and claim inventory are required')
+    claim = current['browser_claim']
+    if claim is not None and (not isinstance(claim, dict)
+                              or not claim.get('execution_id') or not claim.get('expires_at')):
+        raise ValueError('Unknown browser claim cannot be treated as unoccupied')
     updated = deepcopy(current)
     result = edit(updated)
     if compare_and_swap(revision, updated) is not True:

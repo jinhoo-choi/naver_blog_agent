@@ -405,6 +405,15 @@ def test_missing_shared_inventory_or_version_never_assumes_browser_free(setup):
         run.acquire(TARGETS)
 
 
+@pytest.mark.parametrize('claim', [{}, [], False, '', {'execution_id': 'unknown-expiry'}])
+def test_malformed_claim_inventory_never_means_unoccupied(setup, claim):
+    _, ledger, _, make = setup
+    ledger.state['browser_claim'] = claim
+    with pytest.raises(ValueError, match='Unknown browser claim'):
+        make().acquire(TARGETS)
+    assert ledger.state['browser_claim'] == claim
+
+
 def test_old_registration_and_not_submitted_intent_cannot_become_new_performance(setup):
     _, ledger, clock, make = setup
     run = make()

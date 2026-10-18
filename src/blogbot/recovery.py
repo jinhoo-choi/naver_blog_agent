@@ -348,7 +348,8 @@ def _recover_attribution_locked(settings, conn, request_id, plan):
         raise ValueError('Attribution review requires a completed non-passing source review')
     routed = routed_category_info(info, request.category, request.data.get('editorial_type'),
                                   request.data.get('content_style'),
-                                  investment_mode=request.provenance.get('investment_mode'))
+                                  investment_mode=request.provenance.get('investment_mode'),
+                                  provenance=request.provenance)
     expected_input = hashlib.sha256(json.dumps(
         [settings.review_model or settings.openai_model, BlogLLM._draft_data(original),
          routed, request.prompt_data()],

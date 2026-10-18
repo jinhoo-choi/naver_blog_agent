@@ -254,7 +254,21 @@ def routed_prompt(prompt: str, category: str, editorial_type: str | None = None,
 
 
 def routed_category_info(info: dict, category: str, editorial_type: str | None = None,
-                         style: str | None = None, *, investment_mode: str | None = None) -> dict:
+                         style: str | None = None, *, investment_mode: str | None = None,
+                         provenance: dict | None = None) -> dict:
+    if category == 'parenting':
+        # Route scope only; enqueue/pipeline retain slot and publication authorization.
+        origin = provenance or {}
+        autonomous = (origin.get('source') == 'work_autonomous'
+                      and origin.get('strategy_version') == 'strategy-reset-v2')
+        selection = (
+            '자율 제작: 승인된 Work 슬롯에서 Creator Advisor 최신 유효 자료·네이버 검색 '
+            '상위 본문3~5개·기존 글 중복 대조로 선정·등록한 질문에 답한다. '
+            '사용자 직접 질문이 아니라는 이유만으로 배제하지 않는다. 선정 근거가 없으면 보류하며 '
+            '질문을 사용자 발언·개인 경험으로 꾸미지 않는다.' if autonomous else
+            '수동 제작: 사용자가 실제로 입력한 질문에만 답한다. 새 주제를 자율 선정하거나 '
+            '수동 요청을 자율 제작 승인으로 바꾸지 않는다.')
+        info = {**info, 'rules': [*info.get('rules', []), selection]}
     if investment_mode == 'life-economics-v1':
         from .life_economics import RULES
         return info if all(r in info.get('rules', []) for r in RULES) else {**info, 'rules': list(RULES)}
@@ -274,6 +288,6 @@ def routed_category_info(info: dict, category: str, editorial_type: str | None =
     rules = [r for r in info.get('rules', []) if not r.startswith(
         ('질문 → 핵심 답변 →', '월령이 입력되지 않았으면'))]
     rules.append('가족 AI 튜토리얼은 육아 슬롯으로 세되 실제 환경·설정·입력·결과·실패·재현 절차를 따른다. '
-                 '관련 없는 의료 월령·진료 목차를 강제하지 않는다. 사용자가 고른 실제 질문과 '
+                 '관련 없는 의료 월령·진료 목차를 강제하지 않는다. 원본 입력에 등록된 질문과 '
                  '제공/확인된 기록만 쓰며 새 영상·개인 경험을 만들지 않는다.')
     return {**info, 'rules': rules}

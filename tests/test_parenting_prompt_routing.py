@@ -7,6 +7,7 @@ import pytest
 from test_strategy_reset import settings_at
 
 from blogbot.core import review_result
+from blogbot.editorial import IMAGES, PUBLIC_COPY, VOICE
 from blogbot.inputs import ContentRequest, enqueue_file
 from blogbot.llm import BlogLLM, _checked_review
 from blogbot.pre_review import DraftCandidate, inspect_candidate
@@ -74,6 +75,15 @@ def test_final_parenting_prompts_route_selection_and_preserve_safety(
         'writer', 'reviewer', 'rewrite', 'pre_review_correction']
     for call in calls:
         prompt = call['input']
+        # A conflict resolution must retain latest main's editor/publishing contract
+        # on every production path and for every provenance/style combination.
+        for guidance in [PUBLIC_COPY, VOICE, IMAGES]:
+            assert guidance in prompt
+        for rule in ['native-editor-features-v1', 'KRX 카드와 NXT 반영 종가',
+                     '같은 대상의 글감·URL 카드·주소를 중복 나열하지 않는다',
+                     '소유자가 직접 발행한다', '별도 재평가 루프·실제 발행을 추가하지 않으며',
+                     'concise-owner-v2', '모든 글에 일괄 강제하지 않는다']:
+            assert rule in prompt
         assert QUESTION in prompt
         assert '선우와 관련해 사용자가 실제로 입력한 질문에만 답한다. 자율 주제 선정 금지.' not in prompt
         if autonomous:

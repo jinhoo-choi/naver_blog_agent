@@ -140,3 +140,61 @@ pytest -q
 ```
 
 최종 input 원문은 테스트의 `capture_prompts(monkeypatch, settings, provenance, kind)` 반환값 중 각 call의 `input`입니다. 합성 질문·출처만 사용하며 실제 아동 정보·인증정보·개인 경험은 포함하지 않습니다.
+
+
+## PR #50 최신 main 병합 검증 — 2026-10-18 22:49 KST 재검증
+
+아래는 최초 검증 이후의 현재 병합 후보 결과다. 비교 기준은 최신 main `4d46fcc5c112831bcc48c926eeb2e259c6aea2c6`, PR 원래 head는 `e509783ffea636f1bc4483fbc04a4d65e5f70dfb`다. 최초 검증 표와 해시는 당시 이력으로 보존한다.
+
+### 충돌 해결과 보존 범위
+
+- 실제 `git merge --no-commit --no-ff origin/main`에서 충돌한 파일은 `docs/RESET_OPERATIONS.md` 하나다. PR의 육아 provenance별 범위 설명과 main의 사용자 직접 발행 문장을 함께 남겼다. 과거 자동 공개 범위 유지 문장은 복원하지 않았다.
+- `editorial.py`는 자동 병합 후 diff를 검토했다. main의 `PUBLIC_COPY`(스마트에디터·직접 발행), `VOICE`(간결한 문체), `IMAGES`(일괄 이미지 장수 강제 해제), 각 유형별 `quality_guidance` 전체 문자열은 최신 main과 동일하다.
+- 생성·검수·재작성·사전 수정에 출처 분기가 동일하게 전달된다. 수동·누락·구버전·알 수 없는 출처는 자율 권한을 얻지 않는다. 기존 회귀 테스트의 21개 출처/유형 조합에서 4단계 최종 input 모두에 최신 스마트에디터·직접 발행·중복 카드 방지 규칙이 남는지 검증을 추가했다.
+- main의 디자인·작성·템플릿·실행계약 문서 및 HTML 템플릿은 그대로 보존했다. 원문/의료 안전·경험/월령 창작 금지, 입력 등록 슬롯, 저장/공개 승인·한도·중복/불확실 제출·예약·브라우저 점유 코드와 workflow는 변경하지 않았다.
+
+### 실행 결과
+
+| 검증 | 결과 |
+|---|---|
+| 최신 main 기준 전체 회귀 | 1,475 통과, 45.91초 |
+| 충돌 해결 후 전체 회귀 | 1,505 통과, 45.91초 |
+| `ruff check src tests`, `git diff --check` | 통과 |
+| 실제 production 최종 input 비교 | 수동/자율 × 정보글/AI 튜토리얼/후기 × 생성/검수/재작성/사전 수정 = 24쌍 |
+| 최신 공통·유형별 guidance / 호출 옵션 | 24쌍 모두 동일, 요청별 육아 범위만 수정 |
+| 육아 rules 외 TOML / 연속120일 편성 | 최신 main과 동일 |
+
+실행 환경: Python 3.12.14. 응답·원문 조회만 합성 fixture로 대체했다. 유료 모델/API·브라우저·콘텐츠 제작/임시저장/발행·예약 변경/재실행은 하지 않았다. 프롬프트 비교는 전달 문자열의 일치를 확인한 것이며 실제 모델 산출물 품질이나 Work 작업 완료를 입증하지 않는다.
+
+### 최신 main과 해결 후보의 전체 input SHA-256
+
+| 요청/유형 | 단계 | 최신 main | 해결 후보 |
+|---|---|---|---|
+| manual/article | writer | `fe5c035db7a0907a7874d3f9e2fa46b041b431406db53d9aa458bfcca1d7122d` | `3e36953b3756ca119bc6b321edc324a6e5adab5ef71c239115d89d7838804640` |
+| manual/article | reviewer | `cbf80b128f8f7523b53cab205c6036f94e51a2d65045a706fd9bdb35aecc8255` | `eca270d3c1b2855456e33baf5b41dc1735240088ac48d6c49f955a5c8302a9a1` |
+| manual/article | rewrite | `b3f7a3a0847cf8ef998cff7d2d4983b8e82b9fe1c0686c3f4be83489fc39c359` | `55c90a64c012853df9e12a769de70242f5ab746149888b3084fa8d54d9ae898d` |
+| manual/article | pre_review_correction | `edc8bc601ca9e9cd4baaea9b48f9e7085b81b0d10d6234df106ae6aa93748f46` | `16ae13db603ad3af26fd3a6439c1369b7fcd1310b4e1802b1e6b085923fcaa3f` |
+| manual/ai_tutorial | writer | `131b85402bce89219f4c613b2f1a3ee241369cbeee334b4b5acc2b2b4f79c56d` | `51dc504a45036b60cb91cbdc747ada916ac54cd12933fdedfff063c9fc6a79df` |
+| manual/ai_tutorial | reviewer | `00c46fe4985ced2d848db2a9598d9d6465836c5ebdb863bd89909e26384256ac` | `743fe6f897abb7073e4cb15d619d1f79c2bc3940c95e054956529c80cc1d8c01` |
+| manual/ai_tutorial | rewrite | `366e588bc7855f7846c08ce98824072d184a4accb4acaf2bd149c469efe99cea` | `d844a416cacda23c81cdbb6741d529f423b620bd95ad0b17efa3dfe3afb34da2` |
+| manual/ai_tutorial | pre_review_correction | `2d5e112fd02c027e7499b14b0b3a7998ef777d148ceee79758fea802f3ddce2a` | `fd1415ae1cec245b4d72acf742392efb12af2a52016c48f0de944bbf7cfb570f` |
+| manual/review | writer | `90ce34558d252d9ad2f842ffe466abefec417a78b6be1306e0b5dabe991dccf5` | `3b254a0f188155530055662d038fe0074f5238a5f1684b4f0158bde91431dea2` |
+| manual/review | reviewer | `6856d77e238ff8f831dfd0af38f775f505d2ce4eaa3551c7ced1fd23f4a88b31` | `cf2d86254575b8c6933b8018dfabc8ab36074f60843812072c7b0b48b2c44153` |
+| manual/review | rewrite | `2e3a5da829318fe861057fd8fa8fe10033a185edb3b6671f21936a81d234e9aa` | `16a9474280a661a68b381189cf988ea50805e057d068b0b16dba9144d17fa18d` |
+| manual/review | pre_review_correction | `81f00d6afdc71303fc3b6ec76a155c72f6f4a5299e59cf73e406ffce91c3a131` | `377c24484f39d9e7cf79aa078fe446d93beb8f9075e51fb68e05169f0e0e087c` |
+| autonomous/article | writer | `2c1325902af0def53e6e5516868dba9b996f9a751d2cc37bb10f515a5bece153` | `2f809b46236cbd675ae2b71b88bf172fc27c7df85d44429200262687c50c1011` |
+| autonomous/article | reviewer | `cb07db7d56f976fa897f53d765fec4930750bb7b634f9b7075aafc6ccaf8eb41` | `c1291f529353577973fc7033f91ef3043aea17a3eb60215e0d84e79ac056d8d7` |
+| autonomous/article | rewrite | `d47d777efa98b4cdd11dfa2e2b7f8b6f2c30b0d60e2aa9edb52d4bb07b6bf9ad` | `5e1d35f2733f40050243783ba931f5e95f578d28690e470d9ba79d95d1734abd` |
+| autonomous/article | pre_review_correction | `a8c5d8dd9f71314d6e064590ab6f24e857f6547d9a9a7702401e147202f03af3` | `c34ab455f90561279936dc539db4d2e73f66f6fa29cd5cc39f46045252cd2b42` |
+| autonomous/ai_tutorial | writer | `bde5eb46d1c92f0c4021ece5ced7f6583e2fca148bd34c5f23e247cae6d103eb` | `0daed2f912a4ad72dad560cd0191cae90c65285bc146cd329b38fcef00ee7b0f` |
+| autonomous/ai_tutorial | reviewer | `c2aa621c083e3c53c743343b3fd583c576ef608f6fd691d65f094c4935b17514` | `0bb76e70736ac25ead2a055973647b1ebfd9ca154ab25b1690146109a02098f9` |
+| autonomous/ai_tutorial | rewrite | `d548350a6c01a061a1a280fbe0ce0ac6b4e4e3557e4f93bf08e32226252a415e` | `71a79fa25369209da3cee87cd1a3323e1c7928c8e011c4fdc98c1ecfdde64237` |
+| autonomous/ai_tutorial | pre_review_correction | `a43c7596ee2f42c3dfd10aff5fe8046e0f397f508706c35aabebdb35a878bc76` | `ba4bbb734db69b5d32489baf2b6e6ff178d7e20448be896b6b5d9cd126d2acde` |
+| autonomous/review | writer | `87fa214baeff222f99eb4a196f0a0d69a502c7b55eccf393f2373f0b4fd14e8a` | `ed6ba51bb148110b1795b9d6ad00a7e6787030346bd084a37a67f5433ccc7b67` |
+| autonomous/review | reviewer | `f6e4084326c95285078f98ecd1689158fede232b3faeebc932574a5785f054e3` | `fdcf4764382ed5a7485b59f68ac48b27c9f361d62d9094ab72e169d6a0c1ccdf` |
+| autonomous/review | rewrite | `72462c7d4203815ed1d1837eb80a40a58e59307e164d929a444f3a7b7ee5c95f` | `886df0fd27aa03fb4157679f64de333bda7c3d69cf2b0d384b782bb5bec37d6b` |
+| autonomous/review | pre_review_correction | `b78f7dbdf7e405059f2b2bc9174d1bcd171967dd23608617f762e8c6c64d9659` | `546780f1924e2ba01abaa589584260d786cf227616b0a7ea6620fb40aded07c5` |
+
+### 운영 적용 범위
+
+이 검증은 병합 후보 코드/지침과 프롬프트까지다. 병합 후 main을 새로 checkout하는 API 경로가 변경을 소비하며, Work의 실제 지침 재조회·실행 코드 pin 갱신/소비와 10/19 콘텐츠의 실제 저장·평가 결과는 별도 운영 증거가 필요하다. 이미 생성/검수된 packet의 입력 해시를 변경하거나 기존 작업·예약을 재실행하지 않는다. 현재 종료점은 임시저장→평가→수정→보고, 실제 공개는 사용자 직접 발행이다.

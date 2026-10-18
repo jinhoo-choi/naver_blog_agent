@@ -201,7 +201,7 @@ class BlogLLM:
         recent_titles: list[str],
         *, raw: bool = False,
     ):
-        category_info = routed_category_info(category_info, request.category, request.data.get('editorial_type'), request.data.get('content_style'), investment_mode=request.provenance.get('investment_mode'))
+        category_info = routed_category_info(category_info, request.category, request.data.get('editorial_type'), request.data.get('content_style'), investment_mode=request.provenance.get('investment_mode'), provenance=request.provenance)
         category_key = request.category
         display = category_info["display_name"]
         subcats = ", ".join(category_info["subcategories"])
@@ -223,7 +223,7 @@ class BlogLLM:
 아래 원본 입력의 주제만 글로 작성한다. 다른 글감을 선택하거나 빈 정보를 창작하지 않는다.
 원본 입력(JSON): {json.dumps(request.prompt_data(), ensure_ascii=False)}
 요리는 이 입력의 레시피만 사용한다. 사진은 따로 첨부되므로 캡션 밖의 모습을 추측하지 않는다.
-육아는 입력된 실제 질문에 답한다. 선우의 월령·증상·경험을 추정하지 않는다.
+육아는 원본 입력에 등록된 핵심 질문에 답한다. 자율 선정 질문을 사용자 실제 발언으로 바꾸지 않는다. 선우의 월령·증상·경험을 추정하지 않는다.
 {('생활경제는 실제 소유자 질문과 등록된 공식 sources를 시작점으로 삼고 해당 원문으로 근거를 대조한다. source_urls는 등록된 sources URL만 쓴다.' if request.provenance.get('investment_mode') == 'life-economics-v1' else '투자는 기존 봇의 facts/src/body를 시작점으로 삼고 검색으로 근거를 확인한다.')}
 primary_evidence가 있으면 실제 공시 본문이다. 봇 요약과 충돌하면 원문을 우선한다.
 DART 표지·검색 요약만으로 계약 내용이나 정정 사유를 확정하지 않는다.
@@ -272,7 +272,7 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
     def correct_draft(self, candidate, category_info, issue_codes, request, *, cache_only=False):
         """One pre-review correction; no search or truncation retry, no new evidence."""
         from .pre_review import DraftCandidate
-        category_info = routed_category_info(category_info, request.category, request.data.get('editorial_type'), request.data.get('content_style'), investment_mode=request.provenance.get('investment_mode'))
+        category_info = routed_category_info(category_info, request.category, request.data.get('editorial_type'), request.data.get('content_style'), investment_mode=request.provenance.get('investment_mode'), provenance=request.provenance)
         prompt = f"""
 {routed_prompt(self.writer_prompt, request.category, request.data.get('editorial_type'), request.data.get('content_style'), investment_mode=request.provenance.get('investment_mode'))}
 {quality_guidance(request.category, request.data.get('editorial_type'), request.data.get('content_style'), investment_mode=request.provenance.get('investment_mode'))}
@@ -310,7 +310,7 @@ source_urls와 본문 URL은 아래 실제 관찰 URL 중에서만 선택하세�
                attribution_review: bool = False) -> dict:
         if attribution_review and not single_attempt:
             raise ValueError('Attribution review requires its fixed single-attempt slot')
-        category_info = routed_category_info(category_info, request.category, request.data.get('editorial_type'), request.data.get('content_style'), investment_mode=request.provenance.get('investment_mode'))
+        category_info = routed_category_info(category_info, request.category, request.data.get('editorial_type'), request.data.get('content_style'), investment_mode=request.provenance.get('investment_mode'), provenance=request.provenance)
         original_identity = json.dumps([self.review_model, self._draft_data(post), category_info,
                                         request.prompt_data()], sort_keys=True)
         from .research import prepare_reference_evidence
@@ -379,7 +379,7 @@ source_urls와 본문 URL은 아래 실제 관찰 URL 중에서만 선택하세�
         self, post: PostDraft, category_info: dict, review: dict, request: ContentRequest,
         *, cache_only: bool = False, single_attempt: bool = False, raw: bool = False,
     ) -> PostDraft:
-        category_info = routed_category_info(category_info, request.category, request.data.get('editorial_type'), request.data.get('content_style'), investment_mode=request.provenance.get('investment_mode'))
+        category_info = routed_category_info(category_info, request.category, request.data.get('editorial_type'), request.data.get('content_style'), investment_mode=request.provenance.get('investment_mode'), provenance=request.provenance)
         original_identity = json.dumps([self.model, self._draft_data(post), category_info,
                                         review, request.prompt_data()], sort_keys=True)
         if not cache_only:

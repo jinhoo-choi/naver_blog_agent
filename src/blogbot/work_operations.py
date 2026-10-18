@@ -1,7 +1,8 @@
-"""Metadata-only manual Work requests; no generation, browser clicks or publication.
+"""Metadata-only Work requests and externally versioned exchange lifecycle guards.
 
 The operator verifies the actual owner instruction and browser ledger first.
-This local journal is not a distributed browser lock or a paid-call approval.
+The manual local journal is not a distributed browser lock or a paid-call approval.
+Exchange coordination requires injected authoritative external read/CAS operations.
 """
 from __future__ import annotations
 
@@ -9,8 +10,10 @@ import hashlib
 import json
 import re
 import sqlite3
-from contextlib import closing
-from datetime import date, datetime
+import uuid
+from contextlib import closing, contextmanager
+from copy import deepcopy
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from .core import KST, today_kst
@@ -258,3 +261,286 @@ def merge_record(local, incoming):
                 or _stamp(newer['result']['checked_at']) < _stamp(older['result']['checked_at'])):
             raise ValueError('Uncertain manual Work needs later observation without another submission')
     return newer
+
+
+def exchange_slot(config, scheduled_at, now):
+    """Use the scheduler's original occurrence, never the delayed invocation hour."""
+    slot, now = (datetime.fromisoformat(value) if isinstance(value, str) else value
+                 for value in (scheduled_at, now))
+    if slot.tzinfo is None or now.tzinfo is None:
+        raise ValueError('Exchange times require timezone offsets')
+    slot, now = slot.astimezone(KST), now.astimezone(KST)
+    policy = config['operations']['exchange']
+    if (slot.hour not in {22, 23, *range(9)} or slot.hour not in policy['hours']
+            or slot.minute != policy['minute']
+            or slot.second or slot.microsecond
+            or slot < datetime.fromisoformat(policy['effective_start'])):
+        raise ValueError('An original scheduled night occurrence is required')
+    night = (slot - timedelta(days=1)).date() if slot.hour <= 8 else slot.date()
+    finish = min(slot + timedelta(hours=1),
+                 datetime.combine(night + timedelta(days=1), datetime.min.time(), KST)
+                 + timedelta(hours=9))
+    cutoff = min(slot + timedelta(minutes=policy['work_minutes']),
+                 finish - timedelta(minutes=policy['closing_minutes']))
+    return {'slot_id': 'night-exchange-' + slot.strftime('%Y%m%dT%H%M%S') + '-KST',
+            'night_id': night.isoformat() + '-night', 'scheduled_at': slot.isoformat(),
+            'work_cutoff': cutoff.isoformat(), 'finish_deadline': finish.isoformat(),
+            'phase': ('EARLY' if now < slot else 'WORK' if now < cutoff
+                      else 'CLOSING' if now < finish else 'EXPIRED')}
+
+
+def _exchange_update(read, compare_and_swap, edit):
+    revision, current = read()
+    if revision is None or not isinstance(current, dict) or 'browser_claim' not in current:
+        raise ValueError('Authoritative shared ledger revision and claim inventory are required')
+    claim = current['browser_claim']
+    if claim is not None and (not isinstance(claim, dict)
+                              or not claim.get('execution_id') or not claim.get('expires_at')):
+        raise ValueError('Unknown browser claim cannot be treated as unoccupied')
+    updated = deepcopy(current)
+    result = edit(updated)
+    if compare_and_swap(revision, updated) is not True:
+        raise RuntimeError('Exchange ledger version conflict; no action permitted')
+    return result
+
+
+def _exchange_receipt(action, proof, now):
+    if (action['status'] not in {'UNCERTAIN', 'VERIFIED'} or not isinstance(proof, dict)
+            or proof.get('kind') != action['kind'] or proof.get('target_id') != action['target_id']
+            or proof.get('registered') is not True or proof.get('owned') is not True
+            or not isinstance(proof.get('native_id'), str) or not proof['native_id'].strip()
+            or not isinstance(proof.get('evidence_ref'), str) or not proof['evidence_ref'].strip()):
+        raise ValueError('Only observed native registration evidence counts as performance')
+    checked = datetime.fromisoformat(proof['checked_at'])
+    registered = datetime.fromisoformat(proof['registered_at'])
+    attempted = datetime.fromisoformat(action['attempted_at'])
+    if (checked.tzinfo is None or registered.tzinfo is None
+            or not attempted <= registered <= checked <= now):
+        raise ValueError('Registration evidence must follow the original intent')
+
+
+def reconcile_exchange_action(read, compare_and_swap, action_id, proof, now):
+    """Read-only native reconciliation after a failed result write; never submit again."""
+    def edit(state):
+        action = state['exchange_actions'][action_id]
+        _exchange_receipt(action, proof, now)
+        if action['status'] == 'VERIFIED' and action['proof'] != proof:
+            raise ValueError('Existing native registration evidence cannot be replaced')
+        action.update(status='VERIFIED', proof=deepcopy(proof))
+    _exchange_update(read, compare_and_swap, edit)
+
+
+class ExchangeRun:
+    """Metadata guard for an already-authorized external Work executor.
+
+    read/CAS must cover the SAME shared external ledger as writing/manual runs.
+    This does not connect a browser, grant permission or provide a local-lock fallback.
+    """
+
+    def __init__(self, config, scheduled_at, execution_id, read, compare_and_swap,
+                 execution_status, clock):
+        if not _slug(execution_id):
+            raise ValueError('A unique actual execution ID is required')
+        self.config, self.scheduled_at, self.execution_id = config, scheduled_at, execution_id
+        self.read, self.compare_and_swap = read, compare_and_swap
+        self.execution_status, self.clock = execution_status, clock
+        self.slot = exchange_slot(config, scheduled_at, clock())
+        self.token = uuid.uuid4().hex
+        self.acquired = False
+
+    def acquire(self, targets):
+        """One caller wins a slot; TTL alone never releases a living or unknown run."""
+        now = self.clock()
+        self.slot = exchange_slot(self.config, self.scheduled_at, now)
+        if (set(targets) != {'comments', 'likes', 'outgoing_requests'}
+                or any(type(n) is not int or n < 0 for n in targets.values())
+                or targets['comments'] != 10 or targets['likes'] != 10
+                or targets['outgoing_requests'] > 20):
+            raise ValueError('Keep the approved pre-action targets')
+
+        def edit(state):
+            runs = state.setdefault('exchange_runs', {})
+            previous = runs.get(self.slot['slot_id'])
+            if previous and (previous.get('invocation_token') != self.token
+                             or previous['status'] != 'WAITING'):
+                return False  # No slot replay, including failed/expired/uncertain runs.
+            record = previous or {**self.slot, 'execution_id': self.execution_id,
+                                  'invocation_token': self.token, 'invoked_at': now.isoformat(),
+                                  'targets': dict(targets)}
+            runs[self.slot['slot_id']] = record
+            if record['targets'] != targets:
+                raise ValueError('A slot target cannot be changed retrospectively')
+            if self.slot['phase'] != 'WORK':
+                record.update(status=('WAITING' if self.slot['phase'] == 'EARLY'
+                                      else 'NOT_EXECUTED'), reason=self.slot['phase'])
+                return False
+            claim = state.get('browser_claim')
+            if claim:
+                expiry = datetime.fromisoformat(claim['expires_at'])
+                if expiry.tzinfo is None:
+                    raise ValueError('Unknown browser lease expiry; preserve the claim')
+                terminal = None
+                if expiry <= now:
+                    try:
+                        terminal = self.execution_status(claim['execution_id'])
+                    except (OSError, RuntimeError):
+                        terminal = None
+                if not terminal or terminal.get('execution_id') != claim['execution_id']:
+                    record.update(status='WAITING', reason='BROWSER_BUSY_OR_UNCONFIRMED')
+                    return False
+                checked = datetime.fromisoformat(terminal['checked_at'])
+                if (terminal.get('status') not in {'completed', 'failed', 'cancelled'}
+                        or terminal.get('browser_work_ended') is not True
+                        or checked.tzinfo is None or not expiry <= checked <= now
+                        or now - checked > timedelta(minutes=5) or not terminal.get('evidence_ref')):
+                    record.update(status='WAITING', reason='BROWSER_BUSY_OR_UNCONFIRMED')
+                    return False
+                state.setdefault('browser_releases', []).append(
+                    {**claim, 'released_at': now.isoformat(), 'reason': 'EXPIRED_AND_TERMINAL',
+                     'terminal_evidence': deepcopy(terminal)})
+                state['browser_claim'] = None
+                old = next((r for r in runs.values()
+                            if r['execution_id'] == claim['execution_id']), None)
+                if old:
+                    old.update(status='UNCONFIRMED', reason='ABNORMAL_TERMINATION',
+                               reconciled_at=checked.isoformat())
+            if exchange_slot(self.config, self.scheduled_at, self.clock())['phase'] != 'WORK':
+                record.update(status='NOT_EXECUTED', reason='CUTOFF_DURING_ACQUISITION')
+                return False
+            state['browser_claim'] = {'execution_id': self.execution_id,
+                                      'invocation_token': self.token,
+                                      'slot_id': self.slot['slot_id'],
+                                      'expires_at': self.slot['finish_deadline']}
+            record.update(status='RUNNING', started_at=now.isoformat(), reason='')
+            return True
+        self.acquired = _exchange_update(self.read, self.compare_and_swap, edit)
+        if (self.acquired
+                and exchange_slot(self.config, self.scheduled_at, self.clock())['phase'] != 'WORK'):
+            def expired(state):
+                state['exchange_runs'][self.slot['slot_id']].update(
+                    status='NOT_EXECUTED', reason='CUTOFF_DURING_ACQUISITION')
+            try:
+                _exchange_update(self.read, self.compare_and_swap, expired)
+            finally:
+                self.close()
+        return self.acquired
+
+    def perform(self, kind, target_id, submit):
+        """Persist uncertainty BEFORE an authorized submission; never retry a target.
+
+        submit receives the absolute cutoff and must bound every browser call by it.
+        Permission/access checks remain the executor's existing responsibility.
+        """
+        if kind not in {'comments', 'likes', 'outgoing_requests', 'replies'} or not target_id:
+            raise ValueError('An exact native action target is required')
+        now = self.clock()
+        if (not self.acquired or exchange_slot(self.config, self.scheduled_at, now)['phase'] != 'WORK'):
+            raise ValueError('No new submission outside the original work window')
+        action_id = digest({'kind': kind, 'target_id': target_id})
+
+        def edit(state):
+            claim = state.get('browser_claim')
+            if (not claim or claim['execution_id'] != self.execution_id
+                    or claim.get('invocation_token') != self.token):
+                raise ValueError('The current run does not own the browser')
+            actions = state.setdefault('exchange_actions', {})
+            if action_id in actions:
+                raise ValueError('Existing submission or uncertainty requires read-only reconciliation')
+            if kind != 'replies':
+                used = sum(a['slot_id'] == self.slot['slot_id'] and a['kind'] == kind
+                           and a['status'] != 'NOT_SUBMITTED' for a in actions.values())
+                if used >= state['exchange_runs'][self.slot['slot_id']]['targets'][kind]:
+                    raise ValueError('Original slot submission target is already consumed')
+            actions[action_id] = {'kind': kind, 'target_id': target_id,
+                                  'execution_id': self.execution_id, 'slot_id': self.slot['slot_id'],
+                                  'night_id': self.slot['night_id'], 'status': 'UNCERTAIN',
+                                  'attempted_at': now.isoformat()}
+        _exchange_update(self.read, self.compare_and_swap, edit)
+        # Recheck after ledger I/O: a delayed CAS cannot extend the action window.
+        if exchange_slot(self.config, self.scheduled_at, self.clock())['phase'] != 'WORK':
+            def not_submitted(state):
+                state['exchange_actions'][action_id]['status'] = 'NOT_SUBMITTED'
+            _exchange_update(self.read, self.compare_and_swap, not_submitted)
+            raise ValueError('Work cutoff elapsed during intent persistence; no submission')
+        proof = submit(datetime.fromisoformat(self.slot['work_cutoff']))
+        reconcile_exchange_action(self.read, self.compare_and_swap, action_id, proof, self.clock())
+        return proof
+
+    def close(self, failed=False):
+        """Finally cleanup uses fresh CAS snapshots and releases only this execution."""
+        now = self.clock()
+
+        def edit(state):
+            record = state.get('exchange_runs', {}).get(self.slot['slot_id'])
+            if not record or record.get('invocation_token') != self.token:
+                return
+            uncertain = any(a['execution_id'] == self.execution_id and a['status'] == 'UNCERTAIN'
+                            for a in state.get('exchange_actions', {}).values())
+            if record['status'] in {'RUNNING', 'WAITING'}:
+                record.update(status=('FAILED' if failed else 'UNCONFIRMED' if uncertain
+                                      else 'COMPLETED' if self.acquired else 'NOT_EXECUTED'),
+                              ended_at=now.isoformat())
+            record.setdefault('ended_at', now.isoformat())
+            claim = state.get('browser_claim')
+            if (claim and claim['execution_id'] == self.execution_id
+                    and claim.get('invocation_token') == self.token):
+                state['browser_claim'] = None
+                state.setdefault('browser_releases', []).append(
+                    {**claim, 'released_at': now.isoformat(), 'reason': 'OWN_FINALLY'})
+        for attempt in range(3):
+            try:
+                _exchange_update(self.read, self.compare_and_swap, edit)
+                self.acquired = False
+                return
+            except (OSError, RuntimeError):
+                if attempt == 2:
+                    raise  # Keep failure visible; never claim a successful release.
+
+
+@contextmanager
+def exchange_run(config, scheduled_at, execution_id, read, compare_and_swap,
+                 execution_status, clock, targets):
+    run = ExchangeRun(config, scheduled_at, execution_id, read, compare_and_swap,
+                      execution_status, clock)
+    failed = True
+    try:
+        run.acquire(targets)
+        yield run
+        failed = False
+    finally:
+        run.close(failed=failed)
+
+
+def exchange_report(config, night, state, now):
+    """All eleven slots, including missing past invocations; native receipts only."""
+    start = datetime.combine(date.fromisoformat(night), datetime.min.time(), KST)
+    start += timedelta(hours=22)
+    seen, rows = set(), []
+    for offset in range(11):
+        slot = exchange_slot(config, start + timedelta(hours=offset), now)
+        record = state.get('exchange_runs', {}).get(slot['slot_id'])
+        counts = dict.fromkeys(('comments', 'likes', 'outgoing_requests', 'replies'), 0)
+        uncertain = 0
+        for action in state.get('exchange_actions', {}).values():
+            if action['slot_id'] != slot['slot_id']:
+                continue
+            if action['status'] == 'NOT_SUBMITTED':
+                continue
+            if action['status'] != 'VERIFIED':
+                uncertain += 1
+                continue
+            _exchange_receipt(action, action['proof'], now)
+            identity = (action['kind'], action['proof']['native_id'])
+            if identity not in seen:
+                counts[action['kind']] += 1
+                seen.add(identity)
+        status = record['status'] if record else ('SCHEDULED' if slot['phase'] == 'EARLY'
+                                                 else 'UNCONFIRMED')
+        if status in {'RUNNING', 'WAITING'} and slot['phase'] == 'EXPIRED':
+            status = 'UNCONFIRMED'
+        rows.append({**slot, 'status': status, 'verified': counts, 'uncertain': uncertain,
+                     'targets': record['targets'] if record else None,
+                     **{key: record.get(key) if record else None for key in
+                        ('execution_id', 'invoked_at', 'started_at', 'ended_at',
+                         'reconciled_at', 'reason')}})
+    return rows

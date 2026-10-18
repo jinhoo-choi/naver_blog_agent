@@ -392,7 +392,8 @@ def claim_publication(conn: sqlite3.Connection, request_id: str, settings) -> di
                     continue
                 if any(week_start <= day <= today_kst() for day in publication_days(receipt)):
                     weekly.add(receipt['request_id'])
-            if len(weekly) >= plan['weekly_publication_limit']:
+            if (plan['weekly_publication_limit'] is not None
+                    and len(weekly) >= plan['weekly_publication_limit']):
                 raise ValueError('Focused strategy weekly publication limit reached')
         row = conn.execute('SELECT * FROM save_receipts WHERE request_id=?', (request_id,)).fetchone()
         if not row or row['status'] != 'SAVED_NAVER' or row['day'] != today_kst().isoformat():

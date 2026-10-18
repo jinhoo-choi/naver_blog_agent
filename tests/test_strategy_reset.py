@@ -107,11 +107,31 @@ def test_transition_week_does_not_reset_counts_or_extend_past_october_18():
     config = tomllib.loads((Path(__file__).parents[1] / 'config/blog.toml').read_text())
     assert resolve_plan(config, date(2026, 10, 16))['weekly_publication_limit'] == 16
     assert resolve_plan(config, date(2026, 10, 17))['weekly_publication_limit'] == 16
-    assert resolve_plan(config, date(2026, 10, 18))['weekly_publication_limit'] == 16
-    assert resolve_plan(config, date(2026, 10, 18))['target'] == 0
+    assert resolve_plan(config, date(2026, 10, 18))['weekly_publication_limit'] is None
+    assert resolve_plan(config, date(2026, 10, 18))['target'] == 1
     assert resolve_plan(config, date(2026, 10, 19))['weekly_publication_limit'] == 5
     del config['strategy_reset']['transition_week']
     assert resolve_plan(config, date(2026, 10, 16))['weekly_publication_limit'] == 5
+
+
+@pytest.mark.parametrize('field,value', [
+    ('date', '2026-10-19'), ('category', 'origins'),
+    ('weekly_publication_limit', False), ('weekly_publication_limit', 99),
+    ('additional_manual_topics', ['줴줴이야', '티원']),
+])
+def test_owner_october_18_override_cannot_expand_scope(field, value):
+    config = tomllib.loads((Path(__file__).parents[1] / 'config/blog.toml').read_text())
+    config['strategy_reset']['owner_day_override'][field] = value
+    with pytest.raises(ValueError, match='Invalid owner Oct 18'):
+        resolve_plan(config, date(2026, 10, 18))
+
+
+def test_removed_owner_override_restores_prior_sunday_hold():
+    config = tomllib.loads((Path(__file__).parents[1] / 'config/blog.toml').read_text())
+    del config['strategy_reset']['owner_day_override']
+    plan = resolve_plan(config, date(2026, 10, 18))
+    assert plan['target'] == 0
+    assert plan['weekly_publication_limit'] == 16
 
 
 def test_api_preparation_and_saver_never_invent_an_owner_input(tmp_path, monkeypatch):
@@ -481,6 +501,22 @@ def test_transition_claim_counts_every_prior_publication(tmp_path, monkeypatch, 
             with pytest.raises(ValueError, match='weekly publication limit'):
                 claim_publication(conn, 'current', settings)
             assert conn.execute("SELECT status FROM save_receipts WHERE request_id='current'").fetchone()[0] == 'SAVED_NAVER'
+
+
+@pytest.mark.parametrize('used', [18, 40])
+def test_october_18_owner_removal_allows_claim_without_erasing_history(tmp_path, monkeypatch, used):
+    settings = settings_at(tmp_path, monkeypatch, '2026-10-18')
+    prepare_publication(settings)
+    with connect_db(settings.db_path) as conn:
+        for i in range(used):
+            conn.execute('INSERT INTO save_receipts(request_id,day,category,status,published_at) '
+                         'VALUES(?,?,?,?,?)', (f'prior-{i}', '2026-10-17', 'origins', 'PUBLISHED',
+                                              '2026-10-17T10:00:00+09:00'))
+        conn.commit()
+        assert claim_publication(conn, 'current', settings)['status'] == 'PUBLICATION_CLAIMED'
+        assert conn.execute("SELECT COUNT(*) FROM save_receipts WHERE status='PUBLISHED'").fetchone()[0] == used
+        with pytest.raises(ValueError):
+            claim_publication(conn, 'current', settings)
 
 
 def test_transition_limit_still_rejects_a_second_publication_on_the_same_day(tmp_path, monkeypatch):

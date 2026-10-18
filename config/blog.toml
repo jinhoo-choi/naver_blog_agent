@@ -374,3 +374,11 @@ week_cycle = [
 ]
 topic_selection = "autonomous_verified"
 executor = "work_project"
+
+# Owner 2026-10-18 10:00 KST: remove this week's cap and Sunday's hold.
+# The two requested memes use the existing separate owner-directed Work path.
+[strategy_reset.owner_day_override]
+date = "2026-10-18"
+category = "parenting"
+weekly_publication_limit = 0
+additional_manual_topics = ["씩스세븐", "티원"]

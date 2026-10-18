@@ -37,6 +37,15 @@ def work_strategy(config: dict, day: date | None = None) -> dict | None:
     weekly_limit = policy['weekly_publication_limit']
     if transition and transition['start_date'] <= day.isoformat() <= transition['end_date']:
         weekly_limit = transition['publication_limit']
+    override = policy.get('owner_day_override')
+    if override is not None and (override != {
+            'date': '2026-10-18', 'category': 'parenting', 'weekly_publication_limit': 0,
+            'additional_manual_topics': ['씩스세븐', '티원']}
+            or type(override.get('weekly_publication_limit')) is not int):
+        raise ValueError('Invalid owner Oct 18 publication override')
+    owner_day = bool(override and override['date'] == day.isoformat())
+    if owner_day:
+        weekly_limit = None  # Explicit owner removal, never a fabricated remaining quota.
     if stage == 'scaled10':
         proof = policy.get('scale_evidence', {})
         if not isinstance(proof, dict):
@@ -69,6 +78,8 @@ def work_strategy(config: dict, day: date | None = None) -> dict | None:
     elapsed = (day - date.fromisoformat(policy['start_date'])).days
     phase = 'audit' if elapsed < 2 else 'pilot' if elapsed < 7 else 'focused'
     category = slots[day.weekday()]
+    if owner_day:
+        category = override['category']
     target = daily_limit if category and day >= date.fromisoformat(policy['publication_start']) else 0
     return {'version': policy['version'], 'date': day.isoformat(), 'target': target,
             'category': category or 'parenting', 'depth': 'deep', 'work_managed': True,

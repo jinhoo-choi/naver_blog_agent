@@ -198,3 +198,43 @@ pytest -q
 ### 운영 적용 범위
 
 이 검증은 병합 후보 코드/지침과 프롬프트까지다. 병합 후 main을 새로 checkout하는 API 경로가 변경을 소비하며, Work의 실제 지침 재조회·실행 코드 pin 갱신/소비와 10/19 콘텐츠의 실제 저장·평가 결과는 별도 운영 증거가 필요하다. 이미 생성/검수된 packet의 입력 해시를 변경하거나 기존 작업·예약을 재실행하지 않는다. 현재 종료점은 임시저장→평가→수정→보고, 실제 공개는 사용자 직접 발행이다.
+
+
+## 정적 프롬프트 잔여 충돌 후속 검증 — 2026-10-18 22:55 KST
+
+PR #50은 `a4fa4b0047523dd230be627dbc19510b3a7bd215`로 병합됐으며 [PR CI](https://github.com/jinhoo-choi/naver_blog_agent/actions/runs/39133317830)와 [main CI](https://github.com/jinhoo-choi/naver_blog_agent/actions/runs/39133444944) 모두 1,505건·린트가 통과했다.
+
+병합 후 전체 문장 의미를 추가 대조하면서, 최신 main의 `RESET_DESIGN`·`TEMPLATES`·동적 guidance가 가변 수량을 지정하는 반면 정적 `prompts/writer.md`·`reviewer.md`에는 본문삽화 최소2장·태그 정확히5개가 남아 있음을 확인했다. 후속 변경은 이 두 문장의 최신 기준 정렬과 기존 최종input 테스트의 검증 추가뿐이다.
+
+- 일반 정보글 자료 수는 설명 역할에 따라 정한다. 개별 요청의 최소2장 등 명시 조건, 유래 썸네일, 후기/AI 원본 증거, 생성 상한·캐시·예산은 유지한다.
+- 태그는 실제 주제에 맞는 소수(보통3~5개)다. 개수만으로 감점·재작성·유료 호출을 요구하지 않으며 무관/중복 태그 보완과 본문/JSON 분리는 유지한다.
+- 새 회귀 assertion을 수정 전 코드에서 실행: 8실패·1통과(9개 유형). 수정 후 같은 9개 유형이 통과하며 각 유형의 생성·검수·재작성·사전수정 최종input을 검사한다.
+- 수정 후 전체 1,505건 통과(36.26초), `ruff check src tests`·`git diff --check` 통과.
+- 아래 24쌍 최종input을 다시 비교했다. 동적 guidance·전체 TOML·120일 편성·호출 옵션은 그대로다. 코드·예약·승인·중복방지·진행 중 작업/고정 packet은 변경하지 않았다. 실제 콘텐츠/모델/API/브라우저 실행은 없다.
+
+| 요청/유형 | 단계 | PR #50 병합본 | 후속 해결 후보 |
+|---|---|---|---|
+| manual/article | writer | `3e36953b3756ca119bc6b321edc324a6e5adab5ef71c239115d89d7838804640` | `0c8c6a6370bbbfff16d03c97d66e76298cf806f2eb9765bd2c54e94ec19bf3d4` |
+| manual/article | reviewer | `eca270d3c1b2855456e33baf5b41dc1735240088ac48d6c49f955a5c8302a9a1` | `78fe93b3c9879aaed9f6995753aa4fed594732c05d111ac95cd3b9585f125881` |
+| manual/article | rewrite | `55c90a64c012853df9e12a769de70242f5ab746149888b3084fa8d54d9ae898d` | `e674aaf927fd67f6cbda05f711e43e27f8e2aa18319b80e7828f20c6f3b81cd1` |
+| manual/article | pre_review_correction | `16ae13db603ad3af26fd3a6439c1369b7fcd1310b4e1802b1e6b085923fcaa3f` | `a48bd7938564680b9bb6d431c3f8756a285ceded2b75605d56b9e96439a07a68` |
+| manual/ai_tutorial | writer | `51dc504a45036b60cb91cbdc747ada916ac54cd12933fdedfff063c9fc6a79df` | `3de06d82f72e5ce76169e60e57d5e55e2d0b8264693cfd9f4c5749b7a21faead` |
+| manual/ai_tutorial | reviewer | `743fe6f897abb7073e4cb15d619d1f79c2bc3940c95e054956529c80cc1d8c01` | `a199dfd33da605c4d5b12f4d5328efa0b0351f6606e2015f98714df4c10aff79` |
+| manual/ai_tutorial | rewrite | `d844a416cacda23c81cdbb6741d529f423b620bd95ad0b17efa3dfe3afb34da2` | `805411dd58162a6fbaa7792822a32984544ecb02ef52d4a85c76aa6e0edb7d84` |
+| manual/ai_tutorial | pre_review_correction | `fd1415ae1cec245b4d72acf742392efb12af2a52016c48f0de944bbf7cfb570f` | `47a1ccf4e1bac600992be946cb2875ef05327fb98c5b29be5f2ddf62f4c7c2bb` |
+| manual/review | writer | `3b254a0f188155530055662d038fe0074f5238a5f1684b4f0158bde91431dea2` | `d7853aa427a83c38fa19da16417b38eae70b099d7becc97cf80539f55b70e8da` |
+| manual/review | reviewer | `cf2d86254575b8c6933b8018dfabc8ab36074f60843812072c7b0b48b2c44153` | `0394a224709888596c6c56682f25b0cc2eb586864dee08f564d491d064b1c094` |
+| manual/review | rewrite | `16a9474280a661a68b381189cf988ea50805e057d068b0b16dba9144d17fa18d` | `76ca27398fd4cdfe1f8d19be82b5e5fc2df9739305b686d73e2cf50062a1674c` |
+| manual/review | pre_review_correction | `377c24484f39d9e7cf79aa078fe446d93beb8f9075e51fb68e05169f0e0e087c` | `fe0977fe25e6982deb7bc581657b5372d632d6fe06c61a225562a6f1668fe1d8` |
+| autonomous/article | writer | `2f809b46236cbd675ae2b71b88bf172fc27c7df85d44429200262687c50c1011` | `69710313d122bae59ffb3a22152e44c8054281a4b5756d00f91cc30dc18fd37c` |
+| autonomous/article | reviewer | `c1291f529353577973fc7033f91ef3043aea17a3eb60215e0d84e79ac056d8d7` | `eb5e4114f0c12d93d351df92bd1c442fe745f79aa4b848936a7e745dacc34ad2` |
+| autonomous/article | rewrite | `5e1d35f2733f40050243783ba931f5e95f578d28690e470d9ba79d95d1734abd` | `46b64ef9520a54566fcf9ef7105a54ca21e6ebc2dc0a9a9b9061599d3b471bab` |
+| autonomous/article | pre_review_correction | `c34ab455f90561279936dc539db4d2e73f66f6fa29cd5cc39f46045252cd2b42` | `8a9c7f32d50bd597d8e9d85d8ce1d95feb0ff327183d0bb84b1a125e2baa7233` |
+| autonomous/ai_tutorial | writer | `0daed2f912a4ad72dad560cd0191cae90c65285bc146cd329b38fcef00ee7b0f` | `a801e36f6d0570cf084439db20680dc32ac576df24571af2717688e8c8cbc9e2` |
+| autonomous/ai_tutorial | reviewer | `0bb76e70736ac25ead2a055973647b1ebfd9ca154ab25b1690146109a02098f9` | `d70c82120a175d0000e908733a571544a08780b1494d897867885e17f7f155af` |
+| autonomous/ai_tutorial | rewrite | `71a79fa25369209da3cee87cd1a3323e1c7928c8e011c4fdc98c1ecfdde64237` | `b740506dd762040db2ad23ad0fcc0e53f234ed9f22dfeae788a573db9244872d` |
+| autonomous/ai_tutorial | pre_review_correction | `ba4bbb734db69b5d32489baf2b6e6ff178d7e20448be896b6b5d9cd126d2acde` | `afcc5280675fc4bd80e324d6700d93d2931768d9e9aa7c2d02716d1c28571db9` |
+| autonomous/review | writer | `ed6ba51bb148110b1795b9d6ad00a7e6787030346bd084a37a67f5433ccc7b67` | `1bf87729a6dcdc6ec9b3caa96a869526a1b41c3cd1c29b91450ffcdf9c9e35e3` |
+| autonomous/review | reviewer | `fdcf4764382ed5a7485b59f68ac48b27c9f361d62d9094ab72e169d6a0c1ccdf` | `1092f58f855a71af16771035597b01bf28085597e363067dda58463802962556` |
+| autonomous/review | rewrite | `886df0fd27aa03fb4157679f64de333bda7c3d69cf2b0d384b782bb5bec37d6b` | `e738973a27d95d9dc045393dc5ebb3efb93cd954465dff365c0492ab375189cd` |
+| autonomous/review | pre_review_correction | `546780f1924e2ba01abaa589584260d786cf227616b0a7ea6620fb40aded07c5` | `96c23b1999e3e6ef04ec190d9b595044d9d6c4d9ea5890b2d3843e986012a811` |

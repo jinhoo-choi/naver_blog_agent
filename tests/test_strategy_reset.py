@@ -52,7 +52,8 @@ def test_active_phase_and_publication_slots(tmp_path, monkeypatch, day, phase, t
     settings = settings_at(tmp_path, monkeypatch, day)
     plan = settings.config['daily_plan']
     assert (plan['phase'], plan['target'], plan['category']) == (phase, target, category)
-    assert plan['topic_selection'] == 'autonomous_verified'
+    assert plan['topic_selection'] == (
+        'owner_fixed' if day in {'2026-10-21', '2026-10-22'} else 'autonomous_verified')
     assert settings.daily_count == target
     assert sum(c['max_daily'] for c in settings.config['categories'].values()) == target
     assert settings.config['community']['enabled'] is False
@@ -547,8 +548,10 @@ def test_archived_automatic_transition_limit_still_rejects_a_second_publication_
 @pytest.mark.parametrize('day', ['2026-10-15', '2026-10-22', '2026-10-25'])
 def test_archived_automatic_nonpublication_day_rejects_before_opening_a_handoff(tmp_path, monkeypatch, day):
     settings = settings_at(tmp_path, monkeypatch, day)
+    reason = ('unreserved editorial slot' if day == '2026-10-22'
+              else 'no new-publication slot')
     with (connect_db(settings.db_path) as conn,
-          pytest.raises(ValueError, match='no new-publication slot')):
+          pytest.raises(ValueError, match=reason)):
         claim_publication(conn, 'not-created', settings)
 
 
@@ -694,7 +697,9 @@ def test_owner_only_scaled_ten_allows_second_draft_before_first_owner_publicatio
 
 @pytest.mark.parametrize('day,ids', [
     ('2026-10-19', ['owner-20261019-sunwoo-moon-ai', 'owner-20261019-cxmt-semiconductor-analysis']),
-    ('2026-10-20', ['owner-20261020-sunwoo-telekinesis-ai', 'owner-20261020-sunwoo-giant-teddy-ai']),
+    ('2026-10-20', ['owner-20261020-sunwoo-neon-ai', 'owner-20261020-abl-biliary-pipeline']),
+    ('2026-10-21', ['owner-20261020-sunwoo-giant-teddy-ai', 'owner-20261021-steal-a-brainrot-origins']),
+    ('2026-10-22', ['owner-20261020-sunwoo-telekinesis-ai', 'owner-20261022-prison-return-meme']),
 ])
 def test_dated_owner_drafts_replace_regular_generation_without_duplicate_work(tmp_path, monkeypatch, day, ids):
     settings = settings_at(tmp_path, monkeypatch, day)

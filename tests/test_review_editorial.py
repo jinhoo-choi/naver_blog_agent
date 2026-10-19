@@ -67,7 +67,7 @@ def test_default_prompt_is_byte_identical_and_review_keeps_safety():
         assert '안전' in selected and '출처' in selected
     for term in ['자비 구매', '리뷰 대가 없음', '선택 가능한 적격', '개인정보', '배송 라벨',
                  '가격 생략', '설치 시간', '가족 반응', '단점', '1~3문장', '한 가지',
-                 '2열', '보통 3~5개', '저장 후 같은 저장본을 평가',
+                 '2열', '최소 5개·최대 8개', '저장 후 같은 저장본을 평가',
                  '추가 재평가 루프나 공개 단계를 붙이지 않는다']:
         assert term in REVIEW
 

@@ -1,4 +1,4 @@
-"""Offline delivery evidence and once-only Work publication claims; no Naver access."""
+"""Archived automatic-publisher receipts; current owner-only coverage is in strategy_reset."""
 import hashlib
 import json
 import sqlite3
@@ -20,6 +20,8 @@ from blogbot.core import (
     validate_work_receipt,
 )
 from blogbot.planning import SaveDateRequired, record_verified_save, saved_count
+
+pytestmark = pytest.mark.usefixtures("archived_automatic_profile")
 
 
 @pytest.fixture

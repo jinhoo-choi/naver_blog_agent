@@ -10,7 +10,7 @@ from openai import OpenAIError
 from playwright.sync_api import Error as PlaywrightError
 
 from .config import load_settings
-from .core import claim_publication, connect_db, import_work_receipts
+from .core import claim_publication, connect_db, import_work_receipts, owner_publication_only
 from .creator_trends import import_snapshot
 from .inputs import enqueue_file
 from .notify import telegram
@@ -35,7 +35,7 @@ def main() -> None:
     policy.add_argument("--file", type=Path, required=True)
     receipts = sub.add_parser('import-work-receipts', help='관찰한 저장·발행 증거를 비공개 DB에 기록 (클릭 없음)')
     receipts.add_argument('--file', type=Path, required=True)
-    publication = sub.add_parser('claim-publication', help='Work 발행 클릭 전 단일 실행권 기록 (클릭 없음)')
+    publication = sub.add_parser('claim-publication', help='과거 자동 발행 선점 경로; 소유자 직접 발행 모드에서는 거부')
     publication.add_argument('--request-id', required=True)
     manual = sub.add_parser('register-manual-work', help='명시적 수기 작업 등록 (생성·클릭·발행 없음)')
     manual.add_argument('--file', type=Path, required=True)
@@ -91,6 +91,9 @@ def main() -> None:
             print(json.dumps(result))
             return
         if args.command == 'claim-publication':
+            if owner_publication_only(settings):
+                print(json.dumps({'status': 'PUBLICATION_DISABLED', 'reason': 'owner_only'}))
+                raise SystemExit(1)
             plan = active_plan(settings)
             if plan and plan.get('reservation'):
                 raise ValueError('An owner input/editorial hold cannot start automatic publication')

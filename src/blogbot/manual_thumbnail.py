@@ -77,7 +77,7 @@ def thumbnail_params(settings, packet):
                      status='THUMBNAIL_BRIEF')
     return {**{key: settings.config['images'][key] for key in
                ('model', 'quality', 'size', 'output_format')},
-            'prompt': image_prompt(post, '글 전체 핵심 요약', thumbnail=True), 'n': 1}
+            'prompt': image_prompt(post, packet['question'], thumbnail=True), 'n': 1}
 
 
 def _verify_result(directory, claim):

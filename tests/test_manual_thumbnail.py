@@ -645,3 +645,13 @@ def test_midnight_before_image_submission_holds_without_a_charge(thumbnail, monk
     assert thumbnail.calls == []
     assert not (thumbnail.directory / 'paid-call.json').exists()
     assert json.loads((thumbnail.directory / 'claim.json').read_text())['status'] == 'HELD'
+
+
+def test_cover_brief_keeps_fact_context_private_and_uses_question(thumbnail):
+    params = manual_thumbnail.thumbnail_params(thumbnail.settings, thumbnail.packet)
+    prompt = params['prompt']
+    assert thumbnail.packet['question'] in prompt
+    assert thumbnail.packet['summary'] in prompt
+    assert 'Private fact-check context only' in prompt
+    assert 'Do not reveal the answer' in prompt
+    assert 'Verified opening answer' not in prompt and 'Summarize that answer' not in prompt

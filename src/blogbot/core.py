@@ -314,12 +314,20 @@ def merge_work_receipts(conn: sqlite3.Connection, records: list[dict], *, blog_i
     return {'status': 'WORK_RECEIPTS_IMPORTED', 'records': len(records), 'states': counts}
 
 
+def owner_publication_only(settings) -> bool:
+    """Missing/unknown modes fail closed, including restored legacy handoffs."""
+    return getattr(settings, 'config', {}).get('blog', {}).get('publication_mode') != 'automatic'
+
+
 def claim_publication(conn: sqlite3.Connection, request_id: str, settings) -> dict:
     """Claim once before Work clicks Publish. Repeating this is never a retry permit."""
     from .inputs import verify_photos
     from .investment import validate_current_post
     from .planning import active_plan, matches_post, saved_identities
     from .work_operations import exclusions, pending_writes
+
+    if owner_publication_only(settings):
+        raise ValueError('Owner-only publication: automatic claims are disabled')
 
     if request_id in exclusions(settings) or pending_writes(settings):
         raise ValueError('Separate manual Work cannot enter automatic publication')

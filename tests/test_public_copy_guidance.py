@@ -65,6 +65,11 @@ def test_every_model_path_gets_public_private_contract_without_extra_calls(
         assert '정확히 5개 고른다' not in call['input']
         assert '서로 다른 태그 5개인지' not in call['input']
         assert PUBLIC_COPY in call['input']
+        assert '최소 5개·최대 8개' in call['input']
+        assert '상위 3~5개' in call['input']
+        for obsolete in ['보통 3~5개', 'weekly-2221-v1 운영', '월·토는 육아',
+                         '화·일은 이름의 유래', '도치 0~2회', '볼드 0~3곳', '유머 0~1문장']:
+            assert obsolete not in call['input']
         assert quality_guidance(category, subtype, style) in call['input']
         assert 'concise-owner-v2' in call['input']
         assert '개요·설명/예시' in call['input']

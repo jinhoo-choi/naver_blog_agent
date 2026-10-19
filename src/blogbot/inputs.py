@@ -138,10 +138,12 @@ def enqueue_file(settings: Settings, source: Path) -> str:
     provenance = {'source': source_kind}
     if source_kind == 'work_autonomous':
         plan = active_plan(settings)
-        if (not plan or not plan.get('work_managed') or plan['target'] not in {1, 2}
+        if (not plan or not plan.get('work_managed') or plan.get('reservation') or plan['target'] not in {1, 2}
                 or category != plan['category'] or raw.get('strategy_version') != plan['version']):
             raise ValueError('Autonomous selection requires the current approved Work slot')
-        if plan.get('capacity_stage') == 'scaled10' and settings.db_path.exists():
+        from .core import owner_publication_only
+        if (not owner_publication_only(settings)
+                and plan.get('capacity_stage') == 'scaled10' and settings.db_path.exists()):
             with closing(connect_db(settings.db_path)) as conn:
                 if conn.execute("SELECT 1 FROM save_receipts WHERE day=? AND status='SAVED_NAVER' "
                                 "AND request_id!=?", (plan['date'], request_id)).fetchone():

@@ -26,3 +26,13 @@ def weekday_clock(monkeypatch):
             return fixed.astimezone(tz) if tz is not None else fixed.replace(tzinfo=None)
 
     monkeypatch.setattr('blogbot.core.datetime', WeekdayDatetime)
+
+
+@pytest.fixture
+def archived_automatic_profile(tmp_path, monkeypatch):
+    """Explicitly reproduce the retired automatic publisher, never current owner-only mode."""
+    source = Path(__file__).parents[1] / 'config/blog.toml'
+    profile = tmp_path / 'archived-automatic-blog.toml'
+    profile.write_text(source.read_text().replace('publication_mode = "owner_only"',
+                                                 'publication_mode = "automatic"'))
+    monkeypatch.setenv('BLOG_CONFIG_PATH', str(profile))

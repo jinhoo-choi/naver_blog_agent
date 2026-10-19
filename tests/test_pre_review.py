@@ -531,3 +531,14 @@ def test_source_article_first_person_is_not_owner_experience(req):
     req = replace(req, data={**req.data, 'body': sentence})
     _, codes, _ = inspect_candidate(candidate(body=candidate().payload['body'] + '\n' + sentence), req, INFO)
     assert 'unsupported_personal_experience' in codes
+
+
+@pytest.mark.parametrize('tags', [
+    ['정책', '지원대상', '신청방법', '지원조건'],
+    ['정책', '지원대상', '신청방법', '지원조건', '#정책', '태그2'],
+])
+def test_tag_deficit_and_duplicates_do_not_purchase_correction_or_block_text(tmp_path, req, tags):
+    post, report = run_pre_review(tmp_path, NoRepair(), candidate(tags=tags), req, INFO)
+    assert len(post.tags) == 4
+    assert report['model_correction_used'] is False
+    assert not list((tmp_path / 'response-cache').glob('*.revision.json'))

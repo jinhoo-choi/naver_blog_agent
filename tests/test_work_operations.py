@@ -138,7 +138,7 @@ def test_changed_target_or_other_active_operation_blocks_a_new_write(state):
         work.start(settings, other['operation_id'])
     assert pipeline.run_daily(settings, save_to_naver=True)[0]['reason'] == 'unresolved_manual_work'
     assert pipeline.save_pending(settings)[0]['reason'] == 'unresolved_manual_work'
-    with connect_db(settings.db_path) as conn, pytest.raises(ValueError, match='manual Work'):
+    with connect_db(settings.db_path) as conn, pytest.raises(ValueError, match='Owner-only publication'):
         core.claim_publication(conn, 'unrelated', settings)
 
 

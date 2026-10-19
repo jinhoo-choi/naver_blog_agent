@@ -7,6 +7,7 @@ weekend_feature = true
 review_pass_score = 24
 rewrite_score = 20
 max_similarity = 0.82
+publication_mode = "owner_only"
 
 # Read-only reuse. The upstream bot is never executed or modified.
 [community]
@@ -382,3 +383,12 @@ date = "2026-10-18"
 category = "parenting"
 weekly_publication_limit = 0
 additional_manual_topics = ["씩스세븐", "티원"]
+
+# Owner-fixed existing drafts replace the regular slots; no new queue or publication.
+[strategy_reset.reservations."2026-10-19"]
+kind = "existing_owner_draft"
+request_ids = ["owner-20261019-sunwoo-moon-ai", "owner-20261019-cxmt-semiconductor-analysis"]
+
+[strategy_reset.reservations."2026-10-20"]
+kind = "existing_owner_draft"
+request_ids = ["owner-20261020-sunwoo-telekinesis-ai", "owner-20261020-sunwoo-giant-teddy-ai"]

@@ -68,14 +68,14 @@ def make_writer(settings: Settings) -> NaverDraftWriter:
 def save_pending(settings: Settings) -> list[dict]:
     """Retry reviewed text without buying another generation or repeating uncertain saves."""
     plan = active_plan(settings)
+    if plan and plan.get('reservation'):
+        return [reservation_result(plan)]
     if plan and plan.get('work_managed'):
         return [{'status': 'AUTONOMOUS_WORK_REQUIRED', 'daily_plan': plan}]
     from .work_operations import exclusions, pending_writes
     manual_ids = exclusions(settings)
     if pending_writes(settings):
         return [{'status': 'MANUAL_CHECK_REQUIRED', 'reason': 'unresolved_manual_work'}]
-    if plan and plan.get('reservation'):
-        return [reservation_result(plan)]
     if plan and plan['category'] == 'origins':
         number = settings.config['categories']['origins'].get('naver_category_no')
         if type(number) is not int or number < 1:
@@ -157,10 +157,10 @@ def run_daily(settings: Settings, count: int | None = None, save_to_naver: bool 
         with closing(connect_db(settings.db_path)) as conn:
             return [recover_attribution_review(settings, conn, attribution_review_request_id)]
     plan = active_plan(settings)
-    if plan and plan.get('work_managed'):
-        return [{'status': 'AUTONOMOUS_WORK_REQUIRED', 'daily_plan': plan}]
     if plan and plan.get('reservation'):
         return [reservation_result(plan)]
+    if plan and plan.get('work_managed'):
+        return [{'status': 'AUTONOMOUS_WORK_REQUIRED', 'daily_plan': plan}]
     if plan and plan['category'] == 'origins':
         number = settings.config['categories']['origins'].get('naver_category_no')
         if type(number) is not int or number < 1:

@@ -81,11 +81,22 @@ def work_strategy(config: dict, day: date | None = None) -> dict | None:
     if owner_day:
         category = override['category']
     target = daily_limit if category and day >= date.fromisoformat(policy['publication_start']) else 0
+    reservation = policy.get('reservations', {}).get(day.isoformat())
+    if reservation:
+        identities = reservation.get('request_ids', [])
+        if (set(reservation) != {'kind', 'request_ids'}
+                or reservation['kind'] != 'existing_owner_draft'
+                or not isinstance(identities, list) or len(identities) != 2
+                or any(not isinstance(item, str) or not re.fullmatch(
+                    r'[A-Za-z0-9][A-Za-z0-9_-]{0,79}', item) for item in identities)
+                or len(set(identities)) != 2):
+            raise ValueError('Dated owner reservation requires two distinct existing manuscript IDs')
     return {'version': policy['version'], 'date': day.isoformat(), 'target': target,
             'category': category or 'parenting', 'depth': 'deep', 'work_managed': True,
-            'phase': phase, 'topic_selection': 'autonomous_verified',
+            'phase': phase, 'topic_selection': 'owner_fixed' if reservation else 'autonomous_verified',
             'capacity_stage': stage,
             'weekly_publication_limit': weekly_limit,
+            **({'reservation': dict(reservation)} if reservation else {}),
             'editorial_types': ['article', 'ai_tutorial'] if category == 'parenting' else ['article'],
             **({'investment_mode': 'life-economics-v1'} if category == 'investment' else {}),
             'review_due': day > date.fromisoformat(policy['measurement_end'])}
@@ -145,7 +156,9 @@ def reservation_result(plan: dict) -> dict:
     return {'status': 'EDITORIAL_SLOT_RESERVED', 'date': plan['date'],
             'category': plan['category'], 'reason': plan['reservation']['kind'],
             **({'request_id': plan['reservation']['request_id']}
-               if plan['reservation'].get('request_id') else {})}
+               if plan['reservation'].get('request_id') else {}),
+            **({'request_ids': plan['reservation']['request_ids']}
+               if plan['reservation'].get('request_ids') else {})}
 
 
 def editorial_type(category: str, data: dict) -> str:

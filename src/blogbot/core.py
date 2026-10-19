@@ -314,12 +314,20 @@ def merge_work_receipts(conn: sqlite3.Connection, records: list[dict], *, blog_i
     return {'status': 'WORK_RECEIPTS_IMPORTED', 'records': len(records), 'states': counts}
 
 
+def owner_publication_only(settings) -> bool:
+    """Missing/unknown modes fail closed, including restored legacy handoffs."""
+    return getattr(settings, 'config', {}).get('blog', {}).get('publication_mode') != 'automatic'
+
+
 def claim_publication(conn: sqlite3.Connection, request_id: str, settings) -> dict:
     """Claim once before Work clicks Publish. Repeating this is never a retry permit."""
     from .inputs import verify_photos
     from .investment import validate_current_post
     from .planning import active_plan, matches_post, saved_identities
     from .work_operations import exclusions, pending_writes
+
+    if owner_publication_only(settings):
+        raise ValueError('Owner-only publication: automatic claims are disabled')
 
     if request_id in exclusions(settings) or pending_writes(settings):
         raise ValueError('Separate manual Work cannot enter automatic publication')
@@ -602,6 +610,8 @@ def validate_post(post: PostDraft, category_info: dict) -> None:
 
 
 def review_result(review: dict) -> tuple[int, str]:
+    from .editorial import TAG_EDIT_PREFIX
+
     scores = review.get("scores", [])
     values = scores
     if not isinstance(values, list) or len(values) != 6:
@@ -619,7 +629,15 @@ def review_result(review: dict) -> tuple[int, str]:
     if decision == "PASS" and review.get("issues") and instructions not in {
         "", "없음", "수정 없음", "수정 필요 없음", "none", "None",
     }:
-        decision = "REWRITE"
+        # Only explicitly scoped tag notes are local edits, even if echoed into
+        # the instruction field. Never infer scope from a generic mention of tags.
+        notes = [*review['issues'], instructions] if isinstance(review['issues'], list) else []
+        local_tag_only = bool(notes) and all(
+            isinstance(note, str) and note.strip() and all(
+                line.strip().startswith(TAG_EDIT_PREFIX) for line in note.splitlines() if line.strip())
+            for note in notes)
+        if not local_tag_only:
+            decision = "REWRITE"
     # High total cannot override an accuracy or category-safety failure.
     if values[0] < 4 or values[5] < 4 or review.get("blocking_issues"):
         decision = "REWRITE" if total >= 20 else "DROP"

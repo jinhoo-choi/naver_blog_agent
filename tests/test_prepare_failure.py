@@ -274,7 +274,7 @@ def test_preview_rejects_missing_summary_dates_and_raw_urls(opening):
 
 
 @pytest.mark.parametrize('long_investment', [False, True])
-def test_daily_image_counts_use_summary_cover_and_reuse_cache(tmp_path, monkeypatch, long_investment):
+def test_daily_image_counts_use_curiosity_cover_and_reuse_cache(tmp_path, monkeypatch, long_investment):
     import base64
     import tomllib
     from pathlib import Path
@@ -308,9 +308,11 @@ def test_daily_image_counts_use_summary_cover_and_reuse_cache(tmp_path, monkeypa
         assert [p['role'] for p in result.photos] == ['thumbnail'] + ['section'] * (expected - 1)
         assert generate_images(settings, request, post).photos == result.photos
     assert len(calls) == (14 if long_investment else 13)
-    covers = [c['prompt'] for c in calls if 'summary cover' in c['prompt']]
+    covers = [c['prompt'] for c in calls if 'curiosity cover' in c['prompt']]
     assert len(covers) == 3
-    assert all('글의 핵심 답변입니다.' in p and '주제 핵심' in p for p in covers)
+    assert all('Private fact-check context only' in p and '글의 핵심 답변입니다.' in p for p in covers)
+    assert all('Do not reveal the answer' in p and 'Verified opening answer' not in p
+               and 'Summarize that answer' not in p for p in covers)
 
 
 def test_five_images_do_not_cluster_after_the_opening():

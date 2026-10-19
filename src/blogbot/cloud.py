@@ -24,6 +24,7 @@ from .core import (
     connect_db,
     import_work_receipts,
     merge_work_receipts,
+    owner_publication_only,
     publication_days,
     today_kst,
     validate_work_receipt,
@@ -362,7 +363,7 @@ def pack(settings, destination: Path) -> None:
                             "AND as_of_date BETWEEN ? AND ? ORDER BY as_of_date,id",
                             ((today-timedelta(days=3)).isoformat(), today.isoformat())).fetchall()
         uncertain = conn.execute("SELECT 1 FROM posts WHERE status IN ('SAVING','SAVE_UNCERTAIN') LIMIT 1").fetchone()
-        saved_waiting = (plan and plan.get('capacity_stage') == 'scaled10' and conn.execute(
+        saved_waiting = (not owner_publication_only(settings) and plan and plan.get('capacity_stage') == 'scaled10' and conn.execute(
             "SELECT 1 FROM save_receipts WHERE day=? AND status='SAVED_NAVER'", (plan['date'],)).fetchone())
         try:
             used = saved_count(conn, plan) if plan else 0
@@ -581,13 +582,15 @@ def filter_ready(directory: Path, receipts: dict, plan: dict | None = None, sett
         identity = post['request_id']
         if identity in manual_ids or post.get('provenance', {}).get('manual_request') or manual_pending:
             continue
-        publication_candidate = (plan and identity in observed_saved and not publication_ready
+        publication_candidate = (settings is not None and not owner_publication_only(settings)
+                                 and plan and identity in observed_saved and not publication_ready
                                  and len(used - {identity}) < plan['target'])
         if uncertain and any(r.get('status') in PUBLICATION_PENDING for r in records):
             continue
         if plan and (not plan['target'] or plan.get('reservation') or uncertain
                      or (len(used) >= plan['target'] and not publication_candidate)
-                     or (plan.get('capacity_stage') == 'scaled10' and observed_saved - {identity})
+                     or (settings is not None and not owner_publication_only(settings)
+                         and plan.get('capacity_stage') == 'scaled10' and observed_saved - {identity})
                      or eligible or post['as_of_date'] != plan['date']
                      or post['category'] != plan['category']
                      or post.get('provenance', {}).get('daily_plan') != plan):

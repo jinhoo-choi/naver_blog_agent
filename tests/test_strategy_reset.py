@@ -1,6 +1,7 @@
 """Focused execution, no duplicate API work, and real publication caps."""
 import hashlib
 import json
+import os
 import tomllib
 from dataclasses import asdict, replace
 from datetime import date, datetime, timedelta
@@ -208,7 +209,7 @@ def scaled_settings(tmp_path, monkeypatch, *, actual_results=True):
              'major_errors': 0,
              'next_ten_request_ids': [f'next-{i}' for i in range(10)],
              'next_ten_question_ids': [f'question-{i}' for i in range(10)]}
-    text = (Path(__file__).parents[1] / 'config/blog.toml').read_text()
+    text = Path(os.getenv('BLOG_CONFIG_PATH', Path(__file__).parents[1] / 'config/blog.toml')).read_text()
     text = text.replace('capacity_stage = "bootstrap5"', 'capacity_stage = "scaled10"')
     text = text.replace('weekly_publication_limit = 5', 'weekly_publication_limit = 10')
     text = text.replace('scale_evidence = {}', '')
@@ -278,14 +279,16 @@ def test_scaled_ten_still_blocks_paid_api_and_accepts_explicit_work_input(tmp_pa
     enqueue_file(settings, source)
 
 
-def test_scaled_ten_cannot_publish_without_five_real_reviewed_results(tmp_path, monkeypatch):
+@pytest.mark.usefixtures("archived_automatic_profile")
+def test_archived_automatic_scaled_ten_cannot_publish_without_five_real_reviewed_results(tmp_path, monkeypatch):
     settings = scaled_settings(tmp_path, monkeypatch, actual_results=False)
     prepare_publication(settings)
     with connect_db(settings.db_path) as conn, pytest.raises(ValueError, match='five verified published'):
         claim_publication(conn, 'current', settings)
 
 
-def test_historical_day_receipt_cannot_be_used_for_scaled_ten_bootstrap_proof(tmp_path, monkeypatch):
+@pytest.mark.usefixtures("archived_automatic_profile")
+def test_archived_automatic_historical_day_receipt_cannot_be_used_for_scaled_ten_bootstrap_proof(tmp_path, monkeypatch):
     settings = scaled_settings(tmp_path, monkeypatch)
     prepare_publication(settings)
     check = {'published_date': '2026-10-24', 'timezone': 'Asia/Seoul', 'published_post_checked': True,
@@ -298,8 +301,9 @@ def test_historical_day_receipt_cannot_be_used_for_scaled_ten_bootstrap_proof(tm
             claim_publication(conn, 'current', settings)
 
 
+@pytest.mark.usefixtures("archived_automatic_profile")
 @pytest.mark.parametrize('day_only_count,allowed', [(3, True), (5, False)])
-def test_transition_counts_precise_and_day_publications_before_claim(tmp_path, monkeypatch, day_only_count, allowed):
+def test_archived_automatic_transition_counts_precise_and_day_publications_before_claim(tmp_path, monkeypatch, day_only_count, allowed):
     settings = settings_at(tmp_path, monkeypatch, '2026-10-16')
     prepare_publication(settings, saved=False)
     records = []
@@ -345,8 +349,9 @@ def test_transition_counts_precise_and_day_publications_before_claim(tmp_path, m
             claim_publication(conn, 'second', settings)
 
 
+@pytest.mark.usefixtures("archived_automatic_profile")
 @pytest.mark.parametrize('used,allowed', [(9, True), (10, False)])
-def test_scaled_ten_weekly_cap_includes_bootstrap_publications(tmp_path, monkeypatch, used, allowed):
+def test_archived_automatic_scaled_ten_weekly_cap_includes_bootstrap_publications(tmp_path, monkeypatch, used, allowed):
     settings = scaled_settings(tmp_path, monkeypatch)
     prepare_publication(settings)
     with connect_db(settings.db_path) as conn:
@@ -363,8 +368,9 @@ def test_scaled_ten_weekly_cap_includes_bootstrap_publications(tmp_path, monkeyp
                 claim_publication(conn, 'current', settings)
 
 
+@pytest.mark.usefixtures("archived_automatic_profile")
 @pytest.mark.parametrize('invalid', ['duplicate_publication', 'failed_final_review'])
-def test_scaled_ten_rechecks_actual_distinct_publications_and_final_reviews(tmp_path, monkeypatch, invalid):
+def test_archived_automatic_scaled_ten_rechecks_actual_distinct_publications_and_final_reviews(tmp_path, monkeypatch, invalid):
     settings = scaled_settings(tmp_path, monkeypatch)
     prepare_publication(settings)
     with connect_db(settings.db_path) as conn:
@@ -382,7 +388,8 @@ def test_scaled_ten_rechecks_actual_distinct_publications_and_final_reviews(tmp_
             claim_publication(conn, 'current', settings)
 
 
-def test_scaled_ten_allows_second_handoff_and_claim_but_not_third(tmp_path, monkeypatch):
+@pytest.mark.usefixtures("archived_automatic_profile")
+def test_archived_automatic_scaled_ten_allows_second_handoff_and_claim_but_not_third(tmp_path, monkeypatch):
     settings = scaled_settings(tmp_path, monkeypatch)
     prepare_publication(settings, 'first')
     with connect_db(settings.db_path) as conn:
@@ -411,7 +418,8 @@ def test_scaled_ten_allows_second_handoff_and_claim_but_not_third(tmp_path, monk
         claim_publication(conn, 'third', settings)
 
 
-def test_scaled_ten_finishes_saved_first_post_before_second_input_or_handoff(tmp_path, monkeypatch):
+@pytest.mark.usefixtures("archived_automatic_profile")
+def test_archived_automatic_scaled_ten_finishes_saved_first_post_before_second_input_or_handoff(tmp_path, monkeypatch):
     settings = scaled_settings(tmp_path, monkeypatch)
     prepare_publication(settings, 'first')
     first_ready = (tmp_path / 'ready.json').read_text()
@@ -436,8 +444,9 @@ def test_scaled_ten_finishes_saved_first_post_before_second_input_or_handoff(tmp
         assert claim_publication(conn, 'first', settings)['status'] == 'PUBLICATION_CLAIMED'
 
 
+@pytest.mark.usefixtures("archived_automatic_profile")
 @pytest.mark.parametrize('stage', ['bootstrap5', 'scaled10'])
-def test_bootstrap_evidence_survives_eight_day_bundle_restore(tmp_path, monkeypatch, stage):
+def test_archived_automatic_bootstrap_evidence_survives_eight_day_bundle_restore(tmp_path, monkeypatch, stage):
     settings = scaled_settings(tmp_path, monkeypatch)
     settings = settings_at(tmp_path, monkeypatch, '2026-11-10')
     if stage == 'bootstrap5':
@@ -464,8 +473,9 @@ def test_bootstrap_evidence_survives_eight_day_bundle_restore(tmp_path, monkeypa
         assert claim_publication(conn, 'current', restored)['status'] == 'PUBLICATION_CLAIMED'
 
 
+@pytest.mark.usefixtures("archived_automatic_profile")
 @pytest.mark.parametrize('used,allowed', [(4, True), (5, False)])
-def test_weekly_cap_counts_all_publications_before_claim(tmp_path, monkeypatch, used, allowed):
+def test_archived_automatic_weekly_cap_counts_all_publications_before_claim(tmp_path, monkeypatch, used, allowed):
     settings = settings_at(tmp_path, monkeypatch, '2026-10-24')
     prepare_publication(settings)
     with connect_db(settings.db_path) as conn:
@@ -482,9 +492,10 @@ def test_weekly_cap_counts_all_publications_before_claim(tmp_path, monkeypatch, 
             assert conn.execute("SELECT status FROM save_receipts WHERE request_id='current'").fetchone()[0] == 'SAVED_NAVER'
 
 
+@pytest.mark.usefixtures("archived_automatic_profile")
 @pytest.mark.parametrize('day', ['2026-10-16', '2026-10-17'])
 @pytest.mark.parametrize('used,allowed', [(14, True), (15, True), (16, False)])
-def test_transition_claim_counts_every_prior_publication(tmp_path, monkeypatch, day, used, allowed):
+def test_archived_automatic_transition_claim_counts_every_prior_publication(tmp_path, monkeypatch, day, used, allowed):
     settings = settings_at(tmp_path, monkeypatch, day)
     prepare_publication(settings)
     with connect_db(settings.db_path) as conn:
@@ -503,8 +514,9 @@ def test_transition_claim_counts_every_prior_publication(tmp_path, monkeypatch, 
             assert conn.execute("SELECT status FROM save_receipts WHERE request_id='current'").fetchone()[0] == 'SAVED_NAVER'
 
 
+@pytest.mark.usefixtures("archived_automatic_profile")
 @pytest.mark.parametrize('used', [18, 40])
-def test_october_18_owner_removal_allows_claim_without_erasing_history(tmp_path, monkeypatch, used):
+def test_archived_automatic_october_18_owner_removal_allows_claim_without_erasing_history(tmp_path, monkeypatch, used):
     settings = settings_at(tmp_path, monkeypatch, '2026-10-18')
     prepare_publication(settings)
     with connect_db(settings.db_path) as conn:
@@ -519,7 +531,8 @@ def test_october_18_owner_removal_allows_claim_without_erasing_history(tmp_path,
             claim_publication(conn, 'current', settings)
 
 
-def test_transition_limit_still_rejects_a_second_publication_on_the_same_day(tmp_path, monkeypatch):
+@pytest.mark.usefixtures("archived_automatic_profile")
+def test_archived_automatic_transition_limit_still_rejects_a_second_publication_on_the_same_day(tmp_path, monkeypatch):
     settings = settings_at(tmp_path, monkeypatch, '2026-10-16')
     prepare_publication(settings, 'first')
     with connect_db(settings.db_path) as conn:
@@ -530,15 +543,17 @@ def test_transition_limit_still_rejects_a_second_publication_on_the_same_day(tmp
         claim_publication(conn, 'second', settings)
 
 
+@pytest.mark.usefixtures("archived_automatic_profile")
 @pytest.mark.parametrize('day', ['2026-10-15', '2026-10-22', '2026-10-25'])
-def test_nonpublication_day_rejects_before_opening_a_handoff(tmp_path, monkeypatch, day):
+def test_archived_automatic_nonpublication_day_rejects_before_opening_a_handoff(tmp_path, monkeypatch, day):
     settings = settings_at(tmp_path, monkeypatch, day)
     with (connect_db(settings.db_path) as conn,
           pytest.raises(ValueError, match='no new-publication slot')):
         claim_publication(conn, 'not-created', settings)
 
 
-def test_daily_slot_remains_one_after_weekly_limit_increases(tmp_path, monkeypatch):
+@pytest.mark.usefixtures("archived_automatic_profile")
+def test_archived_automatic_daily_slot_remains_one_after_weekly_limit_increases(tmp_path, monkeypatch):
     settings = settings_at(tmp_path, monkeypatch, '2026-10-24')
     prepare_publication(settings)
     with connect_db(settings.db_path) as conn:
@@ -584,3 +599,116 @@ def test_financial_source_checks_still_apply_to_autonomous_selection(tmp_path, m
     assert not post_contract(post, {**plan, 'version': 'weekly-2221-v1', 'work_managed': False})
     post.provenance['life_economics_checks'] = []
     assert not post_contract(post, plan)
+
+
+@pytest.mark.parametrize('stage', ['bootstrap5', 'scaled10'])
+@pytest.mark.parametrize('status', ['SAVED_NAVER', 'APPROVED', 'PUBLISH_UNCERTAIN'])
+def test_owner_only_rejects_claim_without_any_database_or_handoff_change(
+        tmp_path, monkeypatch, stage, status):
+    settings = (scaled_settings(tmp_path, monkeypatch) if stage == 'scaled10'
+                else settings_at(tmp_path, monkeypatch, '2026-10-24'))
+    prepare_publication(settings)
+    with connect_db(settings.db_path) as conn:
+        conn.execute("UPDATE posts SET status=? WHERE request_id='current'", (status,))
+        conn.commit()
+        before = '\n'.join(conn.iterdump())
+        handoff = (tmp_path / 'ready.json').read_bytes()
+        for _ in range(2):
+            with pytest.raises(ValueError, match='Owner-only publication'):
+                claim_publication(conn, 'current', settings)
+        assert '\n'.join(conn.iterdump()) == before
+        assert (tmp_path / 'ready.json').read_bytes() == handoff
+
+
+def test_owner_only_cli_rejects_before_database_access(tmp_path, monkeypatch, capsys):
+    from blogbot import cli
+    settings = settings_at(tmp_path, monkeypatch, '2026-10-24')
+    monkeypatch.setattr(cli, 'load_settings', lambda: settings)
+    monkeypatch.setattr(cli, 'connect_db', lambda *a: pytest.fail('No database write or event'))
+    monkeypatch.setattr('sys.argv', ['blogbot', 'claim-publication', '--request-id', 'current'])
+    with pytest.raises(SystemExit) as result:
+        cli.main()
+    assert result.value.code == 1
+    assert json.loads(capsys.readouterr().out) == {
+        'status': 'PUBLICATION_DISABLED', 'reason': 'owner_only'}
+    assert not settings.db_path.exists()
+
+
+@pytest.mark.parametrize('mode', [None, 'owner_only', 'unknown'])
+def test_missing_or_unknown_publication_mode_fails_closed(tmp_path, monkeypatch, mode):
+    settings = settings_at(tmp_path, monkeypatch, '2026-10-24')
+    settings.config['blog']['publication_mode'] = mode
+    with connect_db(settings.db_path) as conn:
+        with pytest.raises(ValueError, match='Owner-only publication'):
+            claim_publication(conn, 'missing', settings)
+        assert conn.execute('SELECT COUNT(*) FROM save_receipts').fetchone()[0] == 0
+
+
+def test_owner_only_drops_stale_publication_signals_and_keeps_manual_observations(tmp_path, monkeypatch):
+    settings = settings_at(tmp_path, monkeypatch, '2026-10-24')
+    prepare_publication(settings)
+    path = tmp_path / 'ready.json'
+    ready = json.loads(path.read_text())
+    ready['publication_ready'] = ready['posts']
+    ready['posts'] = []
+    path.write_text(json.dumps(ready))
+    cloud.filter_ready(tmp_path, {'verified_date': '2026-10-24', 'records': []},
+                       settings.config['daily_plan'], settings)
+    filtered = json.loads(path.read_text())
+    assert filtered['posts'] == filtered['publication_ready'] == []
+    publish_fixture(settings, 'current', 12345)
+    publish_fixture(settings, 'current', 12345)  # Observation import remains idempotent.
+    with connect_db(settings.db_path) as conn:
+        row = dict(conn.execute("SELECT * FROM save_receipts WHERE request_id='current'").fetchone())
+        assert row['status'] == 'PUBLISHED'
+        assert row['publish_attempted_at'] == ''
+        assert row['published_url'] == 'https://blog.naver.com/test_owner/12345'
+        assert publication_days(row) == {date(2026, 10, 24)}
+
+
+def test_owner_only_scaled_ten_allows_second_draft_before_first_owner_publication(tmp_path, monkeypatch):
+    settings = scaled_settings(tmp_path, monkeypatch)
+    prepare_publication(settings, 'first')
+    source = tmp_path / 'second.json'
+    source.write_text(json.dumps({'id': 'second', 'category': 'parenting',
+        'question': '두 번째 독립 질문', 'source': 'work_autonomous', 'strategy_version': 'strategy-reset-v2'}))
+    enqueue_file(settings, source)
+    with pytest.raises(FileExistsError):
+        enqueue_file(settings, source)
+    prepare_publication(settings, 'second', saved=False)
+    monkeypatch.setenv('BLOG_BUNDLE_KEY', Fernet.generate_key().decode())
+    cloud.pack(settings, tmp_path / 'handoff' / 'bundle.enc')
+    cloud.filter_ready(tmp_path, {'verified_date': '2026-11-03', 'records': []},
+                       settings.config['daily_plan'], settings)
+    ready = json.loads((tmp_path / 'ready.json').read_text())
+    assert [item['post']['request_id'] for item in ready['posts']] == ['second']
+    assert ready['publication_ready'] == []
+    # Uncertain saves continue to block the next editing handoff.
+    with connect_db(settings.db_path) as conn:
+        conn.execute("UPDATE save_receipts SET status='SAVE_UNCERTAIN' WHERE request_id='first'")
+        conn.commit()
+    cloud.filter_ready(tmp_path, {'verified_date': '2026-11-03', 'records': []},
+                       settings.config['daily_plan'], settings)
+    assert json.loads((tmp_path / 'ready.json').read_text())['posts'] == []
+
+
+@pytest.mark.parametrize('day,ids', [
+    ('2026-10-19', ['owner-20261019-sunwoo-moon-ai', 'owner-20261019-cxmt-semiconductor-analysis']),
+    ('2026-10-20', ['owner-20261020-sunwoo-telekinesis-ai', 'owner-20261020-sunwoo-giant-teddy-ai']),
+])
+def test_dated_owner_drafts_replace_regular_generation_without_duplicate_work(tmp_path, monkeypatch, day, ids):
+    settings = settings_at(tmp_path, monkeypatch, day)
+    plan = settings.config['daily_plan']
+    assert plan['topic_selection'] == 'owner_fixed'
+    assert plan['reservation']['request_ids'] == ids
+    monkeypatch.setattr('blogbot.pipeline.collect_requests', lambda *a: pytest.fail('No new topic'))
+    monkeypatch.setattr('blogbot.pipeline.make_writer', lambda *a: pytest.fail('No native edit'))
+    for result in (run_daily(settings), run_daily(settings, retry_failed=True), save_pending(settings)):
+        assert result[0]['status'] == 'EDITORIAL_SLOT_RESERVED'
+        assert result[0]['request_ids'] == ids
+    source = tmp_path / 'duplicate.json'
+    source.write_text(json.dumps({'id': 'duplicate', 'category': 'parenting', 'question': '새 질문',
+        'source': 'work_autonomous', 'strategy_version': 'strategy-reset-v2'}))
+    with pytest.raises(ValueError, match='current approved Work slot'):
+        enqueue_file(settings, source)
+    assert not settings.db_path.exists()

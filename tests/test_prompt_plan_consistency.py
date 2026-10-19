@@ -1,12 +1,8 @@
 """Offline checks of the actual model inputs against the current operating plan."""
-import tomllib
 from datetime import date
 from pathlib import Path
 
 import pytest
-
-# These tests intentionally cover the archived pre-reset weekly policy.
-pytestmark = pytest.mark.usefixtures('historical_profile')
 
 from blogbot.config import load_settings
 from blogbot.inputs import ContentRequest
@@ -16,40 +12,26 @@ from blogbot.pre_review import DraftCandidate
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def assert_daily_prompt(prompt, config):
-    assert config['operating_plan']['version'] in prompt
-    assert 'daily_plan' in prompt and '하루 글 1편' in prompt
-    assert 'editorial.deep' in prompt
-    weekday_names = ['월', '화', '수', '목', '금', '토', '일']
-    schedule = config['operating_plan']['weekdays']
-    for category in set(schedule):
-        days = [name for name, selected in zip(weekday_names, schedule) if selected == category]
-        label = '·'.join(days) + ('요일' if len(days) == 1 else '')
-        particle = "는" if label.endswith("토") else "은"
-        assert f"{label}{particle} {config['categories'][category]['display_name']}" in prompt
-    for obsolete in ['평일 Cloud 운영', '평일 배분', '주말 심화', 'editorial.weekend',
-                     '육아·운동·투자 각 1건']:
+def assert_daily_prompt(prompt, config=None):
+    assert 'daily_plan' in prompt
+    for obsolete in ['weekly-2221-v1 운영', '월·토는 육아', '화·일은 이름의 유래',
+                     '도치 0~2회', '볼드 0~3곳', '유머 0~1문장', '보통 3~5개']:
         assert obsolete not in prompt
-    images = config['images']
-    assert images['parenting_count'] == images['exercise_count']
-    assert f"육아·운동 각 {images['parenting_count']}장" in prompt
-    assert f"투자는 기본 {images['investment_count']}장" in prompt
-    assert f"{images['investment_extended_min_chars']:,}자 이상" in prompt
-    assert f"{images['investment_extended_count']}장" in prompt
+    assert '최소 5개·최대 8개' in prompt
+    if config:
+        assert config['daily_plan']['version'] in prompt
+        assert '모든 글에 일괄 강제하지 않는다' in prompt
 
 
 @pytest.mark.parametrize('filename', ['writer.md', 'reviewer.md'])
-def test_prompt_files_match_daily_plan_and_image_configuration(filename):
-    config = tomllib.loads((ROOT / 'config/blog.toml').read_text())
-    assert_daily_prompt((ROOT / 'prompts' / filename).read_text(), config)
+def test_prompt_files_use_current_plan_without_retired_instructions(filename):
+    assert_daily_prompt((ROOT / 'prompts' / filename).read_text())
 
 
 @pytest.mark.parametrize('day,category,subtype', [
-    ('2026-10-07', 'parenting', 'article'),
-    ('2026-10-08', 'exercise', 'article'),
-    ('2026-10-09', 'investment', 'article'),
-    ('2026-10-10', 'parenting', 'article'),
-    ('2026-10-17', 'parenting', 'ai_tutorial'),
+    ('2026-10-24', 'parenting', 'article'),
+    ('2026-10-23', 'investment', 'article'),
+    ('2026-10-31', 'parenting', 'ai_tutorial'),
 ])
 def test_all_model_paths_receive_consistent_daily_plan(
         tmp_path, monkeypatch, day, category, subtype):
@@ -84,7 +66,10 @@ def test_all_model_paths_receive_consistent_daily_plan(
     client.reviewer_prompt = (ROOT / 'prompts/reviewer.md').read_text()
     request = ContentRequest('offline-plan', category, {
         'question': '실제 제공된 질문', 'editorial_type': subtype},
-        provenance={'daily_plan': plan, 'editorial_type': subtype})
+        provenance={'daily_plan': plan, 'editorial_type': subtype,
+                    **({'investment_mode': plan['investment_mode'],
+                        'life_economics_checks': [{'url': source, 'verified_date': day}]}
+                       if plan.get('investment_mode') else {})})
     info = settings.config['categories'][category]
     post = client.create_draft(request, info, [])
     review = client.review(post, info, request)
@@ -94,7 +79,7 @@ def test_all_model_paths_receive_consistent_daily_plan(
         'writer', 'reviewer', 'rewrite', 'pre_review_correction']
     for call in captured:
         assert_daily_prompt(call['input'], settings.config)
-        assert '선택된 당일 주제의 심화 콘텐츠1편' in call['input']
+        assert '소유자가 직접 발행한다' in call['input']
         assert '"daily_plan"' in call['input']
         assert f'"category": "{category}"' in call['input']
     assert all(c['max_tool_calls'] == 3 for c in captured[:3])

@@ -215,3 +215,52 @@ def test_selected_image_stays_with_its_section_after_duplicate_sections_are_skip
     post.body += '\n\n## 자세\n다른 설명입니다.'
     with pytest.raises(ValueError, match='Image section heading needs reconciliation'):
         render_segments(post)
+
+
+@pytest.mark.parametrize('count', [4, 5, 6, 7, 8, 9])
+def test_tag_count_is_local_advisory_with_existing_maximum(count):
+    from blogbot.editorial import normalize_tags, tag_hints
+    tags = ['아기목욕', '목욕준비물', '목욕물온도', '목욕순서', '목욕후보습',
+            '아기욕조', '아기수건', '목욕안전', '영아피부관리'][:count]
+    clean = normalize_tags(tags)
+    assert clean == tags[:8]
+    hints = tag_hints(tags, ' '.join(tags))
+    assert any('최소 5개 미충족' in h for h in hints) == (count < 5)
+
+
+def test_duplicate_number_and_unrelated_tags_cannot_substitute_for_relevance():
+    from blogbot.editorial import normalize_tags, tag_hints
+    tags = ['아기목욕', '목욕준비물', '목욕물온도', '목욕후보습', '#아기목욕', '태그2', '123']
+    assert len(normalize_tags(tags)) == 4
+    assert any('미충족' in h for h in tag_hints(tags, ' '.join(tags)))
+    unrelated = normalize_tags(tags + ['반도체주식'])
+    hints = tag_hints(unrelated, '아기목욕 목욕준비물 목욕물온도 목욕후보습')
+    assert any('반도체주식' in h and '관련성' in h for h in hints)
+    assert any('개수 충족만으로 관련성을 승인하지 않는다' in h for h in hints)
+
+
+def test_all_active_templates_require_topic_specific_native_tags():
+    for path in (ROOT / 'templates').glob('*.html'):
+        template = path.read_text()
+        assert '최소 5개·최대 8개' in template, path.name
+        assert '상위 블로그 3~5개' in template, path.name
+        assert '정확히 5개' not in template and '소수의 네이티브 태그' not in template
+        assert '[선택: 실제 내용에 맞는' not in template
+
+
+def test_ai_video_cover_never_requests_a_generated_substitute(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from blogbot.images import ImagePending, generate_images
+    post = PostDraft('parenting', '육아생활', 'AI 영상', '영상 제작법', '실제 결과입니다.', [], [], '2026-10-19')
+    with pytest.raises(ImagePending, match='supplied final video'):
+        image_prompt(post, '결과', thumbnail=True, editorial_type='ai_tutorial')
+    settings = SimpleNamespace(config={'images': {}}, artifact_dir=tmp_path)
+    monkeypatch.setattr('blogbot.images.execute_image_plans', lambda *a, **k: pytest.fail('No paid cover'))
+    request = ContentRequest('video', 'parenting', {'editorial_type': 'ai_tutorial'})
+    with pytest.raises(ImagePending, match='native editor'):
+        generate_images(settings, request, post)
+    assert not list(tmp_path.iterdir())
+    # The video exception must not affect ordinary parenting covers.
+    ordinary = image_prompt(post, '목욕 질문', thumbnail=True)
+    assert 'Do not reveal the answer' in ordinary and 'actual frame' not in ordinary

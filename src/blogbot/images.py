@@ -28,6 +28,8 @@ def image_prompt(post: PostDraft, section: str, *, thumbnail: bool = False,
     scene = ''
     figures = 'friendly rounded cartoon characters, natural simple bodies, tiny dot eyes and'
     if post.category == 'parenting' and editorial_type == 'ai_tutorial':
+        if thumbnail:
+            raise ImagePending('AI video cover requires the supplied final video or its actual frame')
         scene = ('For a family AI tutorial, illustrate only a simple topic-supported concept or object. '
                  'Do not force infant-care scenes. Never fabricate application screens, menus, '
                  'settings or generated results; actual screenshots are supplied separately as evidence.')
@@ -54,13 +56,16 @@ Generated illustrations are explanatory aids, never evidence of real use or resu
     if thumbnail:
         opening = re.split(r'\n\s*\n|(?=^## )', post.body.strip(), maxsplit=1,
                            flags=re.MULTILINE)[0][:300]
-        lettering = f'''Use only this exact Korean headline, split into at most two large bold lines:
+        lettering = f'''Use a short faithful Korean question headline in at most two large bold lines.
+The following article title is context; omit any answer or twist it contains:
 {post.title}
 No other text, numbers, labels or speech bubbles. Render the Korean spelling accurately.'''
         scene = scene.replace('No letters at all, including the letters AI.', '')
-        emphasis = f'''This is the article's summary cover for a small mobile preview.
-Verified opening answer: {opening}
-Summarize that answer with one immediately recognizable subject and one meaningful visual cue.
+        emphasis = f'''This is a curiosity cover for a small mobile preview.
+Private fact-check context only; never render or visually reveal its answer: {opening}
+Show the article's question and a topic-supported subject. Do not reveal the answer,
+ending or twist through text, props, labels, comparisons or visual clues.
+If the supplied headline contains an answer, use a short faithful question instead.
 Use a large central subject, strong black-line contrast and one bright flat accent color.
 Keep headline and subject inside the central 80% so a square crop stays understandable.
 Readable at 160 by 160 pixels; no dense checklist, collage or decorative filler.
@@ -136,6 +141,9 @@ def generate_images(settings, request: ContentRequest, post: PostDraft, *,
         return prepared
     if post.category == 'cooking':
         return replace(post, photos=request.photos)
+    if request.category == 'parenting' and request.data.get('editorial_type') == 'ai_tutorial':
+        # Video representative selection is a native Work action, never a paid cover substitute.
+        raise ImagePending('AI video media and representative must be checked in the native editor')
     config = settings.config.get('images', {})
     count = int(config.get(post.category + '_count', 1))
     if post.category == 'investment' and len(post.body) >= int(
@@ -157,7 +165,7 @@ def generate_images(settings, request: ContentRequest, post: PostDraft, *,
     plans, placements = [], []
     for index in range(count):
         thumbnail = index == 0
-        section = '글 전체 핵심 요약' if thumbnail else sections[
+        section = '본문의 질문을 보여주는 대표 장면(정답·반전 노출 금지)' if thumbnail else sections[
             round((index - 1) * (len(sections) - 1) / max(1, count - 2))]
         params = {'model': str(config.get('model', 'gpt-image-2.5-flare')),
                   'prompt': image_prompt(post, section, thumbnail=thumbnail,

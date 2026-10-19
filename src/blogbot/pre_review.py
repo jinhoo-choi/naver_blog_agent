@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from .core import PostDraft, today_kst, validate_post
+from .editorial import normalize_tags
 from .images import atomic_json
 from .inputs import ContentRequest
 from .presentation import normalize_structure, validate_structure
@@ -196,7 +197,7 @@ def inspect_candidate(candidate: DraftCandidate, request: ContentRequest, info: 
         return None, [code], changes
     post = PostDraft(request.category, data['subcategory'], data['title'],
                      data['title'].strip(), data['body'].strip(),
-                     [t.lstrip('#') for t in data['tags']][:8], urls, data['as_of_date'],
+                     normalize_tags(data['tags']), urls, data['as_of_date'],
                      request_id=request.id, photos=request.photos, provenance=request.provenance)
     normalized = normalize_structure(post)
     if normalized.body != post.body:

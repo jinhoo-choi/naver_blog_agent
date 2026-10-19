@@ -25,7 +25,7 @@ def capture_prompts(monkeypatch, settings, provenance, kind='article'):
     calls = []
     payload = {'title': '아기 씻기는 방법', 'subcategory': '육아생활',
                'body': '적용 조건을 확인합니다.\n\n## 안전 조건\n\n공식 안내를 따릅니다.',
-               'tags': ['아기목욕'], 'source_urls': [SOURCE], 'as_of_date': '2026-10-19',
+               'tags': ['아기목욕'], 'source_urls': [SOURCE], 'as_of_date': '2026-10-24',
                'scores': [4] * 6, 'total': 24, 'decision': 'PASS', 'issues': [],
                'blocking_issues': [], 'rewrite_instructions': '', 'source_checks': [
                    {'claim': '오프라인 예시', 'source_url': SOURCE,
@@ -69,7 +69,7 @@ def capture_prompts(monkeypatch, settings, provenance, kind='article'):
 ])
 def test_final_parenting_prompts_route_selection_and_preserve_safety(
         tmp_path, monkeypatch, provenance, autonomous, kind):
-    settings = settings_at(tmp_path, monkeypatch, '2026-10-19')
+    settings = settings_at(tmp_path, monkeypatch, '2026-10-24')
     calls, request = capture_prompts(monkeypatch, settings, provenance, kind)
     assert [call['stage'] for call in calls] == [
         'writer', 'reviewer', 'rewrite', 'pre_review_correction']
@@ -85,6 +85,10 @@ def test_final_parenting_prompts_route_selection_and_preserve_safety(
                      'concise-owner-v2', '모든 글에 일괄 강제하지 않는다']:
             assert rule in prompt
         assert QUESTION in prompt
+        for obsolete in ['weekly-2221-v1 운영', '월·토는 육아', '화·일은 이름의 유래',
+                         '0~2회', '0~3곳', '0~1문장', '보통 3~5개']:
+            assert obsolete not in prompt
+        assert '최소 5개·최대 8개' in prompt
         assert '선우와 관련해 사용자가 실제로 입력한 질문에만 답한다. 자율 주제 선정 금지.' not in prompt
         if autonomous:
             for term in ['자율 제작:', 'Creator Advisor', '네이버 검색', '중복',
@@ -108,7 +112,7 @@ def test_final_parenting_prompts_route_selection_and_preserve_safety(
 
 @pytest.mark.parametrize('source', ['owner_input', 'work_autonomous'])
 def test_registered_parenting_question_keeps_actual_origin(tmp_path, monkeypatch, source):
-    settings = settings_at(tmp_path, monkeypatch, '2026-10-19')
+    settings = settings_at(tmp_path, monkeypatch, '2026-10-24')
     file = tmp_path / 'request.json'
     file.write_text(json.dumps({'id': 'registered', 'category': 'parenting',
         'question': QUESTION, 'source': source, 'strategy_version': 'strategy-reset-v2'}))
@@ -120,7 +124,7 @@ def test_registered_parenting_question_keeps_actual_origin(tmp_path, monkeypatch
 
 
 @pytest.mark.parametrize('day,version', [
-    ('2026-10-19', 'strategy-reset-v1'), ('2026-10-25', 'strategy-reset-v2'),
+    ('2026-10-24', 'strategy-reset-v1'), ('2026-10-25', 'strategy-reset-v2'),
 ])
 def test_autonomy_still_requires_current_approved_slot(tmp_path, monkeypatch, day, version):
     settings = settings_at(tmp_path, monkeypatch, day)
@@ -137,12 +141,12 @@ def test_autonomy_still_requires_current_approved_slot(tmp_path, monkeypatch, da
     ('선우는 4개월입니다.', 'unsupported_child_age'),
 ])
 def test_autonomous_selection_cannot_invent_experience_or_age(tmp_path, monkeypatch, body, code):
-    settings = settings_at(tmp_path, monkeypatch, '2026-10-19')
+    settings = settings_at(tmp_path, monkeypatch, '2026-10-24')
     request = ContentRequest('fabricated', 'parenting', {'question': QUESTION},
                              provenance=AUTONOMOUS)
     candidate = DraftCandidate({'title': '아기 목욕', 'subcategory': '육아생활',
         'body': body + '\n\n## 조건\n\n공식 조건입니다.', 'tags': ['아기목욕'],
-        'source_urls': [SOURCE], 'as_of_date': '2026-10-19'}, [SOURCE])
+        'source_urls': [SOURCE], 'as_of_date': '2026-10-24'}, [SOURCE])
     post, codes, _ = inspect_candidate(candidate, request, settings.config['categories']['parenting'])
     assert post is not None and code in codes  # Any code holds the pre-review candidate.
 

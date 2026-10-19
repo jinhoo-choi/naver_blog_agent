@@ -10,7 +10,14 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from openai import OpenAI
 
 from .core import PostDraft, today_kst
-from .editorial import editorial_hints, quality_guidance, routed_category_info, routed_prompt
+from .editorial import (
+    editorial_hints,
+    normalize_tags,
+    quality_guidance,
+    routed_category_info,
+    routed_prompt,
+    tag_hints,
+)
 from .inputs import ContentRequest
 from .responses import DRAFT_SCHEMA, REVIEW_SCHEMA, ResponseFailure, _get, request_json
 
@@ -261,7 +268,7 @@ source_urls에는 실제 검색으로 확인한 URL만 넣는다. 요리는 외�
             topic=str(payload.get("topic") or payload["title"]),
             title=str(payload["title"]).strip(),
             body=str(payload["body"]).strip(),
-            tags=[str(x).lstrip("#") for x in payload.get("tags", [])][:8],
+            tags=normalize_tags(payload.get("tags", [])),
             source_urls=urls[:10],
             as_of_date=str(payload.get("as_of_date") or today),
             request_id=request.id,
@@ -328,7 +335,7 @@ source_urls와 본문 URL은 아래 실제 관찰 URL 중에서만 선택하세�
 {quality_guidance(request.category, request.data.get('editorial_type'), request.data.get('content_style'), investment_mode=request.provenance.get('investment_mode'))}
 
 기계적 편집 관찰(오류 확정/추가 차단 기준 아님, 문맥으로 검토):
-{json.dumps(editorial_hints(post.body), ensure_ascii=False)}
+{json.dumps(editorial_hints(post.body) + tag_hints(post.tags, post.title + " " + post.body), ensure_ascii=False)}
 기존 6개 점수를 근거대로 매긴다. 기준 통과를 위해 점수를 올리지 않는다.
 
 오늘 한국시간 기준일: {today_kst().isoformat()}
@@ -450,7 +457,7 @@ source_urls와 본문 URL은 아래 실제 관찰 URL 중에서만 선택하세�
             topic=post.topic,
             title=str(payload.get("title", post.title)).strip(),
             body=str(payload.get("body", post.body)).strip(),
-            tags=[str(x).lstrip("#") for x in payload.get("tags", post.tags)][:8],
+            tags=normalize_tags(payload.get("tags", post.tags)),
             source_urls=_source_urls(payload, observed,
                                     required=post.category != "cooking"),
             as_of_date=post.as_of_date,

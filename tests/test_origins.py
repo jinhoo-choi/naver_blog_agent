@@ -144,7 +144,8 @@ def test_all_origins_model_paths_keep_short_contract_and_standard_review(monkeyp
     assert [c['stage'] for c in calls] == ['writer','reviewer','rewrite','pre_review_correction']
     for call in calls:
         text = call['input']
-        assert 'weekly-4111-v1' in text and 'origins-short-v1' in text
+        assert '전달된 날짜별 daily_plan' in text and 'origins-short-v1' in text
+        assert '월·토는 육아' not in text and '화·일은 이름의 유래' not in text
         assert '350~600' in text and '1,800자' not in text and '최소 1800자' not in text
         assert '대제목 ## 최소 4개' not in text and '실제 이미지2장 이상' not in text
     assert '총점 30점 중 24점 이상 PASS' in calls[1]['input']

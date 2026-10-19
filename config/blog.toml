@@ -391,4 +391,12 @@ request_ids = ["owner-20261019-sunwoo-moon-ai", "owner-20261019-cxmt-semiconduct
 
 [strategy_reset.reservations."2026-10-20"]
 kind = "existing_owner_draft"
-request_ids = ["owner-20261020-sunwoo-telekinesis-ai", "owner-20261020-sunwoo-giant-teddy-ai"]
+request_ids = ["owner-20261020-sunwoo-neon-ai", "owner-20261020-abl-biliary-pipeline"]
+
+[strategy_reset.reservations."2026-10-21"]
+kind = "existing_owner_draft"
+request_ids = ["owner-20261020-sunwoo-giant-teddy-ai", "owner-20261021-steal-a-brainrot-origins"]
+
+[strategy_reset.reservations."2026-10-22"]
+kind = "existing_owner_draft"
+request_ids = ["owner-20261020-sunwoo-telekinesis-ai", "owner-20261022-prison-return-meme"]

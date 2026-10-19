@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 
 VERSION = 'topic-quality-v1'
+TAG_EDIT_PREFIX = '운영 참고: 태그 국소 보완:'
 
 VOICE = '''써누애비 문체 seonoo-voice-v1:
 쉬운 습니다체와 직접 답변을 기본으로, 담담한 관찰·절제된 도치·핵심어 강조·가벼운 익살을 더한다.
@@ -67,7 +68,7 @@ PUBLIC_COPY = '''공개 본문과 비공개 검수 분리 public-copy-v1:
 작성자는 기존 JSON 필드만 반환한다. 검수자는 원본과 원고를 대조해 소유자에게 알릴
 누락·추가 확인을 기존 비공개 issues의 '운영 참고:'로 구분하고 공개 삽입을 요구하지 않는다.
 이미 제외한 비핵심 정보의 참고만 있으면 rewrite_instructions를 비우며 재작성을 요구하지 않는다.
-실제 수정 사항은 issues·rewrite_instructions에, 핵심 사실/안전 문제는 blocking_issues에 남긴다.
+실제 본문 수정 사항은 issues·rewrite_instructions에, 핵심 사실/안전 문제는 blocking_issues에 남긴다.
 공개 주장별 source_checks와 원문 검증·기존 점수/통과 기준은 유지하며 새 필드는 만들지 않는다.
 
 콘텐츠별 해시태그 topic-hashtags-v1 (2026-10-19 최신 사용자 지시):
@@ -83,6 +84,11 @@ PUBLIC_COPY = '''공개 본문과 비공개 검수 분리 public-copy-v1:
 접근 제한·근거 부족은 비공개 운영 참고에 남기며 태그 보완만을 위한 재작성·추가 유료 호출이나
 새 점수 문턱을 만들지 않는다. 태그가 상위노출·검색량·유입 증가를 보장한다고 쓰지 않는다.
 상세 절차는 docs/TEMPLATES.md의 topic-hashtags-v1을 따른다.
+태그 형식·중복·유사어·개수만 국소 편집하면 되는 경우 issues에
+'운영 참고: 태그 국소 보완:'으로 구체적인 제거/보충 항목을 남기고 rewrite_instructions는 빈 문자열로 둔다.
+본문이 합격이면 PASS를 유지한다. 중복 제거 후 최소 5개가 안 되면 본문·검색 근거가 있는 관련 태그만
+최대 8개 안에서 보충하도록 기록한다. 확인한 근거가 없으면 부족 범위를 남기고 무관한 태그로 채우지 않는다.
+본문·핵심 사실·안전·개인정보·출처 문제가 함께 있으면 태그 운영 참고와 분리해 기존 판정을 유지한다.
 
 스마트에디터 활용 native-editor-features-v1:
 Work는 지원되는 증권·뉴스·상품/작품을 글감으로, 그 밖의 출처·서비스·관련 글을 URL 삽입
@@ -331,12 +337,12 @@ def tag_hints(tags: list[str], content: str) -> list[str]:
     clean = normalize_tags(tags)
     hints = []
     if len(clean) < 5:
-        hints.append(f'운영 참고: 유효 태그 {len(clean)}개, 최소 5개 미충족. 근거 있는 국소 보완 필요.')
+        hints.append(f'{TAG_EDIT_PREFIX} 유효 태그 {len(clean)}개, 최소 5개 미충족. 관련 태그만 근거 있게 보충 필요.')
     if clean != tags:
-        hints.append('운영 참고: 태그 표기·중복·번호·최대 8개를 국소 정리한다.')
+        hints.append(f'{TAG_EDIT_PREFIX} 태그 표기·중복·번호·최대 8개를 국소 정리한다.')
     text = re.sub(r'\s+', '', content).casefold()
     unanchored = [tag for tag in clean if tag.casefold() not in text]
     if unanchored:
-        hints.append('운영 참고: 본문 직접 표기 없는 태그의 관련성·동의어 중복을 문맥으로 대조: '
+        hints.append(f'{TAG_EDIT_PREFIX} 본문 직접 표기 없는 태그의 관련성·동의어 중복을 문맥으로 대조: '
                      + ', '.join(unanchored) + '. 개수 충족만으로 관련성을 승인하지 않는다.')
     return hints

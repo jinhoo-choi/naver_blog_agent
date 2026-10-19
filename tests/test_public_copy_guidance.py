@@ -65,6 +65,9 @@ def test_every_model_path_gets_public_private_contract_without_extra_calls(
         assert '정확히 5개 고른다' not in call['input']
         assert '서로 다른 태그 5개인지' not in call['input']
         assert PUBLIC_COPY in call['input']
+        assert '운영 참고: 태그 국소 보완:' in call['input']
+        assert 'rewrite_instructions는 빈 문자열로 둔다' in call['input']
+        assert '수정 필요 issues가 있으면 PASS하지 않는다' not in call['input']
         assert '최소 5개·최대 8개' in call['input']
         assert '상위 3~5개' in call['input']
         for obsolete in ['보통 3~5개', 'weekly-2221-v1 운영', '월·토는 육아',
@@ -140,3 +143,142 @@ def test_existing_schema_and_essential_conditions_are_retained():
         for term in ['비공개', '해당 사실 문장', '반복적 일반 경고', '원문']:
             assert term in prompt
         assert '한계를 같은 구역에서 한 번' not in prompt
+
+
+def tag_review_path(monkeypatch, tags, result):
+    """Run production writer/reviewer builders, source checks and final score handling."""
+    import tomllib
+
+    from blogbot.core import today_kst
+
+    calls = []
+    info = tomllib.loads((ROOT / 'config/blog.toml').read_text())['categories']['parenting']
+    draft = {'title': '아기 목욕 준비와 순서', 'subcategory': info['subcategories'][0],
+             'body': '아기목욕 준비물과 목욕물온도를 확인합니다.\n\n## 순서\n\n'
+                     '목욕순서, 목욕후보습, 아기욕조, 아기수건, 목욕안전을 확인합니다.',
+             'tags': tags, 'source_urls': [SOURCE], 'as_of_date': str(today_kst())}
+    response = {'output': [{'status': 'completed', 'action': {
+        'type': 'open_page', 'url': SOURCE}}]}
+
+    def respond(*args, **kwargs):
+        calls.append(kwargs)
+        assert kwargs['stage'] in {'writer', 'reviewer'}  # No correction/rewrite call.
+        return deepcopy(result if kwargs['stage'] == 'reviewer' else draft), response
+
+    monkeypatch.setattr('blogbot.llm.request_json', respond)
+    monkeypatch.setattr('blogbot.research.prepare_reference_evidence', lambda d, r, u: r)
+    client = BlogLLM.__new__(BlogLLM)
+    client.client = client.journal = None
+    client.model = client.review_model = 'offline'
+    client.writer_prompt = (ROOT / 'prompts/writer.md').read_text()
+    client.reviewer_prompt = (ROOT / 'prompts/reviewer.md').read_text()
+    request = ContentRequest('tag-local-review', 'parenting', {
+        'question': '아기 목욕 준비와 순서는?', 'context': ''}, provenance={'source': 'owner_input'})
+    post = client.create_draft(request, info, [])
+    checked = client.review(post, info, request)
+    prompt = calls[-1]['input']
+    assert [call['stage'] for call in calls] == ['writer', 'reviewer']
+    assert 'rewrite_instructions는 빈 문자열로 두고 합격 본문의 PASS를 유지한다' in prompt
+    assert '태그만의 국소 편집' in prompt and '최소 5개·최대 8개' in prompt
+    assert '중복·유사어 나열, 이웃모집/맞팔' not in prompt  # Removed contradictory instruction.
+    assert checked['source_checks'] == result['source_checks']
+    return post, checked, review_result(checked), prompt
+
+
+@pytest.mark.parametrize('edit', [
+    '중복 태그를 제거하고 관련 태그만 보충합니다.',
+    '#·공백 표기를 정리합니다.',
+    '같은 뜻의 유사어 태그를 하나로 정리합니다.',
+])
+@pytest.mark.parametrize('echo_instructions', [False, True])
+def test_tag_local_edit_keeps_passing_text_after_real_review_processing(
+        monkeypatch, edit, echo_instructions):
+    from blogbot.editorial import TAG_EDIT_PREFIX
+
+    note = TAG_EDIT_PREFIX + ' ' + edit
+    result = supported_review()
+    result.update(issues=[note], rewrite_instructions=note if echo_instructions else '')
+    original = deepcopy(result)
+    _, checked, decision, _ = tag_review_path(monkeypatch,
+        ['아기목욕', '목욕준비물', '목욕물온도', '목욕순서', '목욕후보습', '#아기목욕'], result)
+    assert decision == (24, 'PASS')
+    assert checked['issues'] == [note] and not checked['blocking_issues']
+    assert result == original  # Keep raw feedback/evidence; never mutate it to hide a defect.
+
+
+@pytest.mark.parametrize('count', [4, 5, 6, 7, 8, 9])
+def test_tag_count_and_duplicate_deficit_reach_review_result_without_rewrite(monkeypatch, count):
+    from blogbot.editorial import TAG_EDIT_PREFIX
+
+    tags = ['아기목욕', '목욕준비물', '목욕물온도', '목욕순서', '목욕후보습',
+            '아기욕조', '아기수건', '목욕안전', '피부관리'][:count]
+    result = supported_review()
+    result['issues'] = ([TAG_EDIT_PREFIX + ' 중복 제거 후 최소 5개 미충족. 관련 태그만 보충 필요.']
+                        if count < 5 else [])
+    post, checked, decision, prompt = tag_review_path(monkeypatch, tags + [tags[0]], result)
+    assert len(post.tags) == min(count, 8)
+    assert decision == (24, 'PASS') and checked['rewrite_instructions'] == ''
+    assert ('최소 5개 미충족' in prompt) == (count < 5)
+    if count < 5:
+        assert '관련 태그만 보충 필요' in checked['issues'][0]
+
+
+@pytest.mark.parametrize('problem', ['fact', 'body', 'safety', 'privacy', 'source'])
+def test_tag_notes_cannot_hide_real_body_safety_or_source_errors(monkeypatch, problem):
+    from blogbot.editorial import TAG_EDIT_PREFIX
+
+    note = TAG_EDIT_PREFIX + ' 중복 태그만 정리합니다.'
+    result = supported_review()
+    result.update(issues=[note], rewrite_instructions=note)
+    if problem == 'fact':
+        result['issues'].append('본문의 월령별 적용 조건에 실제 사실 오류가 있습니다.')
+        result['rewrite_instructions'] = '본문의 잘못된 조건을 원문에 맞게 수정하세요.'
+    elif problem == 'body':
+        result['issues'].append('본문에서 같은 답을 반복하고 필요한 순서를 설명하지 않습니다.')
+    elif problem == 'safety':
+        result['scores'] = [5, 4, 4, 4, 4, 3]
+    elif problem == 'privacy':
+        result['blocking_issues'] = ['제공되지 않은 아동의 사적 정보를 노출했습니다.']
+    else:
+        result['source_checks'][0]['status'] = 'UNVERIFIED'
+    _, _, decision, _ = tag_review_path(monkeypatch, ['아기목욕'], result)
+    assert decision == (24, 'REWRITE')
+
+
+@pytest.mark.parametrize('instruction', [
+    '중복 태그 정리와 함께 본문의 사실 오류를 수정하세요.',
+    '본문의 누락된 중단 신호를 추가하세요.',
+    '운영 참고: 태그 국소 보완: 중복 정리\n본문의 계약 조건을 수정하세요.',
+])
+def test_tag_words_or_partial_markers_cannot_bypass_rewrite_guard(monkeypatch, instruction):
+    from blogbot.editorial import TAG_EDIT_PREFIX
+
+    result = supported_review()
+    result.update(issues=[TAG_EDIT_PREFIX + ' 중복 정리'], rewrite_instructions=instruction)
+    assert tag_review_path(monkeypatch, ['아기목욕'], result)[2] == (24, 'REWRITE')
+
+
+@pytest.mark.parametrize('decision', ['REWRITE', 'DROP'])
+def test_local_tag_marker_does_not_promote_a_nonpassing_review(monkeypatch, decision):
+    from blogbot.editorial import TAG_EDIT_PREFIX
+
+    result = supported_review()
+    result.update(decision=decision, issues=[TAG_EDIT_PREFIX + ' 태그 정리'],
+                  rewrite_instructions=TAG_EDIT_PREFIX + ' 태그 정리')
+    assert tag_review_path(monkeypatch, ['아기목욕'], result)[2] == (24, decision)
+
+
+def test_multiline_issue_cannot_hide_body_correction_in_a_tag_note(monkeypatch):
+    from blogbot.editorial import TAG_EDIT_PREFIX
+
+    result = supported_review()
+    result.update(issues=[TAG_EDIT_PREFIX + ' 중복 정리\n본문의 실제 사실 오류도 수정 필요'],
+                  rewrite_instructions=TAG_EDIT_PREFIX + ' 태그 정리')
+    assert tag_review_path(monkeypatch, ['아기목욕'], result)[2] == (24, 'REWRITE')
+
+
+def test_unscoped_old_tag_instruction_is_not_silently_reclassified():
+    result = supported_review()
+    result.update(issues=['중복 태그 정리가 필요합니다.'],
+                  rewrite_instructions='중복 태그 정리와 본문 수정 여부를 확인하세요.')
+    assert review_result(result) == (24, 'REWRITE')

@@ -610,6 +610,8 @@ def validate_post(post: PostDraft, category_info: dict) -> None:
 
 
 def review_result(review: dict) -> tuple[int, str]:
+    from .editorial import TAG_EDIT_PREFIX
+
     scores = review.get("scores", [])
     values = scores
     if not isinstance(values, list) or len(values) != 6:
@@ -627,7 +629,15 @@ def review_result(review: dict) -> tuple[int, str]:
     if decision == "PASS" and review.get("issues") and instructions not in {
         "", "없음", "수정 없음", "수정 필요 없음", "none", "None",
     }:
-        decision = "REWRITE"
+        # Only explicitly scoped tag notes are local edits, even if echoed into
+        # the instruction field. Never infer scope from a generic mention of tags.
+        notes = [*review['issues'], instructions] if isinstance(review['issues'], list) else []
+        local_tag_only = bool(notes) and all(
+            isinstance(note, str) and note.strip() and all(
+                line.strip().startswith(TAG_EDIT_PREFIX) for line in note.splitlines() if line.strip())
+            for note in notes)
+        if not local_tag_only:
+            decision = "REWRITE"
     # High total cannot override an accuracy or category-safety failure.
     if values[0] < 4 or values[5] < 4 or review.get("blocking_issues"):
         decision = "REWRITE" if total >= 20 else "DROP"

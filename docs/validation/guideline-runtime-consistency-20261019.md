@@ -79,3 +79,39 @@
 전체 diff를 다시 읽고 태그 숫자 일괄 치환 여부, 과거 프로필의 현재 테스트 혼입, 직접 발행 경계, 캐시/한도 유지, 날짜별 중복 방지를 검토했다. 의미적 태그 관련성/동의어 판정 및 실제 네이티브 등록은 원고 실물 검수에서 확인해야 한다. 코드상 허용되던 자동 발행 경로를 수정한 것이며 실제 자동 발행 발생을 확인한 보고가 아니다.
 
 완료 범위는 로컬 수정·오프라인 검증·커밋·원격 브랜치 업로드·PR 생성·자체 검토다. PR 병합·배포·운영 적용·유료 실행·권한/보안 설정 변경·게시글 발행은 이번 작업에 포함하지 않는다. 최종 커밋/PR/CI는 PR 본문과 작업 완료 응답에 기록한다.
+
+## PR #52 후속 — 태그 국소 편집과 재작성 판정 정합성
+
+기준 head `8eef60004ac5abb0318b2cce6209b1c241c2fc1a`, main `e5bce608`를 다시 확인했다. 후속 시작 시 기존 PR은 open·미병합이며 별도 수정은 없었다. 위 최초 입력 지문은 8eef600 시점의 기록이다. 후속 변경 후 최종 입력32개를 다시 조립해 아래 지문으로 확인했다.
+
+태그 중복만 지적한 24/30 PASS에 일반 rewrite_instructions가 있으면 기존 처리에서 REWRITE가 되는 것을 재현했다. 현재 Work-managed 경로에서 실제 유료 재작성 발생을 확인한 것은 아니다.
+
+- reviewer의 태그 형식·중복·유사어 편집을 본문 수정 지시로 넣으라는 문구를 제거했다. 검색 품질 문단과 유래 전용 검수의 일반 수정 문구도 본문 수정으로 한정했다.
+- 기존 issues에 `운영 참고: 태그 국소 보완:`으로 제거·표기 정리·관련 태그 보충 필요를 기록하고 rewrite_instructions는 빈 문자열로 둔다. 본문이 합격이면 PASS를 유지한다.
+- core의 예외는 PASS 결과에서 모든 issue와 지시의 모든 비어 있지 않은 행이 같은 태그 국소 보완 접두어를 명시할 때만 적용한다. 명시적 국소 메모가 지시 필드에 반복된 경우도 전체 본문 재작성으로 바꾸지 않는다. 태그라는 단어만 포함하거나 일부만 표시한 지시·본문 문제·미분류 과거 피드백은 자동 면제하지 않는다.
+- 사실·안전 점수, blocking_issues, 원문 검증 실패, 기존 REWRITE/DROP 결과를 유지한다. 관련 태그 최소5·최대8, 중복 제거 후 부족분 보고/국소 보충과 비용·캐시·Work 제한도 보존한다. 추가 모델 호출·새 JSON 필드·일반 태그 문장 분류기를 만들지 않았다.
+
+관련 회귀157건 통과, 전체1,553건 통과(30.37초), Ruff·git diff --check 통과. 실제 BlogLLM의 writer→reviewer→_checked_review→core.review_result를 통과시켜 정상 태그 국소 편집과 4/5/6/7/8/9개 입력, 사실·본문·안전·개인정보·출처 혼합 오류, 일부 접두어·여러 행·명시적 REWRITE/DROP의 판정 유지까지 확인했다. 네트워크 I/O는 모의이며 유료 실행0회다.
+
+| 사례 | 결과 |
+|---|---|
+| 중복·형식·유사어 편집만, 본문24점 PASS | PASS, 태그 국소 편집 참고 유지 |
+| 명시적 태그 국소 메모가 rewrite_instructions에 반복됨 | PASS, 전체 본문 재작성으로 분류하지 않음 |
+| 중복 제거 후4개 | PASS, 관련 태그 보충 필요 표시·원고 재작성 없음 |
+| 5개·6~8개·9개 입력 | PASS, 기존8개 상한 유지 |
+| 태그 + 실제 사실/본문/안전/개인정보/출처 문제 | 기존 REWRITE 유지 |
+| 태그라는 단어만 포함·부분 표시·다음 행에 본문 수정 | REWRITE 유지 |
+| 태그 접두어만으로 기존 REWRITE/DROP 변경 시도 | 원래 판정 유지 |
+
+네이버 태그의 실제 등록·저장 검증은 이번 후속에서 수행하지 않았다. 코드·CI와 네이버 실물 완료는 구분한다. 사용자가 이번 후속의 PR 병합을 승인했으며, 최종 커밋·CI·병합 상태는 PR 본문과 완료 응답에 기록한다. 배포·유료 실행·실제 게시글 발행은 수행하지 않는다.
+
+| 유형 | writer | reviewer | rewrite | pre_review_correction |
+|---|---|---|---|---|
+| parenting/article/article/default | `bb840901668aaa6a97fca6f71ce98c8208dadb8d04fdc9769ff42df4429b521b` | `e176488d9a2317e80a8145fe21d54fbb15d420d478dd288685e69d7e4d92dff5` | `82dfcbbe58ab2d71be7e83b938c4be6705ce7f603393701330de7662fe83d631` | `36a08cb758e60b00ae1e2b40fa7eedf4e43f9290761412f592634d0b5ad628e9` |
+| exercise/article/article/default | `a021517272caffe3a3deb7755484879f5c38e14dbe78c85a46f12b0a7ae5ccf5` | `e9fcde8a1764c36eb3e3356aab9f9c7d777c47826e68033a7ec835cdff1fa6e2` | `b66dffab20dd42fdeedb78f7c3bdee916aae0178a163e5f384dd54b052f9eaa3` | `86d70d15ca957a076f95b8630898d0dfe8593ca7568f4a5b405efd8299c91f8d` |
+| investment/article/article/default | `9ad547de574d54757596eecab7380281381a7ece700bb55c3239add23415856e` | `82f35e103c37f5ab943ee0ad590d46ef9ef7894ad812b19101012cbe16a6ce4c` | `117a2bda17659f9ab99de19de3745a3b632566f2b882b2a40ac3e836e94a6701` | `4b9874e5a81c92e00f7b3cb36b71d16e1b51c4122a562ae0d782cb07c46f9b97` |
+| investment/article/article/life-economics-v1 | `656ebf80898b0e39b45dd9e73e30da4abdd9af0b7b3d65d644d38c5981b1b11e` | `8df9492c51e548a092e717525601f9e3e5825ed7901528982bad1b325123b9a6` | `1746d7838697c6e76bf18cfcc5497bbe1c5b3c1b07a4f09ac641e2837f4389ee` | `82c710a1994719540229baa01fa42ab29533a9b16cfe384903bbebcaa83b3b10` |
+| origins/article/article/default | `be5dc9af52c7d0e96b633293dc539bcb59b4fbb4dd05dd032c319f83f7bde253` | `0da10f6f08b3f0a4df65a0091e42539569228a30519053a3a3cdd42a92ce481b` | `b8c7b7aefd90485bf43f6545b985241cb5450a81eca5354951241219fda46ccf` | `027999d155faa028f8b3e1cd53d88f8b3e517cf4dfa93bbcd14db4e91a05a394` |
+| cooking/article/article/default | `62a70b6d96d16dd473cf240b5889a582c7832b47a684bbfbf36042e0c4fbd152` | `54356d0421ef69e0ba96dc5fedcabf82ef1242101b4f645f49215bcc9e35872f` | `35a913abd814485b99ca8f35b41dc9c33ada03fc842388e56d618821c25a8111` | `e4b7faa21015ab6b4b644b153819e6a8d573744cea8087cca9f515ce86bdf0e7` |
+| parenting/ai_tutorial/article/default | `dc24ae94271532839ed2a3f55d0736252a589cd78d4cbcbeeec4d2415f22fc2d` | `959e4eb358e6a85a5c1fcdae02bdb13d31628ec05881b57cc4d853377435ff41` | `5f0d1e4b37485cfecec6ebee9a210eb936a303db654f2393bf1ccb4c59cfdcb1` | `c6c3c18485b7e1db96dfdbc133d6566ad9bba24f6f805e6db3564f8f8e74df5d` |
+| parenting/article/review/default | `af2025684153740bef10cf6f454098a55b28c327103239c9479f59efff286fd0` | `9ddb8309dd54a8f9f1c87260ac7ce24e6ef6757b71e207dafe2fba3068aea133` | `f04d54c1a380590b713698405b8f3c366f64839d292a50985b50e74d411c95f8` | `693c44e37badd9bbb3238c0def4f44c5e44ff139262ec9775a51f322b64d5724` |

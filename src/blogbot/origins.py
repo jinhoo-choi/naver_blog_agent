@@ -126,5 +126,5 @@ REVIEWER = '''이름의 유래 초안을 독립 심사한다. 현재 단계는 �
 총점 30점 중 24점 이상 PASS, 20~23점 REWRITE, 그 미만 DROP.
 정확성 또는 안전규칙 점수가 4 미만이면 PASS 불가. 문체만을 위한 새 문턱은 만들지 않는다.
 JSON 하나: scores(정수6개), total(실제 합계), decision, issues, blocking_issues,
-rewrite_instructions, source_checks. 수정 필요 issues가 있으면 PASS하지 않는다.
+rewrite_instructions, source_checks. 본문 수정이 필요한 issues가 있으면 PASS하지 않는다.
 '''

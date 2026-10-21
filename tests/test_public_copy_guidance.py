@@ -65,6 +65,7 @@ def test_every_model_path_gets_public_private_contract_without_extra_calls(
         assert '정확히 5개 고른다' not in call['input']
         assert '서로 다른 태그 5개인지' not in call['input']
         assert PUBLIC_COPY in call['input']
+        assert '마무리 → 함께 읽으면 좋은 글 → 해시태그 순서로 본문 하단' not in call['input']
         for rule in ['search-integrity-v1', '생성 기록과 대조', '예시 프롬프트',
                      '네이티브 태그를 등록하면', 'IT·컴퓨터', '경제적 관계',
                      '노출 보장이 아니다', '기존 공개글은 보존']:

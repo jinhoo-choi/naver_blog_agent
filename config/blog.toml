@@ -399,4 +399,8 @@ request_ids = ["owner-20261020-sunwoo-giant-teddy-ai", "owner-20261021-steal-a-b
 
 [strategy_reset.reservations."2026-10-22"]
 kind = "existing_owner_draft"
-request_ids = ["owner-20261020-sunwoo-telekinesis-ai", "owner-20261022-prison-return-meme"]
+# Prison meme owner-20261022-prison-return-meme was completed/public on 2026-10-21
+# at https://blog.naver.com/choijku/224448916254; do not recreate it on 10/22.
+# Preserve the already confirmed Telekinesis + Solidigm lineup.
+request_ids = ["owner-20261020-sunwoo-telekinesis-ai", "owner-20261022-solidigm-shareholder-value"]
+

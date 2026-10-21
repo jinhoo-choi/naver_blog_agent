@@ -699,7 +699,7 @@ def test_owner_only_scaled_ten_allows_second_draft_before_first_owner_publicatio
     ('2026-10-19', ['owner-20261019-sunwoo-moon-ai', 'owner-20261019-cxmt-semiconductor-analysis']),
     ('2026-10-20', ['owner-20261020-sunwoo-neon-ai', 'owner-20261020-abl-biliary-pipeline']),
     ('2026-10-21', ['owner-20261020-sunwoo-giant-teddy-ai', 'owner-20261021-steal-a-brainrot-origins']),
-    ('2026-10-22', ['owner-20261020-sunwoo-telekinesis-ai', 'owner-20261022-prison-return-meme']),
+    ('2026-10-22', ['owner-20261020-sunwoo-telekinesis-ai', 'owner-20261022-solidigm-shareholder-value']),
 ])
 def test_dated_owner_drafts_replace_regular_generation_without_duplicate_work(tmp_path, monkeypatch, day, ids):
     settings = settings_at(tmp_path, monkeypatch, day)

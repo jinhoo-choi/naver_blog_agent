@@ -65,6 +65,10 @@ def test_every_model_path_gets_public_private_contract_without_extra_calls(
         assert '정확히 5개 고른다' not in call['input']
         assert '서로 다른 태그 5개인지' not in call['input']
         assert PUBLIC_COPY in call['input']
+        for rule in ['search-integrity-v1', '생성 기록과 대조', '예시 프롬프트',
+                     '네이티브 태그를 등록하면', 'IT·컴퓨터', '경제적 관계',
+                     '노출 보장이 아니다', '기존 공개글은 보존']:
+            assert rule in call['input']
         assert '운영 참고: 태그 국소 보완:' in call['input']
         assert 'rewrite_instructions는 빈 문자열로 둔다' in call['input']
         assert '수정 필요 issues가 있으면 PASS하지 않는다' not in call['input']
@@ -91,6 +95,18 @@ def test_every_model_path_gets_public_private_contract_without_extra_calls(
             assert '대제목 ## 최소 4개' not in call['input']
             assert 'topic-quality-v1' not in call['input']
     assert review_result(review) == (24, 'PASS')
+
+
+def test_search_integrity_guidance_matches_work_and_native_tag_boundary():
+    guide = (ROOT / 'docs/RESET_EDITORIAL.md').read_text()
+    assert 'search-integrity-v1' in guide
+    assert '22928?lang=ko&osType=COMMONOS' in guide
+    assert '실제 발행은 소유자가 직접 한다' in guide
+    for filename in ['writer.md', 'reviewer.md']:
+        prompt = (ROOT / 'prompts' / filename).read_text()
+        assert '네이티브 태그 등록 시' in prompt
+        assert '렌더러가 마지막에 한 번 붙인다' not in prompt
+        assert '시스템이 tags를 마지막 문단에 한 번만 붙이며' not in prompt
 
 
 def test_private_reference_does_not_hide_real_corrections_or_source_blocks():

@@ -85,12 +85,12 @@ def work_strategy(config: dict, day: date | None = None) -> dict | None:
     if reservation:
         identities = reservation.get('request_ids', [])
         if (set(reservation) != {'kind', 'request_ids'}
-                or reservation['kind'] != 'existing_owner_draft'
+                or reservation['kind'] not in {'existing_owner_draft', 'owner_preparation_pending'}
                 or not isinstance(identities, list) or len(identities) != 2
                 or any(not isinstance(item, str) or not re.fullmatch(
                     r'[A-Za-z0-9][A-Za-z0-9_-]{0,79}', item) for item in identities)
                 or len(set(identities)) != 2):
-            raise ValueError('Dated owner reservation requires two distinct existing manuscript IDs')
+            raise ValueError('Dated owner reservation requires two distinct manuscript IDs and a supported state')
     return {'version': policy['version'], 'date': day.isoformat(), 'target': target,
             'category': category or 'parenting', 'depth': 'deep', 'work_managed': True,
             'phase': phase, 'topic_selection': 'owner_fixed' if reservation else 'autonomous_verified',

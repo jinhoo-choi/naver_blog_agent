@@ -717,3 +717,83 @@ def test_dated_owner_drafts_replace_regular_generation_without_duplicate_work(tm
     with pytest.raises(ValueError, match='current approved Work slot'):
         enqueue_file(settings, source)
     assert not settings.db_path.exists()
+
+
+PENDING_OWNER_DAYS = [
+    ('2026-10-26', ['owner-20261026-parental-leave-6plus6-retroactive',
+                    'owner-20261026-cream-cheese-honey-rivals']),
+    ('2026-10-27', ['owner-20261027-complementary-feeding-steps',
+                    'owner-20261027-side-to-side-rivals']),
+]
+
+
+@pytest.mark.parametrize('day,ids', PENDING_OWNER_DAYS)
+def test_pending_owner_topics_hold_generation_save_and_new_selection(tmp_path, monkeypatch, day, ids):
+    settings = settings_at(tmp_path, monkeypatch, day)
+    plan = settings.config['daily_plan']
+    assert plan['reservation'] == {'kind': 'owner_preparation_pending', 'request_ids': ids}
+    assert plan['topic_selection'] == 'owner_fixed'
+    assert plan['target'] == 1 and plan['weekly_publication_limit'] == 5
+    assert settings.config['blog']['publication_mode'] == 'owner_only'
+    monkeypatch.setattr('blogbot.pipeline.collect_requests', lambda *a: pytest.fail('No new topic'))
+    monkeypatch.setattr('blogbot.pipeline.BlogLLM', lambda *a: pytest.fail('No paid generation'))
+    monkeypatch.setattr('blogbot.pipeline.make_writer', lambda *a: pytest.fail('No native edit'))
+    expected = {'status': 'EDITORIAL_SLOT_RESERVED', 'date': day, 'category': 'parenting',
+                'reason': 'owner_preparation_pending', 'request_ids': ids}
+    for result in (run_daily(settings), run_daily(settings, retry_failed=True),
+                   save_pending(settings), cloud.recover_preparation(
+                       settings, [{'status': 'RESEARCH_REQUIRED'}], 1)):
+        assert result == [expected]
+    source = tmp_path / 'selected.json'
+    source.write_text(json.dumps({'id': ids[0], 'category': 'parenting', 'question': '선정된 질문',
+        'source': 'work_autonomous', 'strategy_version': 'strategy-reset-v2'}))
+    with pytest.raises(ValueError, match='current approved Work slot'):
+        enqueue_file(settings, source)
+    assert not settings.db_path.exists()
+    assert not settings.inbox_dir.exists()
+
+
+@pytest.mark.parametrize('day,ids', PENDING_OWNER_DAYS)
+@pytest.mark.parametrize('mode', ['prepare', 'recover'])
+def test_cloud_pending_owner_handoff_preserves_hold_and_unwritten_state(
+        tmp_path, monkeypatch, day, ids, mode):
+    settings = settings_at(tmp_path, monkeypatch, day)
+    monkeypatch.setattr('sys.argv', ['cloud', mode])
+    monkeypatch.setattr(cloud, 'load_settings', lambda: settings)
+    monkeypatch.setattr(cloud, 'restore', lambda _: None)
+    monkeypatch.setattr(cloud, 'seed_inputs', lambda _: pytest.fail('No stale seeds'))
+    monkeypatch.setattr(cloud, 'run_daily', lambda *a, **k: pytest.fail('No paid preparation'))
+    monkeypatch.setattr('blogbot.notify.telegram', lambda _: None)
+    monkeypatch.setenv('BLOG_BUNDLE_KEY', Fernet.generate_key().decode())
+    monkeypatch.setenv('BLOG_ENCRYPTED_OUTPUT', str(tmp_path / 'handoff' / 'bundle.enc'))
+    cloud.main()
+    summary = json.loads((tmp_path / 'run-summary.json').read_text())
+    assert summary['outcome'] == 'WAITING'
+    assert summary['failed'] is summary['deliverable_ready'] is False
+    assert summary['results'] == [{'status': 'EDITORIAL_SLOT_RESERVED', 'date': day,
+        'category': 'parenting', 'reason': 'owner_preparation_pending', 'request_ids': ids}]
+    ready = json.loads((tmp_path / 'ready.json').read_text())
+    assert ready['hold'] == 'editorial_slot_reserved' and ready['posts'] == []
+    assert ready.get('publication_ready', []) == []
+    assert ready['daily_plan']['reservation']['kind'] == 'owner_preparation_pending'
+    with connect_db(settings.db_path) as conn:
+        for table in ('posts', 'attempts', 'save_receipts'):
+            assert conn.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0] == 0
+        before = settings.db_path.read_bytes()
+        with pytest.raises(ValueError, match='Owner-only publication'):
+            claim_publication(conn, ids[0], settings)
+        assert settings.db_path.read_bytes() == before
+    assert not settings.inbox_dir.exists()
+
+
+@pytest.mark.parametrize('field,value', [
+    ('kind', 'owner_input_pending'), ('kind', 'SAVED_NAVER'), ('kind', 'published'),
+    ('request_ids', ['same', 'same']), ('request_ids', ['only-one']),
+    ('request_ids', ['one', 'two', 'three']), ('request_ids', ['one', '../two']),
+    ('request_ids', ['one', 2]), ('request_ids', 'one,two'), ('extra', True),
+])
+def test_pending_owner_reservations_keep_strict_identity_and_state_validation(field, value):
+    config = tomllib.loads((Path(__file__).parents[1] / 'config/blog.toml').read_text())
+    config['strategy_reset']['reservations']['2026-10-26'][field] = value
+    with pytest.raises(ValueError, match='Dated owner reservation'):
+        resolve_plan(config, date(2026, 10, 26))

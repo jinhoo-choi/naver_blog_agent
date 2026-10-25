@@ -744,10 +744,10 @@ def main():
         elif not reserved and args.attribution_review_request_id:
             # Import authoritative save receipts without seeding any candidates or context.
             import_manual_saves(settings)
-        if work_managed:
-            results = [{'status': 'AUTONOMOUS_WORK_REQUIRED', 'daily_plan': plan}]
-        elif reserved:
+        if reserved and plan.get('reservation'):
             results = [reservation_result(plan)]
+        elif work_managed:
+            results = [{'status': 'AUTONOMOUS_WORK_REQUIRED', 'daily_plan': plan}]
         elif args.mode == 'probe':
             from openai import OpenAI
 

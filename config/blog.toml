@@ -404,3 +404,12 @@ kind = "existing_owner_draft"
 # Preserve the already confirmed Telekinesis + Solidigm lineup.
 request_ids = ["owner-20261020-sunwoo-telekinesis-ai", "owner-20261022-solidigm-shareholder-value"]
 
+
+# Owner 2026-10-25: dated editorial holds only; no scheduler or article creation.
+[strategy_reset.reservations."2026-10-26"]
+kind = "owner_preparation_pending"
+request_ids = ["owner-20261026-parental-leave-6plus6-retroactive", "owner-20261026-cream-cheese-honey-rivals"]
+
+[strategy_reset.reservations."2026-10-27"]
+kind = "owner_preparation_pending"
+request_ids = ["owner-20261027-complementary-feeding-steps", "owner-20261027-side-to-side-rivals"]

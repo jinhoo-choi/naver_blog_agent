@@ -56,6 +56,22 @@ class ReviewTests(unittest.TestCase):
             steps[stage]['scores'] = {axis: 85 for axis in m.AXES}
         self.record = {'hard_checks': {k: {'status': 'pass', 'evidence': [ev.copy()]} for k in m.HARD_CHECKS}, 'standard_version': m.STANDARD, 'request_id': 'test', 'draft_id': 'test-draft', 'scored_revision': self.sha, 'snapshot_artifact': 'saved', 'artifacts': artifacts, 'steps': steps, 'quality': quality, 'unresolved': []}
 
+        self.record['approved_cover'] = 'cover'
+        for role, width, color, check in (
+            ('pc_representative', 800, 'blue', 'representative'),
+            ('list_140', 140, 'red', 'representative'),
+            ('mobile_360', 360, 'green', 'mobile'),
+        ):
+            path = self.root / f'{role}.png'
+            Image.new('RGB', (width, 400), color).save(path)
+            artifacts[role] = {
+                'kind': 'image', 'role': role, 'path': path.name, 'sha256': h(path.read_bytes()),
+                'draft_id': 'test-draft', 'revision': self.sha,
+                'captured_at': '2026-11-18T10:00:06+09:00',
+            }
+            self.record['hard_checks'][check]['evidence'].append(
+                {'artifact': role, 'observation': 'Synthetic screen fixture'})
+
     def refresh_media(self):
         saved = copy.deepcopy(self.saved)
         media_sha = self.record['artifacts']['cover']['sha256']
@@ -238,5 +254,59 @@ class ThresholdTests(ReviewTests):
         self.assertEqual(self.check()['quality_decision'], 'pass')
         self.record['hard_checks']['mobile'] = {'status': 'not_applicable', 'reason': '화면 없음'}
         self.assertEqual(self.check()['status'], 'unscored')
+
+    def test_incomplete_reviews(self):
+        for stage in ('first_review', 'second_review'):
+            with self.subTest(stage=stage):
+                record = copy.deepcopy(self.record)
+                record['steps'][stage]['scores'] = dict.fromkeys(m.AXES)
+                self.assertIn(stage + '.incomplete_scores', self.check(record)['reasons'])
+
+    def test_no_score_increase_without_new_evidence(self):
+        for stage in ('first_review', 'second_review'):
+            self.record['steps'][stage]['scores'] = dict.fromkeys(m.AXES, 60)
+        self.assertIn('mobile_review.unsupported_increase.voice', self.check()['reasons'])
+
+    def test_score_correction_on_new_observation(self):
+        self.record['steps']['second_review']['scores']['design'] = 82
+        correction = {'artifact': 'mobile_360', 'location': 'first screen', 'observation': 'new observation'}
+        self.record['steps']['mobile_review']['score_corrections'] = {'design': [correction]}
+        self.assertEqual(self.check()['quality_decision'], 'pass')
+        correction.update(artifact='saved', quote='첫 답과 추가 조건')
+        self.assertIn('mobile_review.unsupported_increase.design', self.check()['reasons'])
+
+    def test_screenless_and_stale_records_blocked(self):
+        for role, key in [('pc_representative', 'representative'), ('list_140', 'representative'),
+                          ('mobile_360', 'mobile')]:
+            with self.subTest(role=role):
+                record = copy.deepcopy(self.record)
+                record['hard_checks'][key]['evidence'] = [{'artifact': 'cover', 'observation': 'cover'}]
+                self.assertIn('screen.' + role, self.check(record)['reasons'])
+                record = copy.deepcopy(self.record)
+                record['artifacts'][role]['revision'] = 'd' * 64
+                self.assertIn('screen.' + role, self.check(record)['reasons'])
+        self.record['approved_cover'] = 'mobile_360'
+        self.assertIn('representative.approved_cover', self.check()['reasons'])
+
+    def test_duplicate_role_bytes_blocked(self):
+        self.record['artifacts']['mobile_360'].update(
+            {k: self.record['artifacts']['pc_representative'][k] for k in ('path', 'sha256')})
+        self.assertIn('screen.mobile_360', self.check()['reasons'])
+
+    def test_table_requires_matching_mobile_evidence(self):
+        self.saved['tables'] = [{'rows': [['월령', '수유량']]}]
+        self.refresh_media()
+        for item in self.record['artifacts'].values():
+            if item.get('role'):
+                item['revision'] = self.sha
+        self.assertEqual(self.check()['reasons'], ['screen.mobile_table'])
+
+    def test_rewrite_grade(self):
+        self.set_scores([85, 55, 85, 85, 85])
+        self.record['quality']['voice']['status'] = 'rewrite'
+        self.assertEqual(self.check()['quality_decision'], 'revise')
+        self.record['quality']['voice']['status'] = 'revise'
+        self.assertIn('quality.voice.score_status', self.check()['reasons'])
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

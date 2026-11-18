@@ -109,6 +109,8 @@ def validate(record, request_id, current_revision, artifact_root=None):
         invalid.append("artifacts")
         artifacts = {}
     checked = {}
+    image_widths = {}
+    saved = {}
     root = Path(artifact_root).resolve() if artifact_root is not None else None
     if root is None or not root.is_dir():
         invalid.append("artifact_root")
@@ -134,6 +136,7 @@ def validate(record, request_id, current_revision, artifact_root=None):
                     picture.verify()
                 with Image.open(path) as picture:
                     picture.load()
+                    image_widths[key] = picture.width
             checked[key] = (item, content)
         except (OSError, ValueError, TypeError, SyntaxError) as exc:
             invalid.append("artifacts." + str(key) + "." + str(exc))
@@ -211,7 +214,7 @@ def validate(record, request_id, current_revision, artifact_root=None):
     states = []
     scores = []
     for axis, item in quality.items():
-        if not isinstance(item, dict) or item.get("status") not in ("pass", "revise", "unverified"):
+        if not isinstance(item, dict) or item.get("status") not in ("pass", "revise", "rewrite", "unverified"):
             invalid.append("quality." + axis)
             continue
         status = item["status"]
@@ -228,7 +231,7 @@ def validate(record, request_id, current_revision, artifact_root=None):
                 invalid.append("quality." + axis + ".score")
             else:
                 scores.append(score)
-                expected = "pass" if score >= 80 else "revise"
+                expected = "pass" if score >= 80 else ("revise" if score >= 60 else "rewrite")
                 if status != expected:
                     invalid.append("quality." + axis + ".score_status")
             deductions = item.get("deductions")
@@ -259,6 +262,22 @@ def validate(record, request_id, current_revision, artifact_root=None):
                      for e in item["reference_evidence"]):
                 invalid.append("quality.voice.reference_is_current_draft")
 
+    def fresh_correction(entries, before, after):
+        if not evidence(entries) or not quality_evidence(entries):
+            return False
+        start, end = timestamp(before.get("at")), timestamp(after.get("at"))
+        for entry in entries:
+            artifact = checked[entry["artifact"]][0]
+            at = timestamp(artifact.get("captured_at"))
+            if (start and end and at and start < at <= end
+                    and artifact.get("draft_id") == draft_id
+                    and artifact.get("revision") == after.get("revision")
+                    and artifact["sha256"] not in prior_evidence_hashes):
+                return True
+        return False
+
+    earlier_review = None
+    prior_evidence_hashes = set()
     for stage in REVIEWS:
         step = steps.get(stage)
         if not isinstance(step, dict):
@@ -271,6 +290,32 @@ def validate(record, request_id, current_revision, artifact_root=None):
         elif stage == "mobile_review" and any(
                 stage_scores[a] != (quality[a].get("score") if isinstance(quality.get(a), dict) else None) for a in AXES):
             invalid.append("mobile_review.score_mismatch")
+
+        else:
+            if stage != "mobile_review" and any(value is None for value in stage_scores.values()):
+                invalid.append(stage + ".incomplete_scores")
+            if earlier_review is not None:
+                previous_scores = earlier_review.get("scores")
+                same_copy = step.get("revision") == earlier_review.get("revision")
+                increases = [axis for axis in AXES if isinstance(previous_scores, dict)
+                             and type(previous_scores.get(axis)) is int
+                             and type(stage_scores[axis]) is int
+                             and stage_scores[axis] > previous_scores[axis]]
+                for axis in increases:
+                    if not same_copy and step.get("changes") and quality_evidence(step["changes"]):
+                        continue
+                    adjustments = step.get("score_corrections")
+                    entries = adjustments.get(axis) if isinstance(adjustments, dict) else None
+                    if not fresh_correction(entries, earlier_review, step):
+                        invalid.append(stage + ".unsupported_increase." + axis)
+            earlier_review = step
+            groups = [step.get("evidence"), step.get("changes")]
+            corrections = step.get("score_corrections")
+            if isinstance(corrections, dict):
+                groups.extend(corrections.values())
+            for entries in groups:
+                if quality_evidence(entries):
+                    prior_evidence_hashes.update(checked[e["artifact"]][0]["sha256"] for e in entries)
 
     checks = record.get("hard_checks")
     hard_states = []
@@ -294,17 +339,67 @@ def validate(record, request_id, current_revision, artifact_root=None):
         elif quality_evidence(item.get("evidence")) is None:
             invalid.append("hard_checks." + key + ".evidence")
 
+    # A cover alone cannot establish what the saved editor or mobile view displayed.
+    if isinstance(saved, dict):
+        media_items = [saved.get("representative"), *(saved.get("images") or [])] if isinstance(
+            saved.get("images"), list) else []
+        media_hashes = {item["sha256"] for item in media_items
+                        if isinstance(item, dict) and revision_hash(item.get("sha256"))}
+        seen_screens = set()
+        latest_save = steps.get("naver_save")
+        latest_save_at = timestamp(latest_save.get("at")) if isinstance(latest_save, dict) else None
+        for stage in ("second_review", "mobile_review"):
+            reviewed = steps.get(stage)
+            if isinstance(reviewed, dict) and reviewed.get("changes"):
+                latest_save_at = timestamp(reviewed.get("at"))
+        mobile_roles = ("mobile_360", "mobile_table") if saved.get("tables") else ("mobile_360",)
+        for name, roles in (("representative", ("pc_representative", "list_140")),
+                            ("mobile", mobile_roles)):
+            check = checks.get(name)
+            if not isinstance(check, dict) or check.get("status") != "pass":
+                continue
+            if name == "representative":
+                approved = artifacts.get(record.get("approved_cover")) if isinstance(
+                    record.get("approved_cover"), str) else None
+                representative = saved.get("representative")
+                if (not isinstance(approved, dict) or approved.get("kind") != "image"
+                        or not isinstance(representative, dict)
+                        or approved.get("sha256") != representative.get("sha256")):
+                    invalid.append("representative.approved_cover")
+            for role in roles:
+                refs = check.get("evidence")
+                matches = []
+                for ref in refs if isinstance(refs, list) else []:
+                    key = ref.get("artifact") if isinstance(ref, dict) else None
+                    pair = checked.get(key) if isinstance(key, str) else None
+                    if pair and pair[0].get("role") == role:
+                        matches.append((key, pair[0]))
+                if len(matches) != 1:
+                    invalid.append("screen." + role)
+                    continue
+                key, screen = matches[0]
+                observed = timestamp(screen.get("captured_at"))
+                minimum_width = 360 if name == "mobile" else 140
+                reopened = timestamp(mobile.get("reopened_at")) if isinstance(mobile, dict) else None
+                if (screen["kind"] != "image" or screen.get("draft_id") != draft_id
+                        or screen.get("revision") != current_revision or latest_save_at is None
+                        or observed is None or observed < latest_save_at or reopened is None or observed > reopened
+                        or image_widths.get(key, 0) < minimum_width
+                        or screen["sha256"] in media_hashes or screen["sha256"] in seen_screens):
+                    invalid.append("screen." + role)
+                seen_screens.add(screen["sha256"])
+
     unresolved = record.get("unresolved")
     if not isinstance(unresolved, list) or (unresolved and not evidence(unresolved)):
         invalid.append("unresolved")
-    elif ("revise" in states or "fail" in hard_states) and not unresolved:
+    elif (bool({"revise", "rewrite"}.intersection(states)) or "fail" in hard_states) and not unresolved:
         invalid.append("quality.unresolved_mismatch")
     if invalid:
         return {"status": "unscored", "total": None, "quality_decision": "unverified",
                 "reasons": invalid, "scope": "record_and_evidence_only"}
     reasons = []
     total = sum(scores) / 5 if len(scores) == 5 else None
-    if "revise" in states or unresolved or "fail" in hard_states:
+    if bool({"revise", "rewrite"}.intersection(states)) or unresolved or "fail" in hard_states:
         reasons.append("unresolved_defects")
     if "unverified" in states or "unverified" in hard_states:
         reasons.append("unverified_quality")

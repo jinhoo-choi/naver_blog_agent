@@ -413,3 +413,14 @@ request_ids = ["owner-20261026-parental-leave-6plus6-retroactive", "owner-202610
 [strategy_reset.reservations."2026-10-27"]
 kind = "owner_preparation_pending"
 request_ids = ["owner-20261027-complementary-feeding-steps", "owner-20261027-side-to-side-rivals"]
+
+# Final Work gate; legacy API numeric transport remains separate.
+[editorial.work_quality]
+standard_version = "seonoo-production-v7"
+personas = ["structure", "voice", "design", "topic", "reader"]
+score_max = 100
+average_minimum = 85
+persona_minimum = 80
+require_mobile = true
+require_all_hard_checks = true
+preserve_published_bad_cases = true

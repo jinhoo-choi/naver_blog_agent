@@ -2,9 +2,10 @@ import copy
 import hashlib
 import importlib.util
 import json
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
+
 TARGET = Path(__file__).resolve().parents[1] / 'scripts/seonoo-review-check.py'
 spec = importlib.util.spec_from_file_location('review', TARGET)
 m = importlib.util.module_from_spec(spec)
@@ -15,8 +16,10 @@ class ReviewTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
-        from PIL import Image
         import io
+
+        from PIL import Image
+
         stream = io.BytesIO()
         Image.new('RGB', (4, 4), 'white').save(stream, format='PNG')
         raw = stream.getvalue()
@@ -102,7 +105,7 @@ class ReviewTests(unittest.TestCase):
         self.refresh_media()
         result = self.check()
         self.assertEqual(result['status'], 'unscored')
-        self.assertTrue(any((x.startswith('artifacts.cover.') for x in result['reasons'])))
+        self.assertTrue(any(x.startswith('artifacts.cover.') for x in result['reasons']))
 
     def test_bad_snapshot_elements(self):
         for field, value in [('tables', [None, 42]), ('cards', [{'unexpected': 'x'}]), ('cards', [{'title': 'x', 'url': 'https://'}]), ('tags', [None, {'bad': True}])]:
@@ -122,11 +125,13 @@ class ReviewTests(unittest.TestCase):
                         step['input_revision'] = sha
                 result = m.validate(r, 'test', sha, self.root)
                 self.assertEqual(result['status'], 'unscored')
-                self.assertTrue(any((x.startswith('snapshot.' + field) for x in result['reasons'])))
+                self.assertTrue(any(x.startswith('snapshot.' + field) for x in result['reasons']))
 
     def test_corrupt_png_checksum(self):
-        from PIL import Image
         import io
+
+        from PIL import Image
+
         stream = io.BytesIO()
         Image.new('RGB', (2, 2)).save(stream, format='PNG')
         raw = bytearray(stream.getvalue())
@@ -137,7 +142,7 @@ class ReviewTests(unittest.TestCase):
         self.refresh_media()
         result = self.check()
         self.assertEqual(result['status'], 'unscored')
-        self.assertTrue(any((x.startswith('artifacts.cover.') for x in result['reasons'])))
+        self.assertTrue(any(x.startswith('artifacts.cover.') for x in result['reasons']))
 
     def test_no_root(self):
         self.assertEqual(self.check(root=False)['status'], 'unscored')

@@ -110,6 +110,11 @@ def check_saved_dom(dom, saved, draft_id, revision, earliest, reopened, purpose_
         defects.append("saved_dom.title_whitespace")
     if dom.get("media_settled") is not True:
         unavailable.append("saved_dom.media_loading")
+    svg_count = dom.get("svg_count")
+    if type(svg_count) is not int or svg_count < 0:
+        unavailable.append("saved_dom.svg_count_unverified")
+    elif dom.get("media_settled") is True and svg_count != 0:
+        defects.append("saved_dom.inline_svg")
 
     images = dom["body_images"]
     expected_images = saved.get("images")

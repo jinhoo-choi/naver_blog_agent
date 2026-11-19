@@ -334,6 +334,7 @@ class GuardedReviewTests(unittest.TestCase):
             'observed_at': '2026-11-18T10:00:06+09:00',
             'title': self.saved['title'],
             'media_settled': True,
+            'svg_count': 0,
             'body_images': [
                 {'src': 'https://blogfiles.pstatic.net/image.png', 'loaded': True,
                  'sha256': self.saved['images'][0]['sha256']},
@@ -481,6 +482,26 @@ class GuardedReviewTests(unittest.TestCase):
         self.refresh()
         self.assertEqual(self.check()['quality_decision'], 'revise')
         self.assertIn('saved_dom.image_not_loaded', self.check()['reasons'])
+
+    def test_inline_svg_must_be_absent_from_settled_body(self):
+        self.dom.update(svg_count=1, media_settled=False)
+        self.refresh()
+        self.assertEqual(self.check()['quality_decision'], 'unverified')
+        self.dom['media_settled'] = True
+        self.refresh()
+        result = self.check()
+        self.assertEqual(result['quality_decision'], 'revise')
+        self.assertIn('saved_dom.inline_svg', result['reasons'])
+
+    def test_missing_or_invalid_svg_count_stays_unverified(self):
+        self.dom.pop('svg_count')
+        self.refresh()
+        self.assertEqual(self.check()['quality_decision'], 'unverified')
+        for count in (None, True, -1, '0'):
+            with self.subTest(count=count):
+                self.dom['svg_count'] = count
+                self.refresh()
+                self.assertIn('saved_dom.svg_count_unverified', self.check()['reasons'])
 
     def test_duplicate_body_image_even_with_different_urls(self):
         self.saved['images'].append(self.saved['images'][0].copy())

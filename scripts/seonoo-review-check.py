@@ -1,10 +1,11 @@
 """Validate Seonoo review records and local evidence; does not judge prose or images."""
 import argparse
-from datetime import datetime
 import hashlib
 import json
-from pathlib import Path
 import re
+import sys
+from datetime import datetime, timedelta
+from pathlib import Path
 from urllib.parse import urlsplit
 
 try:
@@ -46,12 +47,255 @@ def timestamp(value):
     return parsed if parsed.tzinfo is not None else None
 
 
-def validate(record, request_id, current_revision, artifact_root=None):
+def slot_state(scheduled_at, started_at, now, draft_id=None, save_uncertain=False):
+    if started_at < scheduled_at:
+        raise ValueError("started_at precedes scheduled_at")
+    elapsed = now - scheduled_at
+    if now < started_at or elapsed >= timedelta(minutes=60):
+        phase = "closed"
+    elif elapsed >= timedelta(minutes=55):
+        phase = "record_only"
+    elif elapsed >= timedelta(minutes=40):
+        phase = "closeout"
+    else:
+        phase = "edit"
+    if phase in ("closed", "record_only"):
+        action = "stop" if phase == "closed" else "record_handoff"
+    elif save_uncertain:
+        action = "reconcile_save"
+    elif draft_id and phase == "closeout":
+        action = "verify_saved_draft"
+    elif draft_id:
+        action = "resume_draft"
+    else:
+        action = "create_draft" if phase == "edit" else "handoff"
+    return {"phase": phase, "action": action, "draft_id": draft_id}
+
+
+def json_artifact(checked, key):
+    pair = checked.get(key) if isinstance(key, str) else None
+    if pair is None or pair[0]["kind"] != "text":
+        return {}, None
+    try:
+        value = json.loads(pair[1])
+    except ValueError:
+        return {}, None
+    if not isinstance(value, dict):
+        return {}, None
+    return value, pair[0]["sha256"]
+
+
+def http_url(value):
+    if not text(value) or any(char.isspace() for char in value):
+        return False
+    try:
+        url = urlsplit(value)
+        return url.scheme in ("http", "https") and bool(url.hostname) and url.username is None
+    except ValueError:
+        return False
+
+
+def check_saved_dom(dom, saved, draft_id, revision, earliest, reopened, purpose_urls):
+    observed = timestamp(dom.get("observed_at"))
+    if (dom.get("draft_id") != draft_id or dom.get("revision") != revision
+            or not earliest or not observed or not reopened or not earliest <= observed <= reopened
+            or dom.get("title") != saved.get("title") or dom.get("quotes") != saved.get("quotes")
+            or dom.get("purpose_urls") != purpose_urls
+            or not all(isinstance(dom.get(key), list)
+                       for key in ("body_images", "links", "quotes", "purpose_urls"))):
+        return [], ["saved_dom.evidence_unverified"]
+
+    defects, unavailable = [], []
+    if dom["title"] != dom["title"].strip():
+        defects.append("saved_dom.title_whitespace")
+    if dom.get("media_settled") is not True:
+        unavailable.append("saved_dom.media_loading")
+
+    images = dom["body_images"]
+    expected_images = saved.get("images")
+    if (not isinstance(expected_images, list)
+            or not all(isinstance(img, dict) for img in images + expected_images)
+            or len(images) != len(expected_images)):
+        unavailable.append("saved_dom.image_coverage")
+    else:
+        seen_urls = set()
+        seen_hashes = set()
+        for img, expected in zip(images, expected_images):
+            url, loaded, digest = img.get("src"), img.get("loaded"), img.get("sha256")
+            if digest is not None and (not revision_hash(digest) or digest != expected.get("sha256")):
+                unavailable.append("saved_dom.image_revision")
+            if dom.get("media_settled") is not True:
+                continue
+            if not http_url(url) or loaded is False:
+                defects.append("saved_dom.image_not_loaded")
+            elif loaded is not True:
+                unavailable.append("saved_dom.image_load_unverified")
+            elif not urlsplit(url).hostname.endswith(".pstatic.net"):
+                unavailable.append("saved_dom.upload_host_unverified")
+            if (isinstance(url, str) and url in seen_urls) or expected["sha256"] in seen_hashes:
+                defects.append("saved_dom.duplicate_image")
+            if isinstance(url, str):
+                seen_urls.add(url)
+            seen_hashes.add(expected["sha256"])
+
+    approved = dom["purpose_urls"]
+    links = dom["links"]
+    if (type(dom.get("purpose_required")) is not bool
+            or not all(http_url(url) for url in approved)
+            or (dom["purpose_required"] and not approved)
+            or bool(approved) != dom["purpose_required"]
+            or not all(isinstance(link, dict) and http_url(link.get("href"))
+                       and (link.get("destination") is None or http_url(link.get("destination")))
+                       for link in links)):
+        unavailable.append("saved_dom.purpose_evidence")
+    elif saved.get("links") != [link["href"] for link in links]:
+        unavailable.append("saved_dom.link_coverage")
+    else:
+        for url in approved:
+            if any(link.get("destination") == url for link in links):
+                continue
+            if any(link.get("destination") is None for link in links):
+                unavailable.append("saved_dom.purpose_destination_unverified")
+            else:
+                defects.append("saved_dom.purpose_link_missing_or_wrong")
+
+    for quote in dom["quotes"]:
+        if (not isinstance(quote, dict) or not text(quote.get("text"))
+                or type(quote.get("source_placeholder_visible")) is not bool
+                or not isinstance(quote.get("adjacent_headings"), list)
+                or not all(isinstance(line, str) for line in quote["adjacent_headings"])):
+            unavailable.append("saved_dom.quote_evidence")
+            continue
+        if quote["source_placeholder_visible"]:
+            defects.append("saved_dom.quote_placeholder")
+        if " ".join(quote["text"].split()) in {
+            " ".join(heading.split()) for heading in quote["adjacent_headings"]
+        }:
+            defects.append("saved_dom.duplicate_heading")
+    return list(dict.fromkeys(defects)), list(dict.fromkeys(unavailable))
+
+
+def blind_input(snapshot_path, draft_id, standard_commit, screenshots, references):
+    raw = snapshot_path.read_bytes()
+    saved = json.loads(raw)
+    if (not isinstance(saved, dict) or not text(saved.get("title")) or not text(saved.get("body"))
+            or not text(draft_id) or not re.fullmatch(r"[0-9a-f]{40}", standard_commit)):
+        raise ValueError("invalid blind input identity or snapshot")
+    roles = {"list_140", "mobile_360"} | ({"mobile_table"} if saved.get("tables") else set())
+    if set(screenshots) != roles:
+        raise ValueError("blind input screens do not match saved draft")
+    if not isinstance(references, list) or not all(
+            isinstance(ref, dict) and set(ref) == {"url", "excerpt"}
+            and http_url(ref["url"]) and text(ref["excerpt"]) for ref in references):
+        raise ValueError("invalid official references")
+    return {
+        "standard_commit": standard_commit,
+        "draft_id": draft_id,
+        "revision": hashlib.sha256(raw).hexdigest(),
+        "title": saved["title"],
+        "body": saved["body"],
+        "screens": {role: hashlib.sha256(path.read_bytes()).hexdigest()
+                    for role, path in screenshots.items()},
+        "official_references": references,
+    }
+
+
+def check_blind_review(record, saved, checked, standard_commit, earliest, reopened):
+    blind = record.get("blind_review")
+    if not isinstance(blind, dict):
+        return ["blind_review.evidence_unverified"], []
+    payload, input_sha = json_artifact(checked, blind.get("input_artifact"))
+    result, result_sha = json_artifact(checked, blind.get("result_artifact"))
+    if input_sha is None or result_sha is None:
+        return ["blind_review.evidence_unverified"], []
+    step = record["steps"].get("second_review")
+    if not isinstance(step, dict):
+        return ["blind_review.evidence_unverified"], []
+    revision, draft_id = record["scored_revision"], record["draft_id"]
+    if (set(payload) != {"standard_commit", "draft_id", "revision", "title", "body",
+                         "screens", "official_references"}
+            or payload.get("standard_commit") != standard_commit
+            or payload.get("draft_id") != draft_id or payload.get("revision") != revision
+            or step.get("input_revision") != revision or step.get("revision") != revision
+            or payload.get("title") != saved.get("title") or payload.get("body") != saved.get("body")
+            or not isinstance(payload.get("official_references"), list)
+            or not all(isinstance(ref, dict) and set(ref) == {"url", "excerpt"}
+                       and http_url(ref["url"]) and text(ref["excerpt"])
+                       for ref in payload["official_references"])):
+        return [], ["blind_review.input"]
+    screens = payload["screens"]
+    roles = {"list_140", "mobile_360"} | ({"mobile_table"} if saved.get("tables") else set())
+    expected_screens = {
+        data["role"]: data["sha256"] for data, _ in checked.values()
+        if isinstance(data.get("role"), str) and data["role"] in roles and data.get("revision") == revision
+        and data.get("draft_id") == draft_id and data["kind"] == "image"
+    }
+    if not isinstance(screens, dict) or set(screens) != roles or screens != expected_screens:
+        return [], ["blind_review.screens"]
+
+    prepared = timestamp(blind.get("input_prepared_at"))
+    started = timestamp(result.get("started_at"))
+    finished = timestamp(result.get("finished_at"))
+    compared = timestamp(blind.get("compared_first_at"))
+    if (result.get("isolation") != "stateless_no_tools" or not text(result.get("call_id"))
+            or not all((earliest, prepared, started, finished, compared, reopened))):
+        return ["blind_review.isolation_unverified"], []
+    screen_artifacts = [data for data, _ in checked.values()
+                        if isinstance(data.get("role"), str) and data["role"] in roles and data["sha256"] == screens[data["role"]]]
+    captures = [timestamp(data.get("captured_at")) for data in screen_artifacts]
+    if (not earliest <= prepared <= started <= finished < compared
+            or any(at is None or not earliest <= at <= min(prepared, reopened) for at in captures)
+            or result.get("input_sha256") != input_sha or result.get("scores") != step.get("scores")
+            or timestamp(step.get("at")) != finished):
+        return [], ["blind_review.result"]
+    return [], []
+
+
+def check_frozen_scores(record, history, checked):
+    missing, invalid = [], []
+    if not isinstance(history, list) or not all(isinstance(row, dict) for row in history):
+        return ["review_history.unverified"], []
+    for stage in REVIEWS:
+        step = record["steps"].get(stage)
+        if not isinstance(step, dict):
+            continue
+        matches = [row for row in history
+                   if row.get("request_id") == record.get("request_id")
+                   and row.get("draft_id") == record.get("draft_id")
+                   and row.get("revision") == step.get("revision") and row.get("stage") == stage]
+        if not matches:
+            missing.append(stage + ".freeze_unverified")
+        elif len(matches) != 1 or matches[0].get("scores") != step.get("scores") or (
+                timestamp(matches[0].get("at")) != timestamp(step.get("at"))):
+            invalid.append(stage + ".frozen_scores_changed")
+        elif stage == "second_review":
+            blind = record.get("blind_review")
+            _, digest = json_artifact(checked, blind.get("result_artifact")
+                                      if isinstance(blind, dict) else None)
+            frozen = timestamp(matches[0].get("frozen_at"))
+            finished = timestamp(step.get("at"))
+            compared = timestamp(blind.get("compared_first_at")) if isinstance(blind, dict) else None
+            if digest is None or frozen is None or compared is None:
+                missing.append(stage + ".freeze_unverified")
+            elif matches[0].get("result_sha256") != digest:
+                invalid.append(stage + ".frozen_result_changed")
+            elif not finished or not finished <= frozen < compared:
+                invalid.append(stage + ".freeze_order")
+    return missing, invalid
+
+
+def validate(record, request_id, current_revision, artifact_root=None, *,
+             standard_commit=None, review_history=None):
     """Check structure, local file hashes and quote presence, never semantic truth."""
     if not isinstance(record, dict):
         return {"status": "unscored", "total": None, "quality_decision": "unverified",
                 "reasons": ["record"], "scope": "record_and_evidence_only"}
     invalid = []
+    guarded = standard_commit is not None or "standard_commit" in record
+    if guarded and (not isinstance(standard_commit, str)
+                    or not re.fullmatch(r"[0-9a-f]{40}", standard_commit)
+                    or record.get("standard_commit") != standard_commit):
+        invalid.append("standard_commit")
     if record.get("standard_version") != STANDARD:
         invalid.append("standard_version")
     if record.get("request_id") != request_id or not text(request_id):
@@ -81,9 +325,8 @@ def validate(record, request_id, current_revision, artifact_root=None):
             changes = step.get("changes")
             if not isinstance(changes, list) or (changes and not evidence(changes)):
                 invalid.append(stage + ".changes")
-        if stage in REVIEWS or stage == "naver_save":
-            if not revision_hash(step.get("revision")):
-                invalid.append(stage + ".revision")
+        if (stage in REVIEWS or stage == "naver_save") and not revision_hash(step.get("revision")):
+            invalid.append(stage + ".revision")
         if stage in PREVIOUS_REVISIONS:
             if step.get("draft_id") != draft_id:
                 invalid.append(stage + ".draft_id")
@@ -91,9 +334,9 @@ def validate(record, request_id, current_revision, artifact_root=None):
             prior_revision = prior.get("revision") if isinstance(prior, dict) else None
             if not revision_hash(prior_revision) or step.get("input_revision") != prior_revision:
                 invalid.append(stage + ".input_revision")
-            if stage in REVIEWS and isinstance(step.get("changes"), list):
-                if bool(step["changes"]) == (step.get("revision") == prior_revision):
-                    invalid.append(stage + ".changes_mismatch")
+            if (stage in REVIEWS and isinstance(step.get("changes"), list)
+                    and bool(step["changes"]) == (step.get("revision") == prior_revision)):
+                invalid.append(stage + ".changes_mismatch")
     mobile = steps.get("mobile_review")
     if isinstance(mobile, dict):
         at, reopened = timestamp(mobile.get("at")), timestamp(mobile.get("reopened_at"))
@@ -109,7 +352,7 @@ def validate(record, request_id, current_revision, artifact_root=None):
         invalid.append("artifacts")
         artifacts = {}
     checked = {}
-    image_widths = {}
+    image_sizes = {}
     saved = {}
     root = Path(artifact_root).resolve() if artifact_root is not None else None
     if root is None or not root.is_dir():
@@ -136,7 +379,7 @@ def validate(record, request_id, current_revision, artifact_root=None):
                     picture.verify()
                 with Image.open(path) as picture:
                     picture.load()
-                    image_widths[key] = picture.width
+                    image_sizes[key] = picture.size
             checked[key] = (item, content)
         except (OSError, ValueError, TypeError, SyntaxError) as exc:
             invalid.append("artifacts." + str(key) + "." + str(exc))
@@ -169,7 +412,7 @@ def validate(record, request_id, current_revision, artifact_root=None):
                 parsed = urlsplit(card["url"])
                 if not parsed.hostname or any(c.isspace() for c in card["url"]):
                     raise ValueError("cards_url")
-                parsed.port
+                _ = parsed.port
             image_hashes = {item["sha256"] for item, _ in checked.values() if item["kind"] == "image"}
             for media in [saved.get("representative"), *saved["images"]]:
                 if not isinstance(media, dict) or media.get("sha256") not in image_hashes:
@@ -203,9 +446,8 @@ def validate(record, request_id, current_revision, artifact_root=None):
         if isinstance(step, dict):
             if quality_evidence(step.get("evidence")) is None:
                 invalid.append(stage + ".artifact_evidence")
-            if stage in REVIEWS and step.get("changes"):
-                if quality_evidence(step["changes"]) is None:
-                    invalid.append(stage + ".changes_artifact_evidence")
+            if stage in REVIEWS and step.get("changes") and quality_evidence(step["changes"]) is None:
+                invalid.append(stage + ".changes_artifact_evidence")
 
     quality = record.get("quality")
     if not isinstance(quality, dict) or set(quality) != set(AXES):
@@ -237,10 +479,9 @@ def validate(record, request_id, current_revision, artifact_root=None):
             deductions = item.get("deductions")
             if not isinstance(deductions, list):
                 invalid.append("quality." + axis + ".deductions")
-            if valid_score and score < 80:
-                if (not evidence(deductions) or quality_evidence(deductions) is None
-                        or not text(item.get("immediate_fix"))):
-                    invalid.append("quality." + axis + ".fix")
+            if (valid_score and score < 80 and (not evidence(deductions)
+                    or quality_evidence(deductions) is None or not text(item.get("immediate_fix")))):
+                invalid.append("quality." + axis + ".fix")
         if status == "unverified" and not item.get("evidence") and text(item.get("reason")):
             continue
         kinds = quality_evidence(item.get("evidence"))
@@ -302,6 +543,12 @@ def validate(record, request_id, current_revision, artifact_root=None):
                              and type(stage_scores[axis]) is int
                              and stage_scores[axis] > previous_scores[axis]]
                 for axis in increases:
+                    if guarded and stage == "second_review" and same_copy:
+                        # An independent second round has its own immutable result.
+                        continue
+                    if guarded and stage == "mobile_review" and same_copy:
+                        invalid.append(stage + ".unsupported_increase." + axis)
+                        continue
                     if not same_copy and step.get("changes") and quality_evidence(step["changes"]):
                         continue
                     adjustments = step.get("score_corrections")
@@ -384,9 +631,13 @@ def validate(record, request_id, current_revision, artifact_root=None):
                 if (screen["kind"] != "image" or screen.get("draft_id") != draft_id
                         or screen.get("revision") != current_revision or latest_save_at is None
                         or observed is None or observed < latest_save_at or reopened is None or observed > reopened
-                        or image_widths.get(key, 0) < minimum_width
+                        or image_sizes.get(key, (0, 0))[0] < minimum_width
                         or screen["sha256"] in media_hashes or screen["sha256"] in seen_screens):
                     invalid.append("screen." + role)
+                if guarded and role == "list_140" and (
+                        image_sizes.get(key) != (140, 140) or not isinstance(representative, dict)
+                        or screen.get("source_sha256") != representative.get("sha256")):
+                    invalid.append("screen.list_140_source")
                 seen_screens.add(screen["sha256"])
 
     unresolved = record.get("unresolved")
@@ -394,37 +645,99 @@ def validate(record, request_id, current_revision, artifact_root=None):
         invalid.append("unresolved")
     elif (bool({"revise", "rewrite"}.intersection(states)) or "fail" in hard_states) and not unresolved:
         invalid.append("quality.unresolved_mismatch")
+    guard_defects, guard_missing = [], []
+    if guarded and not invalid:
+        save_at = timestamp(steps["naver_save"].get("at"))
+        reopened_at = timestamp(steps["mobile_review"].get("reopened_at"))
+        dom, _ = json_artifact(checked, record.get("saved_dom_artifact"))
+        blind_meta = record.get("blind_review")
+        prepared_at = timestamp(blind_meta.get("input_prepared_at")) if isinstance(blind_meta, dict) else None
+        dom_deadline = min(prepared_at, reopened_at) if prepared_at and reopened_at else reopened_at
+        guard_defects, guard_missing = check_saved_dom(
+            dom, saved, draft_id, current_revision, save_at, dom_deadline,
+            steps["candidate"].get("purpose_urls"))
+        missing, denied = check_blind_review(record, saved, checked, standard_commit, save_at, reopened_at)
+        guard_missing.extend(missing)
+        invalid.extend(denied)
+        missing, denied = check_frozen_scores(record, review_history, checked)
+        guard_missing.extend(missing)
+        invalid.extend(denied)
+        if steps["mobile_review"].get("changes"):
+            invalid.append("mobile_review.changed_after_blind_review")
     if invalid:
         return {"status": "unscored", "total": None, "quality_decision": "unverified",
                 "reasons": invalid, "scope": "record_and_evidence_only"}
-    reasons = []
+    reasons = guard_defects + guard_missing
     total = sum(scores) / 5 if len(scores) == 5 else None
-    if bool({"revise", "rewrite"}.intersection(states)) or unresolved or "fail" in hard_states:
+    if bool({"revise", "rewrite"}.intersection(states)) or unresolved or "fail" in hard_states or guard_defects:
         reasons.append("unresolved_defects")
-    if "unverified" in states or "unverified" in hard_states:
+    if "unverified" in states or "unverified" in hard_states or guard_missing:
         reasons.append("unverified_quality")
         total = None
     if total is not None and total < 85:
         reasons.append("average_below_85")
     if scores and min(scores) < 80:
         reasons.append("persona_below_80")
-    decision = "unverified" if "unverified_quality" in reasons else ("revise" if reasons else "pass")
+    if guard_defects:
+        decision = "revise"
+    elif "unverified_quality" in reasons:
+        decision = "unverified"
+    else:
+        decision = "revise" if reasons else "pass"
     return {"status": "record_valid", "total": total, "quality_decision": decision,
             "reasons": reasons, "scope": "record_and_evidence_only"}
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--blind-input":
+        parser = argparse.ArgumentParser(description="Prepare an allowlisted second-round input.")
+        parser.add_argument("--snapshot", type=Path, required=True)
+        parser.add_argument("--draft-id", required=True)
+        parser.add_argument("--standard-commit", required=True)
+        parser.add_argument("--list-140", type=Path, required=True)
+        parser.add_argument("--mobile-360", type=Path, required=True)
+        parser.add_argument("--mobile-table", type=Path)
+        parser.add_argument("--official-references", type=Path, required=True)
+        args = parser.parse_args(sys.argv[2:])
+        try:
+            screenshots = {"list_140": args.list_140, "mobile_360": args.mobile_360}
+            if args.mobile_table is not None:
+                screenshots["mobile_table"] = args.mobile_table
+            references = json.loads(args.official_references.read_text(encoding="utf-8"))
+            payload = blind_input(args.snapshot, args.draft_id, args.standard_commit, screenshots, references)
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
+        sys.stdout.buffer.write(json.dumps(
+            payload, ensure_ascii=False, sort_keys=True).encode("utf-8") + b"\n")
+        return 0
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--slot-state":
+        parser = argparse.ArgumentParser(description="Decide a scheduled slot's permitted phase.")
+        parser.add_argument("--scheduled-at", required=True)
+        parser.add_argument("--started-at", required=True)
+        parser.add_argument("--now", required=True)
+        parser.add_argument("--draft-id")
+        parser.add_argument("--save-uncertain", action="store_true")
+        args = parser.parse_args(sys.argv[2:])
+        dates = [timestamp(value) for value in (args.scheduled_at, args.started_at, args.now)]
+        if None in dates or dates[1] < dates[0]:
+            parser.error("slot timestamps must have offsets and start at or after the scheduled time")
+        print(json.dumps(slot_state(*dates, args.draft_id, args.save_uncertain), ensure_ascii=False))
+        return 0
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("record", type=Path)
     parser.add_argument("--request-id", required=True)
     parser.add_argument("--revision", required=True)
     parser.add_argument("--artifact-root", type=Path)
+    parser.add_argument("--standard-commit")
+    parser.add_argument("--review-history", type=Path)
     args = parser.parse_args()
     try:
         record = json.loads(args.record.read_text(encoding="utf-8"))
-        if not isinstance(record, dict):
-            raise ValueError("The record must be a JSON object.")
-        result = validate(record, args.request_id, args.revision, args.artifact_root)
+        history = json.loads(args.review_history.read_text(encoding="utf-8")) if args.review_history else None
+        result = validate(record, args.request_id, args.revision, args.artifact_root,
+                          standard_commit=args.standard_commit, review_history=history)
     except (OSError, ValueError) as exc:
         result = {"status": "unscored", "total": None, "quality_decision": "unverified",
                   "reasons": [str(exc)], "scope": "record_and_evidence_only"}

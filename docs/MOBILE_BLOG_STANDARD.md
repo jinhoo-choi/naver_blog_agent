@@ -1,11 +1,12 @@
 # 써누애비 게시글 생성·품질 기준
-버전: seonoo-production-v7 · 2026-11-18 KST
+버전: seonoo-production-v7 · 운영 검수 계약 2026-11-19 KST
 
 ## 적용 범위와 기준
 - 신규 제작·요청된 원고 수정·임시저장·검수에 이 문서를 공통 기준으로 적용한다. 현재 사용자 명시 요청을 가장 먼저 따른다.
 - 이 문서는 이전 mobile-blog-v5, search-value-v1의 제작·문체·디자인·저장본 완료 판정을 통합·교체한다. 과거 문서의 상충 규칙을 병합하지 않는다. 날짜별 편성과 영수증은 최신 ledger.md에서 확인한다.
 - 문체 작업에는 seonoo-human-writing, 디자인에는 apply-gestalt-design을 사용한다. Human Writing·Avoid AI Writing은 접근한 실제 참고 기준을 같은 퇴고에 적용하며 실행 여부를 구분한다. 탐지 점수를 품질 판정에 쓰지 않는다.
 - 썸네일의 세부 규격은 seonoo-thumbnail-prompt.md(Library libfile_fde3_f-6441d7b9acbc819185e54a2b58f56a2d_e15e1bb13ca08191ab1bd7173369831a)의 현행 버전을 사용한다. 캐릭터 기준은 같은 지침이 지정한 한 실물로 대조한다.
+- 제작·보완과 일일보고·편성은 이 문서, prompts/writer.md, prompts/reviewer.md, scripts/seonoo-review-check.py를 같은 전체 Git 커밋에서 읽고 현재 영수증에 `standard_commit`을 남긴다. PR54·PR57의 실행·권한 계약 참조는 별도로 유지한다. 이력은 당시의 계약과 관측값으로 보고한다.
 - 지침 열람·파일 제작·플랫폼 등록·저장·검수·예약·공개는 별개 상태다. 확인하지 않은 상태를 완료로 쓰지 않는다. 공개·유료 실행·권한은 기존 승인 범위를 유지한다.
 
 ## 공통 집필 기준
@@ -62,10 +63,14 @@
 ### 심사 근거와 최종 저장본 연결
 
 - 1차·PC 2차에는 다섯 페르소나의 실제 정수 점수를 모두 기록한다. 중간 점수가 비어 있으면 최종 평균을 확정할 수 없다. 60점 미만은 `rewrite`, 60~79점은 `revise`, 80점 이상은 `pass`다. 필수 화면 미확인 시 해당 상태는 `unverified`다.
-- 같은 원고 버전에서 점수를 올릴 때는 해당 단계의 `score_corrections[페르소나]`에 위치·새 관찰·근거 파일을 남긴다. 이전 평가 이후 이번 평가 시각까지 확보한 별도 파일에 `draft_id`, `revision`, `captured_at`을 기록한다. 다른 원고 버전이면 해당 평가의 `changes`에 실제 수정 위치와 수정 근거를 남긴다. 기록 형식은 기존 evidence 항목을 따른다.
+- 2차 심사는 이전 대화·메모리·도구 접근을 상속하지 않는 별도 무상태 호출에 맡긴다. 고정 기준과 최종 PC 저장본 제목·본문, 140px·360px(표가 있으면 표 화면도), 필요한 공식 원문, 초안 ID·버전만 전달한다. 1차 채점·판정·감점·수정 이력이나 그 파일 경로는 전달하지 않는다. 입력 준비와 전송 해시를 기록하고, 호출 실행 메타데이터와 응답을 보존한다. 실행 격리나 실제 전송을 입증할 수 없으면 독립 심사를 `unverified`로 남긴다.
+- 각 단계의 확정 점수는 요청 ID·초안 ID·버전·단계를 키로 원장에 최초 한 번 확정한다. 중복 확인은 최초 영수증을 읽고 재사용한다. 2차 결과는 호출의 점수·결과 해시를 확정 기록으로 저장하고 성공을 확인한 뒤에만 1차 기록을 연다. 최종 기록은 별도로 읽은 확정 영수증과 대조한다. 같은 단계·같은 해시의 확정 점수 덮어쓰기는 반려한다. 독립 2차의 최초 점수는 그대로 보존하며 모바일에서 동일 버전의 점수를 올리지 않는다.
+- 실제 수정이 필요하면 같은 초안 ID에 새 버전과 변경 위치·근거를 남긴다. 수정된 최종 저장본을 재열람하고 다시 독립 2차 심사를 진행한다. 동일 원고 내 최신 저장본의 필수 화면·근거만 최종 판정에 연결한다.
 - 최종 등록 전 승인한 대표 파일을 `approved_cover`에 아티팩트 ID로 기록하고, 저장본 대표의 원본 해시를 대조한다. 네이버가 재인코딩하면 동일성을 먼저 실물로 확인하고, 편집기에 어떤 원본을 등록했는지 추적 가능한 기록을 보존한다. 확인 불가는 미확인으로 보고한다.
 - 공개 전에는 같은 저장본의 PC 대표 지정 화면(`pc_representative`)과 저장본 대표 원본의 실제 140×140px 표시본(`list_140`)을 별도 이미지로 확인한다. 저장본에서 다시 확인한 대표의 원본 해시를 승인 대표와 대조한 뒤, 일치한 저장 원본만 140px로 축소하고 실제 크기로 읽어 제목·핵심 수치·적용 조건을 채점한다. 이 표시본은 네이버 공개 목록 화면과 별도다. 공개 승인에 따른 발행이 끝난 뒤 네이버 목록에서 대표 일치·잘림·표시 상태를 관찰한다.
 - 360px 모바일 첫 화면(`mobile_360`)과, 표가 있는 경우 전체 열·수치·단위·잘림을 볼 수 있는 표 화면(`mobile_table`)은 같은 최종 저장본에 대해 공개 전에 실제 확인한다. 각 이미지 아티팩트에 `role, draft_id, revision, captured_at`을 남긴다. 대표 증거는 `hard_checks.representative.evidence`, 모바일 증거는 `hard_checks.mobile.evidence`에서 참조한다. 140px 표시본은 저장 원본의 SHA-256과 표시 크기도 기록한다. 최종 저장부터 재열람 확인 시각(`reopened_at`) 사이의 증거를 쓴다. 대표 원본 자체·다른 버전의 화면은 대체 증거가 될 수 없다.
+
+신규 편집은 예정 회차 +40분과 실제 시작 +40분 중 먼저 도래할 때 중단한다. 지연 시작으로 예정 회차 마감을 연장하지 않는다. 예정 +55분까지 진행 중인 저장의 반영·재열람·증거를 확인한다. 이후 예정 +60분까지 인계와 자기 점유 반환만 수행한다. 기존 ID나 저장 불확실 상태는 먼저 해당 저장을 대조한다. 이미 있는 초안을 새로 만들지 않는다.
 
 08:15 종료 시 미완료 비공개 원고마다 요청 ID·초안 ID·최신 버전·남은 결함·다음 조치·재개 담당 회차를 원장에 기록한다. 기본 담당은 다음 기존 07:15 제작 회차이며, 같은 날 별도 승인된 제작 회차가 먼저 있으면 그 회차가 인수한다. 실행 시 최신 공개·예약·취소 상태를 재확인하고 해당 원고만 이월 보완한다. 새 날짜의 2편 실적과 분리하고 취소된 과거 편성은 되살리지 않는다. 19시는 잔여 작업·담당·시각만 인계한다. 발행 승인이 있는 원고도 예약·공개 제출 직전 실제 초안 ID와 최종 해시, 승인 대표·저장 대표, 현재 검증기의 통과 기록을 대조한다. 변경됐으면 영향받은 검수부터 재개한다. 공개 URL·공개 목록 대표 일치·보고 전달 여부는 각각 실제 관찰로 기록한다. 야간 교류는 00·01·02시 3회이며 19시는 해당 3행의 기존 실적을 재사용한다.
 
@@ -76,7 +81,7 @@
 4. 1차 심사·보완: 아래 5개 페르소나로 원고 전체와 디자인을 심사하고 결함을 고친 구간을 다시 확인한다.
 5. 임시저장: 같은 원고ID에 대표·본문·표·링크·태그를 실제 등록하고 저장한다.
 6. 2차 심사·보완: 같은 PC 저장본을 다시 열어 반영·문체·흐름·대표·로딩·표·카드를 확인하고 수정·저장한다.
-7. 모바일 심사·보완: 360px 또는 실제 모바일에서 첫 화면·문단·그룹·표·그림·캡션을 확인하고 보완한 최종본을 재저장·재열람한다. 실제 휴대기기를 안 봤으면 '에디터360px'라고 쓴다.
+7. 모바일 심사·보완: 360px 또는 실제 모바일에서 첫 화면·문단·그룹·표·그림·캡션을 확인한다. 보완하여 재저장하면 새 버전과 재열람으로 6단계부터 확인한다. 실제 휴대기기를 안 봤으면 '에디터360px'라고 쓴다.
 - 각 단계의 실제 시각·ID·버전·관찰·변경·재확인을 남긴다. 변경이 다른 항목에 영향을 주면 해당 범위와 후속 저장 확인을 다시 한다. 유효한 동일 최종본 근거는 재사용한다.
 - 저장 결과가 불명확하면 재클릭 전에 같은 초안과 목록에서 반영 여부를 확인한다. 새 근거 없이 같은 오류를 반복하지 않는다.
 
@@ -104,7 +109,7 @@ hard_checks에는 facts(공식 원문·날짜·수치·조건), experience(허�
 - 필수 7단계와 같은 최종본 연결이 충족되어야 한다. 1차·PC 2차·모바일 심사에 모두 같은 5인 기준을 쓰고 당시 점수·수정 전후·revision을 기록한다. 바뀌지 않은 항목은 유효한 동일 버전 근거를 재사용한다.
 
 ### 기록 검증 계약
-scripts/seonoo-review-check.py(Library libfile_fde3_f-6781ba94a8d48191aa6901efc07df988_e15e1bb13ca08191ab1bd7173369831a)는 기록·근거 파일·합계·차단 조건을 검사한다. record_valid는 문장·그림의 실제 품질을 기계가 판정했다는 뜻이 아니다.
+같은 고정 커밋의 scripts/seonoo-review-check.py는 기록·근거 파일·합계·차단 조건을 검사한다. record_valid는 문장·그림의 실제 품질을 기계가 판정했다는 뜻이 아니다.
 - standard_version=seonoo-production-v7. request_id, draft_id, scored_revision, snapshot_artifact, artifacts, steps, quality, hard_checks, unresolved를 기록한다. quality의 정확한 키는 structure, voice, design, topic, reader다.
 - 각 quality 항목은 status(pass/revise/unverified), score(정수 또는 null), subscores(정수 5개 또는 null), deductions(문제 위치·인용·관찰의 배열), immediate_fix(문자열), evidence를 둔다. 80 미만은 deductions와 실제 수정안이 필수다. unverified에는 reason을 쓰고 전체 평균은 null로 둔다.
 - 각 review 단계(first_review, second_review, mobile_review)에 scores를 같은 5키로 기록한다. 마지막 scores는 quality 점수와 일치한다. 단계 revision·input_revision·draft_id와 실제 시각·최종 reopened_at을 보존한다.
@@ -112,7 +117,17 @@ scripts/seonoo-review-check.py(Library libfile_fde3_f-6781ba94a8d48191aa6901efc0
 - snapshot_artifact는 실제 최종 저장본의 제목·본문·대표/본문 이미지 SHA-256·표·카드·태그를 담은 JSON 파일이다. 이 파일 바이트 SHA-256이 scored_revision이다. representative/images 원소는 {sha256}, tables는 {rows: 문자열셀 2차원 배열}, cards는 {title,url}, tags는 문자열 배열이다.
 - artifacts의 근거ID마다 path(근거 루트의 상대경로), sha256, kind(text/image)를 둔다. evidence는 artifact, observation, 텍스트라면 파일에 실제 존재하는 quote를 쓴다. pass 항목은 현재 스냅샷을 인용한다. structure·design은 텍스트와 실제 이미지 근거를 함께 둔다. voice는 현재 원고와 다른 출처의 reference_evidence를 둔다.
 - steps의 evidence와 비어 있지 않은 changes는 location·observation·artifact·quote를 연결한다. 이미지 파일은 실제 디코딩하고 확인 안 된 화면·장면을 근거로 만들지 않는다.
-- 실행: python3 seonoo-review-check.py RECORD.json --request-id ID --revision SHA256 --artifact-root EVIDENCE_DIRECTORY. status=record_valid, quality_decision=pass, total>=85를 확인하고 실행자가 실제 심사 근거를 검토한 뒤 품질 완료를 보고한다. API 호환·안전 계약은 별도 보존하며 네이버 5인 심사를 대신하지 않는다.
+- 신규 운영 기록은 아래 계약과 실행 옵션을 적용한다. 과거 기록 조회에는 당시 계약을 사용한다. 최신 버전과 점유 조건으로 원장을 갱신하고, 다른 실행의 확정 영수증·인계·점유를 덮어쓰지 않는다.
+- 실행: `python3 scripts/seonoo-review-check.py RECORD.json --request-id ID --revision SHA256 --artifact-root EVIDENCE_DIRECTORY --standard-commit FULL_GIT_SHA --review-history FROZEN_HISTORY.json`. status=record_valid, quality_decision=pass, total>=85와 실제 심사·검사 근거를 확인한 뒤 품질 완료를 보고한다. API 호환·안전 계약은 별도 보존한다.
+
+#### 신규 운영 기록의 근거 형식
+
+- `steps.candidate.purpose_urls`는 편성 단계에서 확인한 공식·승인 행동 도착지 배열이다. 일반 정보 글은 빈 배열이다. `snapshot_artifact`의 `images`는 본문 사진만 담고 대표는 `representative`에 둔다. 실제 DOM 제목의 앞뒤 공백을 보존한다. `links`에 본문 실제 http(s) href를, `quotes`에 아래 인용구 객체를 DOM 순서로 포함한 뒤 해시를 계산한다.
+- `saved_dom_artifact`는 `artifacts`에 등록한 실제 PC 저장본 DOM의 추출 JSON ID다. 객체 키는 `draft_id, revision, observed_at, title, media_settled, body_images, links, quotes, purpose_required, purpose_urls`다. 사진은 `{src,loaded,sha256}`로 저장한다. sha256 미제공 시 null을 쓰고 같은 본문 사진 원본 또는 URL을 대조한다. 링크는 `{href,destination}`으로 저장하고 미확인 도착지는 null이다. 인용구는 `{text,source_placeholder_visible,adjacent_headings}`로 저장한다. DOM이 비어 보이거나 화면 로딩이 끝나지 않았으면 실제 상태를 확인한다. 로딩 종료 후 남은 data/blob 임시 이미지, 깨진 이미지, 중복 이미지, 필수 목적 링크의 부재·불일치, 제목 공백, 빈 출처 표시 및 중복 소제목은 `revise`다. 접근·로딩·필수 증거 미확인은 `unverified`다.
+- `blind_review`에는 `input_artifact, result_artifact, input_prepared_at, compared_first_at`을 기록한다. 입력 JSON의 키는 `standard_commit, draft_id, revision, title, body, screens, official_references`다. `screens`는 `list_140, mobile_360` 및 표가 있을 때 `mobile_table` 역할별 실제 전달 이미지 SHA-256이며, 공식 원문은 `{url,excerpt}` 배열이다. `list_140`의 캡처 메타데이터에 승인 원본과 일치한 저장 대표의 `source_sha256`을 둔다. DOM 검사·화면 수집 후 `python3 scripts/seonoo-review-check.py --blind-input --snapshot SNAPSHOT --draft-id ID --standard-commit FULL_GIT_SHA --list-140 COVER_140 --mobile-360 MOBILE_360 --official-references REFERENCES_JSON`의 UTF-8 출력을 입력 원본으로 저장한다. 표가 있으면 `--mobile-table TABLE_SCREEN`을 추가한다. 공식 원문이 적용되지 않으면 REFERENCES_JSON은 빈 배열이다. 입력 원본과 이미지 바이트를 평가 호출에 그대로 전달한다.
+- `result_artifact`는 호출 실행 로그에서 확인한 `call_id, isolation, started_at, finished_at, input_sha256`과 응답 원점수 `scores`를 포함한다. 로컬 추정으로 호출 ID·격리를 만들지 않는다. 실제로 격리형, 도구 미상속 호출이 관측된 경우에만 `isolation=stateless_no_tools`를 쓴다.
+- `FROZEN_HISTORY.json`은 현재 기록에서 재생성하지 않고 별도로 확정·재조회한 원장의 배열을 쓴다. 각 행은 `request_id,draft_id,revision,stage,at,scores`를 포함한다. 독립 2차는 실제 고정 영수증의 `frozen_at,result_sha256`을 추가한다. `finished_at ≤ frozen_at < compared_first_at`를 충족한다. 동일 키에서 최초 확정행을 보존한다.
+- 새로운 초안이나 편집을 열기 전과 닫기 단계에서 `python3 scripts/seonoo-review-check.py --slot-state --scheduled-at ISO --started-at ISO --now ISO`를 실행한다. 시간에는 오프셋을 명시한다. 이미 알려진 ID는 `--draft-id ID`, 저장 반영 미확인은 `--save-uncertain`을 넘긴다. `create_draft`에서만 신규 작성, `resume_draft`에서만 기존 초안 편집, `verify_saved_draft`에서는 추가 편집 없이 마감 전에 편집한 현재 초안만 저장하고 재열람한다. `reconcile_save`에는 기존 반영 대조만 수행한다. `record_handoff`에는 원장과 반환 작업만 한다. ID가 미확인이면 null과 기존 요청 ID·확인 경로를 남긴다.
 
 ## 배드케이스 보존·재발 방지
 - 2026-11-18 사용자 지시: 이미 공개된 글은 수정·삭제·비공개·재발행하지 않고 배드케이스로 보존한다. 별도 후속 명시 요청이 있을 때만 변경한다. 과거 미완료 원고로 되살리지 않는다.

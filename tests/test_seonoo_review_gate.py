@@ -310,3 +310,220 @@ class ThresholdTests(ReviewTests):
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
+
+class GuardedReviewTests(unittest.TestCase):
+    commit = 'a' * 40
+    target = 'https://example.gov/application'
+
+    def setUp(self):
+        self.fixture = ReviewTests()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.tearDown)
+        self.record = self.fixture.record
+        self.saved = self.fixture.saved
+        self.root = self.fixture.root
+        self.record['standard_commit'] = self.commit
+        self.steps = self.record['steps']
+        self.steps['second_review']['at'] = '2026-11-18T10:02:00+09:00'
+        self.steps['mobile_review']['at'] = '2026-11-18T10:03:00+09:00'
+        self.steps['mobile_review']['reopened_at'] = '2026-11-18T10:03:10+09:00'
+        self.steps['candidate']['purpose_urls'] = []
+        self.saved.update(quotes=[], links=[])
+        self.dom = {
+            'draft_id': 'test-draft',
+            'observed_at': '2026-11-18T10:00:06+09:00',
+            'title': self.saved['title'],
+            'media_settled': True,
+            'body_images': [
+                {'src': 'https://blogfiles.pstatic.net/image.png', 'loaded': True,
+                 'sha256': self.saved['images'][0]['sha256']},
+            ],
+            'links': [],
+            'quotes': [],
+            'purpose_required': False,
+            'purpose_urls': [],
+        }
+        self.record['saved_dom_artifact'] = 'saved_dom'
+        self.record['blind_review'] = {
+            'input_artifact': 'blind_input',
+            'result_artifact': 'blind_result',
+            'input_prepared_at': '2026-11-18T10:00:08+09:00',
+            'compared_first_at': '2026-11-18T10:02:30+09:00',
+        }
+        from PIL import Image
+
+        cover = self.root / 'list_140.png'
+        Image.new('RGB', (140, 140), 'red').save(cover)
+        self.record['artifacts']['list_140'].update(
+            sha256=hashlib.sha256(cover.read_bytes()).hexdigest(),
+            source_sha256=self.saved['representative']['sha256'],
+        )
+        self.refresh()
+
+    def artifact(self, key, value):
+        path = self.root / (key + '.json')
+        path.write_text(json.dumps(value, ensure_ascii=False), encoding='utf-8')
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if key == 'snapshot':
+            self.record['artifacts']['saved']['sha256'] = digest
+        else:
+            self.record['artifacts'][key] = {'path': path.name, 'kind': 'text', 'sha256': digest}
+        return digest
+
+    def refresh(self):
+        self.sha = self.artifact('snapshot', self.saved)
+        self.record['scored_revision'] = self.sha
+        for step in self.steps.values():
+            if 'revision' in step:
+                step['revision'] = self.sha
+            if 'input_revision' in step:
+                step['input_revision'] = self.sha
+        for artifact in self.record['artifacts'].values():
+            if 'revision' in artifact:
+                artifact['revision'] = self.sha
+        self.dom['revision'] = self.sha
+        self.artifact('saved_dom', self.dom)
+        self.blind_input = {
+            'standard_commit': self.commit, 'draft_id': 'test-draft', 'revision': self.sha,
+            'title': self.saved['title'], 'body': self.saved['body'], 'official_references': [],
+            'screens': {role: self.record['artifacts'][role]['sha256']
+                        for role in ('list_140', 'mobile_360')},
+        }
+        self.blind_result = {
+            'call_id': 'fixture-call-id', 'isolation': 'stateless_no_tools',
+            'started_at': '2026-11-18T10:01:00+09:00',
+            'finished_at': self.steps['second_review']['at'],
+            'input_sha256': self.artifact('blind_input', self.blind_input),
+            'scores': dict(self.steps['second_review']['scores']),
+        }
+        result_sha = self.artifact('blind_result', self.blind_result)
+        self.history = [
+            {'stage': stage, 'request_id': 'test', 'draft_id': 'test-draft', 'revision': self.sha,
+             'at': self.steps[stage]['at'], 'scores': dict(self.steps[stage]['scores'])}
+            for stage in m.REVIEWS
+        ]
+        self.history[1].update(result_sha256=result_sha, frozen_at='2026-11-18T10:02:10+09:00')
+
+    def check(self):
+        return m.validate(self.record, 'test', self.sha, self.root,
+                          standard_commit=self.commit, review_history=self.history)
+
+    def test_valid_information_post_has_no_mandatory_link(self):
+        self.assertEqual(self.check()['quality_decision'], 'pass')
+
+    def test_current_record_cannot_omit_strict_commit(self):
+        self.record.pop('standard_commit')
+        self.assertIn('standard_commit', self.check()['reasons'])
+
+    def test_payload_builder_copies_only_allowed_snapshot_fields(self):
+        self.saved.update(first_review={'design': 85}, changes=['internal'])
+        self.refresh()
+        payload = m.blind_input(
+            self.root / 'snapshot.json', 'test-draft', self.commit,
+            {role: self.root / (role + '.png') for role in ('list_140', 'mobile_360')},
+            [],
+        )
+        self.assertEqual(payload, self.blind_input)
+
+    def test_second_score_must_be_frozen_before_comparison(self):
+        self.history[1]['frozen_at'] = self.record['blind_review']['compared_first_at']
+        self.assertIn('second_review.freeze_order', self.check()['reasons'])
+
+    def test_first_review_and_changes_do_not_enter_second_input(self):
+        self.blind_input.update(first_review={'design': 85}, changes=[])
+        self.blind_result['input_sha256'] = self.artifact('blind_input', self.blind_input)
+        self.history[1]['result_sha256'] = self.artifact('blind_result', self.blind_result)
+        self.assertIn('blind_review.input', self.check()['reasons'])
+
+    def test_compare_before_second_score_freeze_is_rejected(self):
+        self.record['blind_review']['compared_first_at'] = '2026-11-18T10:01:30+09:00'
+        self.assertIn('blind_review.result', self.check()['reasons'])
+
+    def test_unverified_isolation_blocks_pass(self):
+        self.blind_result.pop('call_id')
+        self.history[1]['result_sha256'] = self.artifact('blind_result', self.blind_result)
+        self.assertEqual(self.check()['quality_decision'], 'unverified')
+
+    def test_frozen_scores_reject_rewrite_of_all_stages_and_rehashed_result(self):
+        for stage in m.REVIEWS:
+            self.steps[stage]['scores']['design'] = 95
+        self.record['quality']['design'].update(score=95, subscores=[19] * 5)
+        self.blind_result['scores']['design'] = 95
+        self.artifact('blind_result', self.blind_result)
+        self.assertIn('mobile_review.frozen_scores_changed', self.check()['reasons'])
+
+    def test_independent_second_round_preserves_its_own_score(self):
+        self.steps['first_review']['scores']['design'] = 80
+        self.refresh()
+        self.assertEqual(self.check()['quality_decision'], 'pass')
+
+    def test_missing_or_wrong_purpose_link_blocks_pass(self):
+        self.steps['candidate']['purpose_urls'] = [self.target]
+        self.dom.update(purpose_urls=[self.target], purpose_required=True)
+        self.refresh()
+        self.assertIn('saved_dom.purpose_link_missing_or_wrong', self.check()['reasons'])
+
+        self.saved['links'] = [self.target]
+        self.dom['links'] = [{'href': self.target, 'destination': 'https://example.gov/home'}]
+        self.refresh()
+        self.assertEqual(self.check()['quality_decision'], 'revise')
+
+        self.dom['links'][0]['destination'] = self.target
+        self.refresh()
+        self.assertEqual(self.check()['quality_decision'], 'pass')
+
+    def test_placeholder_before_settle_is_unverified_and_after_is_defect(self):
+        self.dom['body_images'][0].update(src='data:image/svg+xml,fixture', loaded=True)
+        self.dom['media_settled'] = False
+        self.refresh()
+        self.assertEqual(self.check()['quality_decision'], 'unverified')
+        self.dom['media_settled'] = True
+        self.refresh()
+        self.assertEqual(self.check()['quality_decision'], 'revise')
+        self.assertIn('saved_dom.image_not_loaded', self.check()['reasons'])
+
+    def test_duplicate_body_image_even_with_different_urls(self):
+        self.saved['images'].append(self.saved['images'][0].copy())
+        duplicate = dict(self.dom['body_images'][0], src='https://postfiles.pstatic.net/image.png')
+        self.dom['body_images'].append(duplicate)
+        self.refresh()
+        self.assertIn('saved_dom.duplicate_image', self.check()['reasons'])
+
+    def test_title_and_quote_defects(self):
+        self.dom['title'] = self.saved['title'] = '검증용 원고 '
+        self.dom['quotes'] = self.saved['quotes'] = [
+            {'text': '지급 금액', 'source_placeholder_visible': True,
+             'adjacent_headings': ['지급   금액']},
+        ]
+        self.refresh()
+        result = self.check()
+        self.assertEqual(result['quality_decision'], 'revise')
+        self.assertTrue({'saved_dom.title_whitespace', 'saved_dom.quote_placeholder',
+                         'saved_dom.duplicate_heading'} <= set(result['reasons']))
+
+    def test_stale_screens_and_mismatched_140_source_rejected(self):
+        self.record['artifacts']['list_140']['source_sha256'] = 'f' * 64
+        self.assertIn('screen.list_140_source', self.check()['reasons'])
+        self.record['artifacts']['mobile_360']['revision'] = 'f' * 64
+        self.assertIn('screen.mobile_360', self.check()['reasons'])
+
+
+class SlotStateTests(unittest.TestCase):
+    def test_late_start_can_only_resume_known_draft_and_preserves_slot_deadlines(self):
+        def at(value):
+            return m.timestamp(f'2026-11-19T{value}:00+09:00')
+
+        scheduled, started = at('07:15'), at('07:30')
+        self.assertEqual(m.slot_state(scheduled, started, at('07:54'))['action'], 'create_draft')
+        self.assertEqual(m.slot_state(scheduled, started, at('07:55'))['action'], 'handoff')
+        first = m.slot_state(scheduled, started, at('07:55'), 'draft-1')
+        self.assertEqual(first, {'phase': 'closeout', 'action': 'verify_saved_draft', 'draft_id': 'draft-1'})
+        self.assertEqual(m.slot_state(scheduled, started, at('08:10'), 'draft-1')['phase'], 'record_only')
+        self.assertEqual(m.slot_state(scheduled, started, at('08:15'), 'draft-1')['action'], 'stop')
+        next_slot = m.slot_state(at('08:15'), at('08:15'), at('08:16'), first['draft_id'])
+        self.assertEqual(next_slot['action'], 'resume_draft')
+        self.assertEqual(next_slot['draft_id'], first['draft_id'])
+        self.assertEqual(
+            m.slot_state(at('08:15'), at('08:15'), at('08:16'), save_uncertain=True)['action'],
+            'reconcile_save',
+        )

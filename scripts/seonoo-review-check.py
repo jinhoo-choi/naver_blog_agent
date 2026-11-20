@@ -650,6 +650,39 @@ def validate(record, request_id, current_revision, artifact_root=None, *,
         invalid.append("unresolved")
     elif (bool({"revise", "rewrite"}.intersection(states)) or "fail" in hard_states) and not unresolved:
         invalid.append("quality.unresolved_mismatch")
+    # Diagnose saved content even when an independent review could not run.
+    # These findings do not promote a partial record to quality approval.
+    dom_defects, dom_missing = [], ["saved_dom.not_checked"]
+    blind = record.get("blind_review")
+    blind = blind if isinstance(blind, dict) else {}
+    blind_result, _ = json_artifact(checked, blind.get("result_artifact"))
+    execution = "not_observed" if not blind_result else "unverified"
+    dom, _ = json_artifact(checked, record.get("saved_dom_artifact"))
+    if (guarded and isinstance(dom, dict) and saved
+            and snapshot is not None and snapshot[0]["sha256"] == current_revision):
+        saved_step = steps.get("naver_save")
+        saved_step = saved_step if isinstance(saved_step, dict) else {}
+        mobile_step = steps.get("mobile_review")
+        mobile_step = mobile_step if isinstance(mobile_step, dict) else {}
+        candidate_step = steps.get("candidate")
+        candidate_step = candidate_step if isinstance(candidate_step, dict) else {}
+        boundaries = [timestamp(mobile_step.get("reopened_at")),
+                      timestamp(blind.get("input_prepared_at"))]
+        boundaries = [at for at in boundaries if at is not None]
+        dom_defects, dom_missing = check_saved_dom(
+            dom, saved, draft_id, current_revision, timestamp(saved_step.get("at")),
+            min(boundaries) if boundaries else None, candidate_step.get("purpose_urls"))
+    diagnostics = {
+        "saved_dom": {"status": "revise" if dom_defects else (
+            "unverified" if dom_missing else "pass"),
+            "defects": dom_defects, "missing": dom_missing},
+        "independent_review_status": execution,
+        "execution_blockers": (["independent_review_not_observed"]
+                               if execution == "not_observed" else []),
+        "content_status": "revise" if dom_defects else "unverified",
+        "publish_ready": False,
+        "scope": "partial_diagnostics_not_quality_approval",
+    }
     guard_defects, guard_missing = [], []
     if guarded and not invalid:
         save_at = timestamp(steps["naver_save"].get("at"))
@@ -662,6 +695,8 @@ def validate(record, request_id, current_revision, artifact_root=None, *,
             dom, saved, draft_id, current_revision, save_at, dom_deadline,
             steps["candidate"].get("purpose_urls"))
         missing, denied = check_blind_review(record, saved, checked, standard_commit, save_at, reopened_at)
+        if not missing and not denied:
+            diagnostics["independent_review_status"] = "verified"
         guard_missing.extend(missing)
         invalid.extend(denied)
         missing, denied = check_frozen_scores(record, review_history, checked)
@@ -671,7 +706,8 @@ def validate(record, request_id, current_revision, artifact_root=None, *,
             invalid.append("mobile_review.changed_after_blind_review")
     if invalid:
         return {"status": "unscored", "total": None, "quality_decision": "unverified",
-                "reasons": invalid, "scope": "record_and_evidence_only"}
+                "reasons": invalid, "scope": "record_and_evidence_only",
+                "diagnostics": diagnostics}
     reasons = guard_defects + guard_missing
     total = sum(scores) / 5 if len(scores) == 5 else None
     if bool({"revise", "rewrite"}.intersection(states)) or unresolved or "fail" in hard_states or guard_defects:
@@ -689,8 +725,11 @@ def validate(record, request_id, current_revision, artifact_root=None, *,
         decision = "unverified"
     else:
         decision = "revise" if reasons else "pass"
+    diagnostics["content_status"] = decision
+    # Publication authorization remains a separate operator check.
     return {"status": "record_valid", "total": total, "quality_decision": decision,
-            "reasons": reasons, "scope": "record_and_evidence_only"}
+            "reasons": reasons, "scope": "record_and_evidence_only",
+            "diagnostics": diagnostics}
 
 
 def main():

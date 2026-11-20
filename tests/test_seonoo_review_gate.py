@@ -412,6 +412,33 @@ class GuardedReviewTests(unittest.TestCase):
     def test_valid_information_post_has_no_mandatory_link(self):
         self.assertEqual(self.check()['quality_decision'], 'pass')
 
+    def test_missing_independent_call_preserves_saved_dom_diagnosis(self):
+        self.steps.pop('second_review')
+        self.steps.pop('mobile_review')
+        self.record['blind_review']['result_artifact'] = None
+        result = self.check()
+        self.assertEqual(result['quality_decision'], 'unverified')
+        self.assertEqual(result['diagnostics']['saved_dom']['status'], 'pass')
+        self.assertEqual(result['diagnostics']['independent_review_status'], 'not_observed')
+        self.assertFalse(result['diagnostics']['publish_ready'])
+
+    def test_missing_call_does_not_hide_inline_svg(self):
+        self.dom['svg_count'] = 1
+        self.artifact('saved_dom', self.dom)
+        self.steps.pop('second_review')
+        self.record['blind_review']['result_artifact'] = None
+        result = self.check()
+        self.assertEqual(result['quality_decision'], 'unverified')
+        self.assertIn('saved_dom.inline_svg', result['diagnostics']['saved_dom']['defects'])
+        self.assertEqual(result['diagnostics']['content_status'], 'revise')
+
+    def test_bad_dom_hash_cannot_pass_partial_diagnosis(self):
+        self.steps.pop('second_review')
+        (self.root / 'saved_dom.json').write_text('{}')
+        result = self.check()
+        self.assertEqual(result['diagnostics']['saved_dom']['status'], 'unverified')
+        self.assertNotEqual(result['quality_decision'], 'pass')
+
     def test_current_record_cannot_omit_strict_commit(self):
         self.record.pop('standard_commit')
         self.assertIn('standard_commit', self.check()['reasons'])

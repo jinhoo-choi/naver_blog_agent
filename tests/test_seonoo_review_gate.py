@@ -575,3 +575,109 @@ class SlotStateTests(unittest.TestCase):
             m.slot_state(at('08:15'), at('08:15'), at('08:16'), save_uncertain=True)['action'],
             'reconcile_save',
         )
+
+
+class FinalReportTests(unittest.TestCase):
+    """Synthetic receipts test consistency only; these are not model executions."""
+
+    def setUp(self):
+        self.f = GuardedReviewTests()
+        self.f.setUp()
+        self.addCleanup(self.f.doCleanups)
+        self.r = self.f.record
+        rubric = self.f.root / 'rubric.md'
+        rubric.write_text('Five criteria per persona; cite observed evidence.')
+        screens = {k: self.f.root / self.r['artifacts'][k]['path']
+                   for k in ('list_140', 'mobile_360')}
+        self.packet = m.review_packet(self.f.root / 'snapshot.json', 'test-draft',
+                                     self.f.commit, screens, [{'url': self.f.target, 'excerpt': 'Fixture'}],
+                                     screens['mobile_360'], rubric)
+        for stage in ('first_review', 'second_review'):
+            packet_sha = self.f.artifact(stage + '_packet', self.packet)
+            response = {
+                'call_id': 'fixture-call-id', 'draft_id': 'test-draft',
+                'revision': self.f.sha, 'stage': stage,
+                'scores': self.r['steps'][stage]['scores'], 'unresolved': [],
+                'criteria': {axis: [
+                    {'criterion': i, 'score': 17, 'reason': 'Synthetic fixture only',
+                     'evidence': [{'location': 'body', 'observation': 'Fixture text'}]}
+                    for i in range(1, 6)] for axis in m.AXES},
+            }
+            response_sha = self.f.artifact(stage + '_response', response)
+            self.f.artifact(stage + '_transport', {
+                'call_id': 'fixture-call-id', 'sent_packet_sha256': packet_sha,
+                'response_sha256': response_sha, 'isolation': 'stateless_no_tools',
+                'tools': [], 'prior_context_inherited': False,
+            })
+            self.f.artifact(stage + '_receipt', {
+                key + '_artifact': stage + '_' + key
+                for key in ('packet', 'response', 'transport')})
+            self.r['steps'][stage]['receipt_artifact'] = stage + '_receipt'
+
+    def report(self):
+        return m.final_report(self.r, 'test', self.f.sha, self.f.root,
+                              self.f.commit, self.f.history)
+
+    def change(self, key, fn):
+        value = json.loads((self.f.root / (key + '.json')).read_text())
+        fn(value)
+        digest = self.f.artifact(key, value)
+        for suffix, field in (('_response', 'response_sha256'), ('_packet', 'sent_packet_sha256')):
+            if key.endswith(suffix):
+                transport_key = key[:-len(suffix)] + '_transport'
+                transport = json.loads((self.f.root / (transport_key + '.json')).read_text())
+                transport[field] = digest
+                self.f.artifact(transport_key, transport)
+
+    def blocked(self):
+        result = self.report()
+        self.assertEqual(result['status'], 'blocked')
+        self.assertIsNone(result['final_mean'])
+        self.assertIsNone(result['final_scores'])
+        self.assertFalse(result['publication_authorized'])
+
+    def test_consistent_synthetic_receipts(self):
+        self.assertEqual(self.report()['status'], 'verified')
+        self.assertEqual(self.report()['final_mean'], 85)
+
+    def test_manual_average_never_bypasses_missing_review(self):
+        self.r['assessment'] = {'mean': 88.4}
+        self.r['steps']['second_review'].pop('receipt_artifact')
+        self.blocked()
+
+    def test_first_round_required(self):
+        self.r['steps']['first_review'].pop('receipt_artifact')
+        self.blocked()
+
+    def test_hashes_without_pixels_blocked(self):
+        self.change('second_review_packet', lambda p: p.pop('media'))
+        self.blocked()
+
+    def test_inherited_tools_blocked(self):
+        self.change('second_review_transport', lambda p: p.update(tools=['browser']))
+        self.blocked()
+
+    def test_inherited_context_blocked(self):
+        self.change('second_review_transport', lambda p: p.update(prior_context_inherited=True))
+        self.blocked()
+
+    def test_packet_revision_mismatch(self):
+        self.change('second_review_packet', lambda p: p['input'].update(revision='b' * 64))
+        self.blocked()
+
+    def test_missing_response(self):
+        (self.f.root / 'second_review_response.json').unlink()
+        self.blocked()
+
+    def test_score_only_response_blocked(self):
+        self.change('second_review_response', lambda p: p.pop('criteria'))
+        self.blocked()
+
+    def test_modified_pixel_blocked(self):
+        self.change('second_review_packet', lambda p: p['media']['list_140'].update(data_url='bad'))
+        self.blocked()
+
+    def test_packet_contains_actual_image_bytes(self):
+        image = self.packet['media']['list_140']
+        raw = m.base64.b64decode(image['data_url'].split(',', 1)[1])
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), image['sha256'])

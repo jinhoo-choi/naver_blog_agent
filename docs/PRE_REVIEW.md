@@ -56,3 +56,16 @@ This proves the narrow public alias, not the encrypted sunlight incident's exact
 Public progress includes `pre_review_check`, `pre_review_correction`, `pre_review_recheck` and `post_review_recheck`, plus static issue codes. It does not print private draft text, URLs, raw provider error text or personal input.
 
 Offline regressions cover good drafts, exact observed alias alignment, unknown/semantic URL changes, mixed malformed schema and hard stops, supplied-experience boundaries, successful/failed correction, exact cached resume, concurrent claims, encrypted relocation, formal-review ordering and prevention of legacy budget bypasses. Offline tests do not establish live factual quality or successful unattended Naver temporary saving.
+
+
+## 실제 평가 입력과 최종 보고 (2026-11-21)
+
+`--review-packet`은 기존 `--blind-input`의 허용 필드에 평가 기준과 PNG/JPG 픽셀을 묶는다. 필수 옵션은 `--snapshot`, `--draft-id`, `--standard-commit`, `--list-140`, `--mobile-360`, `--pc-screen`, `--rubric`, `--official-references`, `--output`이다. 본문 화면은 반복 `--body-screen`으로 추가한다. 기존 출력파일은 덮어쓰지 않으며 모델을 호출하지 않는다.
+
+각 steps.first_review/second_review의 receipt_artifact는 artifacts의 JSON을 가리킨다. 이 JSON은 packet_artifact, response_artifact, transport_artifact를 참조한다. 모든 파일은 artifact-root 내부 상대경로와 SHA256으로 등록한다.
+
+- response: call_id, draft_id, revision, stage, scores, unresolved, criteria. criteria의 5개 축 각각 5항목은 criterion(1~5), score(0~20), reason, evidence(location/observation)를 갖는다.
+- transport: call_id, sent_packet_sha256, response_sha256. 2차는 isolation=stateless_no_tools, tools=[], prior_context_inherited=false가 필수다. 실제 호출 경계에서 보존한 원기록을 사용하며 테스트 fixture를 재사용하지 않는다.
+- `record.json --request-id ID --revision SHA --artifact-root ROOT --standard-commit SHA --review-history history.json --final-report`가 최종 보고 경로다. 미검증 시 exit 2, final_scores/final_mean=null이며 임의 평균을 출력하지 않는다.
+
+이 옵션은 원격 실행기를 만들거나 자동화 설정을 배포하지 않는다. 기존 호출 수단이 없으면 입력 준비와 차단 결과만 보고한다. 테스트의 합성 영수증 통과는 실제 모델 실행이나 콘텐츠 품질 통과 증거가 아니다.

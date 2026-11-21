@@ -880,8 +880,10 @@ def final_report(record, request_id, revision, root, standard_commit, history):
             "executed_rounds": len(rounds),
             "observed_scores": rounds,
             "quality_decision": ("pass" if passed else
-                                 "revise" if result.get("quality_decision") == "pass"
-                                 and len(rounds) == 2 else result.get("quality_decision", "unverified")),
+                                 "unverified" if len(rounds) < 2 or any(
+                                     score is None for scores in rounds.values() for score in scores.values())
+                                 else "revise" if result.get("quality_decision") == "pass"
+                                 else result.get("quality_decision", "unverified")),
             "final_scores": rounds.get("second_review") if passed else None,
             "final_mean": result.get("total") if passed else None,
             "message": "최종 검수 기록 확인" if passed else "최종점수 없음 — 필수 검수 미완료",

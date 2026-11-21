@@ -1,6 +1,8 @@
 """Validate Seonoo review records and local evidence; does not judge prose or images."""
 import argparse
+import base64
 import hashlib
+import io
 import json
 import re
 import sys
@@ -732,7 +734,168 @@ def validate(record, request_id, current_revision, artifact_root=None, *,
             "diagnostics": diagnostics}
 
 
+def review_packet(snapshot_path, draft_id, standard_commit, screenshots, references,
+                  pc_screen, rubric_path, extra_screens=()):
+    """Prepare actual pixels, not a claim that a reviewer received or saw them."""
+    payload = blind_input(snapshot_path, draft_id, standard_commit, screenshots, references)
+    rubric = rubric_path.read_text(encoding="utf-8")
+    if not text(rubric) or not references:
+        raise ValueError("rubric and official references required")
+    paths = {**screenshots, "pc_representative": pc_screen}
+    paths.update({f"body_{i}": path for i, path in enumerate(extra_screens)})
+    media = {}
+    for role, path in paths.items():
+        raw = path.read_bytes()
+        if Image is None:
+            raise ValueError("image_decoder_unavailable")
+        with Image.open(io.BytesIO(raw)) as picture:
+            picture.load()
+            if picture.format not in ("PNG", "JPEG"):
+                raise ValueError("review images must be PNG/JPEG")
+            if role == "list_140" and picture.size != (140, 140):
+                raise ValueError("list_140 must be 140x140")
+            mime = "image/png" if picture.format == "PNG" else "image/jpeg"
+        media[role] = {"sha256": hashlib.sha256(raw).hexdigest(),
+                       "data_url": f"data:{mime};base64," + base64.b64encode(raw).decode("ascii")}
+    return {"schema": "seonoo-review-packet-v1", "input": payload,
+            "rubric": rubric, "media": media}
+
+
+def final_report(record, request_id, revision, root, standard_commit, history):
+    """Fail closed. Never read assessment.mean or accept caller-supplied totals.
+
+    This verifies receipt consistency, not semantic truth or provider authenticity.
+    The runner must retain provider responses/transport receipts independently.
+    """
+    result = validate(record, request_id, revision, root,
+                      standard_commit=standard_commit, review_history=history)
+    reasons = list(result.get("reasons", []))
+    root = Path(root).resolve()
+
+    def artifact(key):
+        meta = record.get("artifacts", {}).get(key)
+        if not isinstance(meta, dict) or not text(meta.get("path")):
+            raise ValueError("missing_artifact")
+        path = (root / meta["path"]).resolve()
+        if Path(meta["path"]).is_absolute() or not path.is_relative_to(root):
+            raise ValueError("artifact_path")
+        raw = path.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != meta.get("sha256"):
+            raise ValueError("artifact_hash")
+        value = json.loads(raw)
+        if not isinstance(value, dict):
+            raise ValueError("artifact_object")
+        return value, meta["sha256"]
+
+    rounds = {}
+    for stage in ("first_review", "second_review"):
+        try:
+            step = record.get("steps", {}).get(stage, {})
+            receipt, _ = artifact(step.get("receipt_artifact"))
+            packet, packet_sha = artifact(receipt.get("packet_artifact"))
+            response, response_sha = artifact(receipt.get("response_artifact"))
+            transport, _ = artifact(receipt.get("transport_artifact"))
+            expected_revision = step.get("input_revision", step.get("revision"))
+            identity = packet.get("input", {})
+            if (packet.get("schema") != "seonoo-review-packet-v1"
+                    or identity.get("draft_id") != record.get("draft_id")
+                    or identity.get("revision") != expected_revision
+                    or identity.get("standard_commit") != standard_commit
+                    or not text(packet.get("rubric")) or not identity.get("official_references")):
+                raise ValueError("packet_identity_or_rubric")
+            media = packet.get("media", {})
+            required = {"list_140", "mobile_360", "pc_representative"}
+            required.update(identity.get("screens", {}))
+            if not isinstance(media, dict) or not required.issubset(media):
+                raise ValueError("missing_pixels")
+            for role, item in media.items():
+                match = re.fullmatch(r"data:image/(png|jpeg);base64,(.+)", item.get("data_url", ""))
+                if not match or Image is None:
+                    raise ValueError("missing_pixels")
+                raw = base64.b64decode(match[2], validate=True)
+                digest = hashlib.sha256(raw).hexdigest()
+                with Image.open(io.BytesIO(raw)) as picture:
+                    picture.load()
+                if digest != item.get("sha256") or (
+                        role in identity.get("screens", {}) and digest != identity["screens"][role]):
+                    raise ValueError("pixel_hash")
+            if (not text(transport.get("call_id"))
+                    or transport.get("call_id") != response.get("call_id")
+                    or transport.get("sent_packet_sha256") != packet_sha
+                    or transport.get("response_sha256") != response_sha
+                    or response.get("revision") != expected_revision
+                    or response.get("draft_id") != record.get("draft_id")
+                    or response.get("stage") != stage):
+                raise ValueError("transport_binding")
+            if stage == "second_review" and (
+                    transport.get("isolation") != "stateless_no_tools"
+                    or transport.get("tools") != []
+                    or transport.get("prior_context_inherited") is not False):
+                raise ValueError("isolation_unverified")
+            if stage == "second_review":
+                legacy_result, _ = artifact(record.get("blind_review", {}).get("result_artifact"))
+                if legacy_result.get("call_id") != response.get("call_id"):
+                    raise ValueError("independent_call_mismatch")
+            scores = {}
+            for axis in AXES:
+                items = response.get("criteria", {}).get(axis)
+                if not isinstance(items, list) or len(items) != 5:
+                    raise ValueError("criteria." + axis)
+                for index, item in enumerate(items):
+                    if (not isinstance(item, dict) or item.get("criterion") != index + 1
+                            or type(item.get("score")) is not int or not 0 <= item["score"] <= 20
+                            or not text(item.get("reason")) or not evidence(item.get("evidence"))):
+                        raise ValueError("criteria." + axis)
+                scores[axis] = sum(item["score"] for item in items)
+            if scores != step.get("scores") or scores != response.get("scores"):
+                raise ValueError("score_binding")
+            if response.get("unresolved") != []:
+                raise ValueError("unresolved_defects")
+            rounds[stage] = scores
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            reasons.append(stage + "." + str(exc))
+    passed = (result.get("status") == "record_valid" and result.get("quality_decision") == "pass"
+              and not reasons and len(rounds) == 2)
+    return {"draft_id": record.get("draft_id"), "revision": revision,
+            "status": "verified" if passed else "blocked",
+            "final_scores": rounds.get("second_review") if passed else None,
+            "final_mean": result.get("total") if passed else None,
+            "message": "최종 검수 기록 확인" if passed else "최종점수 없음 — 필수 검수 미완료",
+            "reasons": list(dict.fromkeys(reasons)), "validator": result,
+            "publication_authorized": False,
+            "scope": "evidence_consistency_only_not_semantic_quality_or_provider_authenticity"}
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--review-packet":
+        parser = argparse.ArgumentParser(description="Prepare pixel-bearing review input; no model call.")
+        parser.add_argument("--snapshot", type=Path, required=True)
+        parser.add_argument("--draft-id", required=True)
+        parser.add_argument("--standard-commit", required=True)
+        parser.add_argument("--list-140", type=Path, required=True)
+        parser.add_argument("--mobile-360", type=Path, required=True)
+        parser.add_argument("--mobile-table", type=Path)
+        parser.add_argument("--pc-screen", type=Path, required=True)
+        parser.add_argument("--body-screen", type=Path, action="append", default=[])
+        parser.add_argument("--rubric", type=Path, required=True)
+        parser.add_argument("--official-references", type=Path, required=True)
+        parser.add_argument("--output", type=Path, required=True)
+        args = parser.parse_args(sys.argv[2:])
+        try:
+            screens = {"list_140": args.list_140, "mobile_360": args.mobile_360}
+            if args.mobile_table:
+                screens["mobile_table"] = args.mobile_table
+            packet = review_packet(args.snapshot, args.draft_id, args.standard_commit, screens,
+                                   json.loads(args.official_references.read_text()), args.pc_screen,
+                                   args.rubric, args.body_screen)
+            raw = json.dumps(packet, ensure_ascii=False, sort_keys=True).encode("utf-8")
+            with args.output.open("xb") as output:
+                output.write(raw)
+        except (OSError, ValueError, TypeError) as exc:
+            parser.error(str(exc))
+        print(json.dumps({"status": "prepared_not_executed", "path": str(args.output),
+                          "sha256": hashlib.sha256(raw).hexdigest(), "model_called": False}))
+        return 0
     if len(sys.argv) > 1 and sys.argv[1] == "--blind-input":
         parser = argparse.ArgumentParser(description="Prepare an allowlisted second-round input.")
         parser.add_argument("--snapshot", type=Path, required=True)
@@ -776,16 +939,25 @@ def main():
     parser.add_argument("--artifact-root", type=Path)
     parser.add_argument("--standard-commit")
     parser.add_argument("--review-history", type=Path)
+    parser.add_argument("--final-report", action="store_true")
     args = parser.parse_args()
     try:
         record = json.loads(args.record.read_text(encoding="utf-8"))
         history = json.loads(args.review_history.read_text(encoding="utf-8")) if args.review_history else None
-        result = validate(record, args.request_id, args.revision, args.artifact_root,
-                          standard_commit=args.standard_commit, review_history=history)
+        if args.final_report:
+            if not args.standard_commit or not args.review_history or not args.artifact_root:
+                raise ValueError("final report requires commit, review history and artifact root")
+            result = final_report(record, args.request_id, args.revision, args.artifact_root,
+                                  args.standard_commit, history)
+        else:
+            result = validate(record, args.request_id, args.revision, args.artifact_root,
+                              standard_commit=args.standard_commit, review_history=history)
     except (OSError, ValueError) as exc:
         result = {"status": "unscored", "total": None, "quality_decision": "unverified",
                   "reasons": [str(exc)], "scope": "record_and_evidence_only"}
     print(json.dumps(result, ensure_ascii=False))
+    if args.final_report:
+        return 0 if result.get("status") == "verified" else 2
     return 0 if result["status"] == "record_valid" and result["quality_decision"] == "pass" else (
         1 if result["status"] == "record_valid" else 2)
 

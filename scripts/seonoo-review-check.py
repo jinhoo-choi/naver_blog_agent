@@ -857,13 +857,17 @@ def final_report(record, request_id, revision, root, standard_commit, history):
                     raise ValueError("criteria." + axis)
                 for index, item in enumerate(items):
                     if (not isinstance(item, dict) or item.get("criterion") != index + 1
-                            or type(item.get("score")) is not int or not 0 <= item["score"] <= 20
+                            or (item.get("score") is not None and
+                                (type(item["score"]) is not int or not 0 <= item["score"] <= 20))
                             or not text(item.get("reason")) or not evidence(item.get("evidence"))):
                         raise ValueError("criteria." + axis)
-                scores[axis] = sum(item["score"] for item in items)
+                scores[axis] = (None if any(item["score"] is None for item in items)
+                                else sum(item["score"] for item in items))
             if scores != step.get("scores") or scores != response.get("scores"):
                 raise ValueError("score_binding")
             rounds[stage] = scores
+            if any(score is None for score in scores.values()):
+                reasons.append(stage + ".unverified_quality")
             if response.get("unresolved") != []:
                 reasons.append(stage + ".unresolved_defects")
         except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:

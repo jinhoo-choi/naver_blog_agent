@@ -696,6 +696,17 @@ class FinalReportTests(unittest.TestCase):
         self.assertIsNone(result['final_mean'])
         self.assertEqual(result['status'], 'blocked')
 
+    def test_missing_quality_evidence_is_not_missing_execution(self):
+        def missing(p):
+            p['criteria']['design'][2]['score'] = None
+            p['scores']['design'] = None
+        self.change('second_review_response', missing)
+        self.r['steps']['second_review']['scores']['design'] = None
+        result = self.report()
+        self.assertEqual(result['execution_status'], 'verified')
+        self.assertIsNone(result['observed_scores']['second_review']['design'])
+        self.assertIsNone(result['final_mean'])
+
     def test_packet_revision_mismatch(self):
         self.change('second_review_packet', lambda p: p['input'].update(revision='b' * 64))
         self.blocked()

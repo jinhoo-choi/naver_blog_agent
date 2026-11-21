@@ -207,6 +207,21 @@ def blind_input(snapshot_path, draft_id, standard_commit, screenshots, reference
     }
 
 
+def valid_isolation(receipt):
+    """Context separation; inherited tools are not security isolation."""
+    if receipt.get("isolation") == "stateless_no_tools":
+        return receipt.get("tools", []) == [] and receipt.get("prior_context_inherited", False) is False
+    return (receipt.get("isolation") == "fresh_context_tools_inherited"
+            and receipt.get("prior_context_inherited") is False
+            and receipt.get("prior_scores_inherited") is False
+            and receipt.get("fork_turns") == "none"
+            and receipt.get("call_id_kind") == "collaboration_agent_id"
+            and receipt.get("tools_inherited") is True
+            and isinstance(receipt.get("tools"), list)
+            and evidence(receipt.get("tool_usage"))
+            and revision_hash(receipt.get("instruction_sha256")))
+
+
 def check_blind_review(record, saved, checked, standard_commit, earliest, reopened):
     blind = record.get("blind_review")
     if not isinstance(blind, dict):
@@ -244,7 +259,7 @@ def check_blind_review(record, saved, checked, standard_commit, earliest, reopen
     started = timestamp(result.get("started_at"))
     finished = timestamp(result.get("finished_at"))
     compared = timestamp(blind.get("compared_first_at"))
-    if (result.get("isolation") != "stateless_no_tools" or not text(result.get("call_id"))
+    if (not valid_isolation(result) or not text(result.get("call_id"))
             or not all((earliest, prepared, started, finished, compared, reopened))):
         return ["blind_review.isolation_unverified"], []
     screen_artifacts = [data for data, _ in checked.values()
@@ -828,8 +843,7 @@ def final_report(record, request_id, revision, root, standard_commit, history):
                     or response.get("stage") != stage):
                 raise ValueError("transport_binding")
             if stage == "second_review" and (
-                    transport.get("isolation") != "stateless_no_tools"
-                    or transport.get("tools") != []
+                    not valid_isolation(transport)
                     or transport.get("prior_context_inherited") is not False):
                 raise ValueError("isolation_unverified")
             if stage == "second_review":
@@ -849,15 +863,21 @@ def final_report(record, request_id, revision, root, standard_commit, history):
                 scores[axis] = sum(item["score"] for item in items)
             if scores != step.get("scores") or scores != response.get("scores"):
                 raise ValueError("score_binding")
-            if response.get("unresolved") != []:
-                raise ValueError("unresolved_defects")
             rounds[stage] = scores
+            if response.get("unresolved") != []:
+                reasons.append(stage + ".unresolved_defects")
         except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
             reasons.append(stage + "." + str(exc))
     passed = (result.get("status") == "record_valid" and result.get("quality_decision") == "pass"
               and not reasons and len(rounds) == 2)
     return {"draft_id": record.get("draft_id"), "revision": revision,
             "status": "verified" if passed else "blocked",
+            "execution_status": "verified" if len(rounds) == 2 else "unverified",
+            "executed_rounds": len(rounds),
+            "observed_scores": rounds,
+            "quality_decision": ("pass" if passed else
+                                 "revise" if result.get("quality_decision") == "pass"
+                                 and len(rounds) == 2 else result.get("quality_decision", "unverified")),
             "final_scores": rounds.get("second_review") if passed else None,
             "final_mean": result.get("total") if passed else None,
             "message": "최종 검수 기록 확인" if passed else "최종점수 없음 — 필수 검수 미완료",

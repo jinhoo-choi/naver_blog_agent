@@ -776,6 +776,51 @@ def review_packet(snapshot_path, draft_id, standard_commit, screenshots, referen
             "rubric": rubric, "media": media}
 
 
+def evidence_based_assessment(criteria_by_round):
+    """Score observed criteria without treating missing criteria as earned points."""
+    rounds = {}
+    missing_criteria = []
+    criteria_per_round = len(AXES) * 5
+    for stage, criteria in criteria_by_round.items():
+        scores, points, count = {}, 0, 0
+        for axis in AXES:
+            observed = []
+            for item in criteria[axis]:
+                if item["score"] is None:
+                    missing_criteria.append({"stage": stage, "role": axis,
+                                             "criterion": item["criterion"],
+                                             "reason": item["reason"],
+                                             "evidence": item["evidence"]})
+                else:
+                    observed.append(item["score"])
+            points += sum(observed)
+            count += len(observed)
+            scores[axis] = sum(observed) * 5 / len(observed) if observed else None
+        role_scores = [score for score in scores.values() if score is not None]
+        rounds[stage] = {
+            "score": sum(role_scores) / len(role_scores) if role_scores else None,
+            "role_scores": scores, "scored_criteria": count,
+            "possible_score_range": [points / len(AXES),
+                                     (points + 20 * (criteria_per_round - count)) / len(AXES)],
+        }
+    observed_rounds = [row for row in rounds.values() if row["score"] is not None]
+    if not observed_rounds:
+        return None
+    scored_count = sum(row["scored_criteria"] for row in observed_rounds)
+    expected_count = 2 * criteria_per_round
+    return {
+        "score": sum(row["score"] for row in observed_rounds) / len(observed_rounds),
+        "status": "complete" if scored_count == expected_count else "provisional",
+        "scored_criteria": scored_count, "expected_criteria": expected_count,
+        "coverage_percent": 100 * scored_count / expected_count,
+        "round_score_gap": (round(abs(observed_rounds[0]["score"] - observed_rounds[1]["score"]), 6)
+                            if len(observed_rounds) == 2 else None),
+        "possible_score_range": [sum(row["possible_score_range"][i] for row in observed_rounds)
+                                 / len(observed_rounds) for i in range(2)],
+        "rounds": rounds, "missing_criteria": missing_criteria,
+    }
+
+
 def final_report(record, request_id, revision, root, standard_commit, history):
     """Fail closed. Never read assessment.mean or accept caller-supplied totals.
 
@@ -802,7 +847,7 @@ def final_report(record, request_id, revision, root, standard_commit, history):
             raise ValueError("artifact_object")
         return value, meta["sha256"]
 
-    rounds = {}
+    rounds, current_criteria = {}, {}
     for stage in ("first_review", "second_review"):
         try:
             step = record.get("steps", {}).get(stage, {})
@@ -866,6 +911,8 @@ def final_report(record, request_id, revision, root, standard_commit, history):
             if scores != step.get("scores") or scores != response.get("scores"):
                 raise ValueError("score_binding")
             rounds[stage] = scores
+            if expected_revision == revision:
+                current_criteria[stage] = response["criteria"]
             if any(score is None for score in scores.values()):
                 reasons.append(stage + ".unverified_quality")
             if response.get("unresolved") != []:
@@ -874,11 +921,13 @@ def final_report(record, request_id, revision, root, standard_commit, history):
             reasons.append(stage + "." + str(exc))
     passed = (result.get("status") == "record_valid" and result.get("quality_decision") == "pass"
               and not reasons and len(rounds) == 2)
+    assessment = evidence_based_assessment(current_criteria)
     return {"draft_id": record.get("draft_id"), "revision": revision,
             "status": "verified" if passed else "blocked",
             "execution_status": "verified" if len(rounds) == 2 else "unverified",
             "executed_rounds": len(rounds),
             "observed_scores": rounds,
+            "assessment": assessment,
             "quality_decision": ("pass" if passed else
                                  "unverified" if len(rounds) < 2 or any(
                                      score is None for scores in rounds.values() for score in scores.values())
@@ -886,7 +935,9 @@ def final_report(record, request_id, revision, root, standard_commit, history):
                                  else result.get("quality_decision", "unverified")),
             "final_scores": rounds.get("second_review") if passed else None,
             "final_mean": result.get("total") if passed else None,
-            "message": "최종 검수 기록 확인" if passed else "최종점수 없음 — 필수 검수 미완료",
+            "message": ("최종 검수 기록 확인" if passed else
+                        "평가점수 산출, 품질 통과 보류" if assessment else
+                        "평가점수 미산출, 검증된 채점 근거 없음"),
             "reasons": list(dict.fromkeys(reasons)), "validator": result,
             "publication_authorized": False,
             "scope": "evidence_consistency_only_not_semantic_quality_or_provider_authenticity"}

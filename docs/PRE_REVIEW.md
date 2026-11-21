@@ -65,7 +65,9 @@ Offline regressions cover good drafts, exact observed alias alignment, unknown/s
 각 steps.first_review/second_review의 receipt_artifact는 artifacts의 JSON을 가리킨다. 이 JSON은 packet_artifact, response_artifact, transport_artifact를 참조한다. 모든 파일은 artifact-root 내부 상대경로와 SHA256으로 등록한다.
 
 - response: call_id, draft_id, revision, stage, scores, unresolved, criteria. criteria의 5개 축 각각 5항목은 criterion(1~5), score(0~20), reason, evidence(location/observation)를 갖는다.
-- transport: call_id, sent_packet_sha256, response_sha256. 2차는 isolation=stateless_no_tools, tools=[], prior_context_inherited=false가 필수다. 실제 호출 경계에서 보존한 원기록을 사용하며 테스트 fixture를 재사용하지 않는다.
-- `record.json --request-id ID --revision SHA --artifact-root ROOT --standard-commit SHA --review-history history.json --final-report`가 최종 보고 경로다. 미검증 시 exit 2, final_scores/final_mean=null이며 임의 평균을 출력하지 않는다.
+- transport: call_id, sent_packet_sha256, response_sha256. 2차 격리 방식과 상속 범위는 MOBILE_BLOG_STANDARD.md의 승인된 방식에 맞춰 실제 값으로 기록한다. 실제 호출 경계에서 보존한 원기록을 사용한다.
+- `record.json --request-id ID --revision SHA --artifact-root ROOT --standard-commit SHA --review-history history.json --final-report`가 최종 보고 경로다. 같은 revision의 검증된 응답에 숫자 근거가 있으면 `assessment.score`를 보고한다. 역할별 관측점수를 관측 만점으로 나눠 100점으로 환산하고, 관측된 역할과 회차를 각각 같은 비중으로 평균한다. 미확인 항목의 원점수는 null로 보존한다.
+- `assessment`에는 실제 채점 항목 수와 예정 50항목 대비 비율, 회차별 점수와 차이, 미확인 사유 및 근거를 함께 남긴다. `possible_score_range`는 채점된 회차에서 빠진 항목이 각각 0점 또는 20점일 때의 평균 범위다. 근거 충족률은 확률이 아니다. 현재 revision의 숫자 근거가 하나도 없을 때만 `assessment`가 null이다.
+- 품질 검증이 끝나지 않으면 기존 exit 2 및 final_scores/final_mean=null을 유지한다. 이 필드는 품질 통과에 결속된 기존 인터페이스다. 사용자 보고에선 `assessment.score`와 품질 판정을 함께 제공한다.
 
 이 옵션은 원격 실행기를 만들거나 자동화 설정을 배포하지 않는다. 기존 호출 수단이 없으면 입력 준비와 차단 결과만 보고한다. 테스트의 합성 영수증 통과는 실제 모델 실행이나 콘텐츠 품질 통과 증거가 아니다.

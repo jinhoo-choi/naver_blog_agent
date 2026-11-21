@@ -1,6 +1,6 @@
 ## 최종점수 보고 계약 — 2026-11-21
 
-최종점수 보고는 `scripts/seonoo-review-check.py --final-report` 결과만 사용한다. `status=verified`와 종료코드 0을 함께 확인해야 최종점수를 표시한다. 그 외에는 점수·평균을 null로 유지한다. 자체 계산한 assessment.mean, 잠정 점수, 이전 revision 점수를 대신 표시하지 않는다.
+최종 평가점수는 `scripts/seonoo-review-check.py --final-report`가 동일 저장본의 검증된 응답으로 산출한 `assessment.score`를 보고한다. 채점 기준 수·회차별 차이·미확인 근거를 함께 표시하고, `assessment.status=provisional`이면 잠정으로 표기한다. 각 기준의 점수·감점 이유·실제 문장 또는 픽셀 관측을 남긴다. 근거 부족 항목은 원응답에 null과 부족한 자료를 기록한다. 품질 통과는 기존 기준을 모두 충족한 `status=verified`와 종료코드 0으로 확인한다.
 
 두 회차 모두 실제 본문·이미지 픽셀이 포함된 `--review-packet` 입력, 실제 응답, 전송 증거가 필요하다. 입력 생성은 실행 완료가 아니다. 2차는 이전 대화·1차 점수를 상속하지 않는 새 컨텍스트 호출이어야 하며 기존 blind_review의 call_id와 일치해야 한다. 입력해시·응답해시·회차·draft_id·revision을 연결하고 각 역할의 5항목 점수·감점 이유·관측 근거를 보존한다. 사진 해시만 받은 검수로 디자인 점수를 확정하지 않는다. 도구 상속 경로는 fresh_context_tools_inherited로 사실대로 기록하고 fork_turns=none·실제 에이전트 ID·전달 지시문 해시·도구 사용 내역을 보존한다. 실행 성공(execution_status)과 품질 통과는 별도다. observed_scores는 원응답 진단이며 최종 확정 점수와 구분한다.
 

@@ -645,6 +645,8 @@ class FinalReportTests(unittest.TestCase):
         self.r['steps']['second_review'].pop('receipt_artifact')
         self.blocked()
         self.assertEqual(self.report()['quality_decision'], 'unverified')
+        self.r['steps']['first_review'].pop('receipt_artifact')
+        self.assertIsNone(self.report()['assessment'])
 
     def test_first_round_required(self):
         self.r['steps']['first_review'].pop('receipt_artifact')
@@ -695,11 +697,14 @@ class FinalReportTests(unittest.TestCase):
         self.assertEqual(result['executed_rounds'], 2)
         self.assertEqual(result['observed_scores']['second_review']['design'], 85)
         self.assertIsNone(result['final_mean'])
+        self.assertEqual(result['assessment']['score'], 85)
+        self.assertEqual(result['assessment']['coverage_percent'], 100)
         self.assertEqual(result['status'], 'blocked')
 
     def test_missing_quality_evidence_is_not_missing_execution(self):
         def missing(p):
             p['criteria']['design'][2]['score'] = None
+            p['criteria']['design'][0]['score'] = 19
             p['scores']['design'] = None
         self.change('second_review_response', missing)
         self.r['steps']['second_review']['scores']['design'] = None
@@ -708,6 +713,16 @@ class FinalReportTests(unittest.TestCase):
         self.assertIsNone(result['observed_scores']['second_review']['design'])
         self.assertIsNone(result['final_mean'])
         self.assertEqual(result['quality_decision'], 'unverified')
+        assessment = result['assessment']
+        self.assertEqual(assessment['status'], 'provisional')
+        self.assertEqual(assessment['score'], 85.25)
+        self.assertEqual(assessment['coverage_percent'], 98)
+        self.assertEqual(assessment['possible_score_range'], [83.5, 85.5])
+        self.assertEqual(assessment['missing_criteria'][0]['criterion'], 3)
+
+    def test_unknown_criteria_axis_cannot_change_assessment(self):
+        self.change('second_review_response', lambda p: p['criteria'].update(extra=None))
+        self.assertEqual(self.report()['assessment']['score'], 85)
 
     def test_packet_revision_mismatch(self):
         self.change('second_review_packet', lambda p: p['input'].update(revision='b' * 64))

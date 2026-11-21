@@ -207,6 +207,21 @@ def blind_input(snapshot_path, draft_id, standard_commit, screenshots, reference
     }
 
 
+def valid_isolation(receipt):
+    """Context separation; inherited tools are not security isolation."""
+    if receipt.get("isolation") == "stateless_no_tools":
+        return receipt.get("tools", []) == [] and receipt.get("prior_context_inherited", False) is False
+    return (receipt.get("isolation") == "fresh_context_tools_inherited"
+            and receipt.get("prior_context_inherited") is False
+            and receipt.get("prior_scores_inherited") is False
+            and receipt.get("fork_turns") == "none"
+            and receipt.get("call_id_kind") == "collaboration_agent_id"
+            and receipt.get("tools_inherited") is True
+            and isinstance(receipt.get("tools"), list)
+            and evidence(receipt.get("tool_usage"))
+            and revision_hash(receipt.get("instruction_sha256")))
+
+
 def check_blind_review(record, saved, checked, standard_commit, earliest, reopened):
     blind = record.get("blind_review")
     if not isinstance(blind, dict):
@@ -244,7 +259,7 @@ def check_blind_review(record, saved, checked, standard_commit, earliest, reopen
     started = timestamp(result.get("started_at"))
     finished = timestamp(result.get("finished_at"))
     compared = timestamp(blind.get("compared_first_at"))
-    if (result.get("isolation") != "stateless_no_tools" or not text(result.get("call_id"))
+    if (not valid_isolation(result) or not text(result.get("call_id"))
             or not all((earliest, prepared, started, finished, compared, reopened))):
         return ["blind_review.isolation_unverified"], []
     screen_artifacts = [data for data, _ in checked.values()
@@ -828,8 +843,7 @@ def final_report(record, request_id, revision, root, standard_commit, history):
                     or response.get("stage") != stage):
                 raise ValueError("transport_binding")
             if stage == "second_review" and (
-                    transport.get("isolation") != "stateless_no_tools"
-                    or transport.get("tools") != []
+                    not valid_isolation(transport)
                     or transport.get("prior_context_inherited") is not False):
                 raise ValueError("isolation_unverified")
             if stage == "second_review":
@@ -843,21 +857,33 @@ def final_report(record, request_id, revision, root, standard_commit, history):
                     raise ValueError("criteria." + axis)
                 for index, item in enumerate(items):
                     if (not isinstance(item, dict) or item.get("criterion") != index + 1
-                            or type(item.get("score")) is not int or not 0 <= item["score"] <= 20
+                            or (item.get("score") is not None and
+                                (type(item["score"]) is not int or not 0 <= item["score"] <= 20))
                             or not text(item.get("reason")) or not evidence(item.get("evidence"))):
                         raise ValueError("criteria." + axis)
-                scores[axis] = sum(item["score"] for item in items)
+                scores[axis] = (None if any(item["score"] is None for item in items)
+                                else sum(item["score"] for item in items))
             if scores != step.get("scores") or scores != response.get("scores"):
                 raise ValueError("score_binding")
-            if response.get("unresolved") != []:
-                raise ValueError("unresolved_defects")
             rounds[stage] = scores
+            if any(score is None for score in scores.values()):
+                reasons.append(stage + ".unverified_quality")
+            if response.get("unresolved") != []:
+                reasons.append(stage + ".unresolved_defects")
         except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
             reasons.append(stage + "." + str(exc))
     passed = (result.get("status") == "record_valid" and result.get("quality_decision") == "pass"
               and not reasons and len(rounds) == 2)
     return {"draft_id": record.get("draft_id"), "revision": revision,
             "status": "verified" if passed else "blocked",
+            "execution_status": "verified" if len(rounds) == 2 else "unverified",
+            "executed_rounds": len(rounds),
+            "observed_scores": rounds,
+            "quality_decision": ("pass" if passed else
+                                 "unverified" if len(rounds) < 2 or any(
+                                     score is None for scores in rounds.values() for score in scores.values())
+                                 else "revise" if result.get("quality_decision") == "pass"
+                                 else result.get("quality_decision", "unverified")),
             "final_scores": rounds.get("second_review") if passed else None,
             "final_mean": result.get("total") if passed else None,
             "message": "최종 검수 기록 확인" if passed else "최종점수 없음 — 필수 검수 미완료",

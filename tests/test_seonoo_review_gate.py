@@ -644,6 +644,7 @@ class FinalReportTests(unittest.TestCase):
         self.r['assessment'] = {'mean': 88.4}
         self.r['steps']['second_review'].pop('receipt_artifact')
         self.blocked()
+        self.assertEqual(self.report()['quality_decision'], 'unverified')
 
     def test_first_round_required(self):
         self.r['steps']['first_review'].pop('receipt_artifact')
@@ -660,6 +661,53 @@ class FinalReportTests(unittest.TestCase):
     def test_inherited_context_blocked(self):
         self.change('second_review_transport', lambda p: p.update(prior_context_inherited=True))
         self.blocked()
+
+    def test_fresh_context_tools_requires_explicit_provenance(self):
+        receipt = {'isolation': 'fresh_context_tools_inherited',
+                   'prior_context_inherited': False, 'prior_scores_inherited': False,
+                   'fork_turns': 'none', 'call_id_kind': 'collaboration_agent_id',
+                   'tools_inherited': True, 'tools': ['view_image'],
+                   'instruction_sha256': 'a' * 64,
+                   'tool_usage': [{'location': 'packet media', 'observation': 'Opened pixels'}]}
+        self.assertTrue(m.valid_isolation(receipt))
+        for field in ('prior_context_inherited', 'prior_scores_inherited'):
+            self.assertFalse(m.valid_isolation(dict(receipt, **{field: True})))
+        for field in ('instruction_sha256', 'tool_usage', 'fork_turns', 'call_id_kind'):
+            damaged = dict(receipt)
+            del damaged[field]
+            self.assertFalse(m.valid_isolation(damaged))
+        self.change('second_review_transport', lambda p: p.update(receipt))
+        # The legacy blind result also needs the real same mode provenance.
+        key = self.r['blind_review']['result_artifact']
+        value = json.loads((self.f.root / self.r['artifacts'][key]['path']).read_text())
+        value.update(receipt)
+        digest = self.f.artifact(key, value)
+        for row in self.f.history:
+            if row['stage'] == 'second_review':
+                row['result_sha256'] = digest
+        self.assertEqual(self.report()['execution_status'], 'verified')
+        self.assertEqual(self.report()['status'], 'verified')
+
+    def test_executed_review_can_find_unresolved_defects(self):
+        self.change('second_review_response', lambda p: p.update(unresolved=['Source unverified']))
+        result = self.report()
+        self.assertEqual(result['execution_status'], 'verified')
+        self.assertEqual(result['executed_rounds'], 2)
+        self.assertEqual(result['observed_scores']['second_review']['design'], 85)
+        self.assertIsNone(result['final_mean'])
+        self.assertEqual(result['status'], 'blocked')
+
+    def test_missing_quality_evidence_is_not_missing_execution(self):
+        def missing(p):
+            p['criteria']['design'][2]['score'] = None
+            p['scores']['design'] = None
+        self.change('second_review_response', missing)
+        self.r['steps']['second_review']['scores']['design'] = None
+        result = self.report()
+        self.assertEqual(result['execution_status'], 'verified')
+        self.assertIsNone(result['observed_scores']['second_review']['design'])
+        self.assertIsNone(result['final_mean'])
+        self.assertEqual(result['quality_decision'], 'unverified')
 
     def test_packet_revision_mismatch(self):
         self.change('second_review_packet', lambda p: p['input'].update(revision='b' * 64))
